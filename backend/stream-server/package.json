@@ -1,0 +1,16 @@
+{
+  "name": "tunefy-stream-server",
+  "version": "1.0.0",
+  "description": "Tunefy — backend proxy de streaming audio (yt-dlp cote serveur) pour Flutter Web. Le navigateur ne peut pas extraire un flux googlevideo lui-meme : ce serveur resout la vraie URL audio et la rend streamable avec CORS + Range.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

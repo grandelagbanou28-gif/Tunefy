@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
+import 'package:hive/hive.dart';
 import 'package:muzo/models/ytify_result.dart';
+import 'package:muzo/utils/api_constants.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -42,14 +44,21 @@ class YouTubeApiService {
     String? artist,
     VoidCallback? onFallback,
   }) async {
-    // 0. Web Platform Check: Bypass library entirely on web
+    // 0. Web Platform Check: le navigateur ne peut pas extraire googlevideo
+    // lui-même (IP-lié, pas de CORS) → on passe par le backend proxy Tunefy
+    // (yt-dlp côté serveur). Le mobile continue avec ANDROID_VR/Explode.
     if (kIsWeb) {
-      debugPrint('Web platform detected: bypassing ANDROID_VR client');
+      debugPrint('Web platform detected: resolving via Tunefy stream proxy');
+      final proxyUrl = await _getWebProxyStreamUrl(videoId);
+      if (proxyUrl != null && proxyUrl.isNotEmpty) {
+        debugPrint('Web stream resolved via proxy: $proxyUrl');
+        return proxyUrl;
+      }
+      debugPrint('Web proxy failed — trying Invidious fallback...');
       if (_enableFallbackApi) {
         return await _getFallbackStreamUrl(videoId, title, artist);
-      } else {
-        throw Exception("Failed to extract stream on Web. Fallback is disabled.");
       }
+      return null;
     }
 
     // Direct API: try up to 2 times before falling back
@@ -97,8 +106,8 @@ class YouTubeApiService {
       debugPrint('Trying Invidious Fallback...');
       return await _getFallbackStreamUrl(videoId, title, artist);
     } else {
-      debugPrint('Invidious Fallback is disabled.');
-      throw Exception("Failed to extract stream. Consider signing in or check your connection.");
+      debugPrint('Invidious Fallback is disabled — returning null.');
+      return null;
     }
   }
 
@@ -112,13 +121,13 @@ class YouTubeApiService {
       final body = {
         'context': {
           'client': {
-            'clientName': 'ANDROID',
-            'clientVersion': '19.09.37',
-            'androidSdkVersion': 33,
+            'clientName': 'ANDROID_VR',
+            'clientVersion': '1.57.29',
+            'androidSdkVersion': 30,
             'userAgent':
-                'com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip',
+                'com.google.android.apps.youtube.vr.oculus/1.57.29 (Linux; U; Android 12; eureka-user Build/SQ3A.220605.009.A1) gzip',
             'osName': 'Android',
-            'osVersion': '13',
+            'osVersion': '12',
             'hl': 'en',
             'gl': 'US',
           }
@@ -133,17 +142,23 @@ class YouTubeApiService {
         options: Options(
           headers: {
             'Content-Type': 'application/json',
-            'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; Android 13)',
+            'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.57.29 (Linux; U; Android 12; eureka-user Build/SQ3A.220605.009.A1) gzip',
           },
           validateStatus: (status) => true,
         ),
         data: body,
       );
 
-      if (response.statusCode != 200) return null;
+      if (response.statusCode != 200) {
+        debugPrint('_tryDirectApi: HTTP ${response.statusCode}');
+        return null;
+      }
 
       final data = response.data as Map<String, dynamic>;
-      if (data['playabilityStatus']?['status'] != 'OK') return null;
+      final status = data['playabilityStatus']?['status'] as String?;
+      final reason = data['playabilityStatus']?['reason'] as String?;
+      debugPrint('_tryDirectApi: status=$status reason=$reason');
+      if (status != 'OK') return null;
 
       final streamingData = data['streamingData'] as Map<String, dynamic>?;
       if (streamingData == null) return null;
@@ -176,6 +191,41 @@ class YouTubeApiService {
   void _logLong(String text) {
     final pattern = RegExp('.{1,800}');
     pattern.allMatches(text).forEach((match) => debugPrint(match.group(0)));
+  }
+
+  Future<String?> _getWebProxyStreamUrl(String videoId) async {
+    String base = ApiConstants.webStreamApiBaseUrl;
+    // L'utilisateur peut enregistrer une autre URL (réglages / adb reverse) :
+    // on la respecte, comme le fait StreamExtractionService côté mobile.
+    try {
+      final Box box = Hive.isBoxOpen('settings')
+          ? Hive.box('settings')
+          : await Hive.openBox('settings');
+      final saved = box.get('ytdlpServerUrl') as String?;
+      if (saved != null && saved.trim().isNotEmpty) base = saved.trim();
+    } catch (_) {}
+    try {
+      final uri = Uri.parse('$base/api/stream')
+          .replace(queryParameters: {'videoId': videoId});
+      debugPrint('WebStreamProxy: GET $uri');
+      final response = await _client.get(
+        uri.toString(),
+        options: Options(headers: _headers, validateStatus: (status) => true),
+      );
+      if (response.statusCode != 200) {
+        debugPrint('WebStreamProxy: HTTP ${response.statusCode}');
+        return null;
+      }
+      final data = response.data is String
+          ? jsonDecode(response.data as String)
+          : response.data;
+      final url = (data['url'] as String?) ?? '';
+      if (url.isNotEmpty) return url;
+      debugPrint('WebStreamProxy: no url in response: $data');
+    } catch (e) {
+      debugPrint('WebStreamProxy error: $e');
+    }
+    return null;
   }
 
   Future<String?> _getFallbackStreamUrl(
