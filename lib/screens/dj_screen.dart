@@ -45,6 +45,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       ref.read(djChatHistoryServiceProvider);
   bool _busy = false;
   bool _typing = false;
+  String? _typingLabel;
   bool _historyLoaded = false;
   int _durationMinutes = 60;
   DjMood? _activeMood;
@@ -78,17 +79,22 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   Future<void> _loadHistory() async {
     final messages = await _history.loadMessages();
     final mixes = await _history.listMixes();
+    // Drop transient status lines from older sessions (building…, etc.).
+    final cleaned = messages
+        .where((m) => m.text != AppLocalizations.of(context).djSmartPlaylistBuilding)
+        .toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     if (!mounted) return;
     setState(() {
       _chat
         ..clear()
-        ..addAll(messages);
+        ..addAll(cleaned);
       _recentMixes = mixes;
       _historyLoaded = true;
-      if (messages.isNotEmpty) {
-        final lastWithMix = messages.lastWhere(
+      if (cleaned.isNotEmpty) {
+        final lastWithMix = cleaned.lastWhere(
           (m) => m.mixId != null,
-          orElse: () => messages.last,
+          orElse: () => cleaned.last,
         );
         _activeMixId = lastWithMix.mixId;
       }
@@ -264,8 +270,12 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     final mood = preDetected ?? _bot.detect(raw);
     if (mood == null) {
       if (!mounted) return;
-      setState(
-          () => _chat.add(DjChatMessage.bot(l10n.djMoodUnknown)));
+      setState(() {
+        _typing = false;
+        _busy = false;
+        _typingLabel = null;
+        _chat.add(DjChatMessage.bot(l10n.djMoodUnknown));
+      });
       _chatScrollToBottom();
       unawaited(_persistChat());
       return;
@@ -274,6 +284,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     setState(() {
       _typing = true;
       _busy = true;
+      _typingLabel = null;
     });
     _chatScrollToBottom();
     try {
@@ -290,6 +301,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         setState(() {
           _typing = false;
           _busy = false;
+          _typingLabel = null;
           _chat.add(DjChatMessage.bot(l10n.djMoodEmpty));
         });
         _chatScrollToBottom();
@@ -310,6 +322,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       setState(() {
         _typing = false;
         _busy = false;
+        _typingLabel = null;
         _chat.add(DjChatMessage.bot(l10n.djMoodError));
       });
       _chatScrollToBottom();
@@ -319,6 +332,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         setState(() {
           _typing = false;
           _busy = false;
+          _typingLabel = null;
         });
       }
     }
@@ -330,11 +344,10 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     setState(() {
       _typing = true;
       _busy = true;
+      _typingLabel = l10n.djSmartPlaylistBuilding;
     });
-    if (mounted) {
-      _chat.add(DjChatMessage.bot(l10n.djSmartPlaylistBuilding));
-      _chatScrollToBottom();
-    }
+    // Typing label only — do not persist a "building…" bubble.
+    _chatScrollToBottom();
     try {
       final handler = ref.read(audioHandlerProvider);
       final seen = <String>{};
@@ -354,6 +367,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         setState(() {
           _typing = false;
           _busy = false;
+          _typingLabel = null;
           _chat.add(DjChatMessage.bot(l10n.djSmartPlaylistEmpty));
         });
         _chatScrollToBottom();
@@ -374,6 +388,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       setState(() {
         _typing = false;
         _busy = false;
+        _typingLabel = null;
         _chat.add(DjChatMessage.bot(l10n.djSmartPlaylistEmpty));
       });
       _chatScrollToBottom();
@@ -383,6 +398,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         setState(() {
           _typing = false;
           _busy = false;
+          _typingLabel = null;
         });
       }
     }
@@ -425,36 +441,38 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     );
     await _history.saveMix(mix);
 
+    // Attach the AI tip to the mix reply (single bubble, less clutter).
+    var fullReply = reply;
+    if (playable.length >= 2) {
+      final tips = DjMixTips(gemini: ref.read(geminiServiceProvider));
+      final tip = await tips.analyze(playable.first, playable[1]);
+      if (tip != null && mounted) {
+        final typeLabel = tips.labelOf(tip.transitionType);
+        var tipLine = l10n.djMixTip
+            .replaceAll('{type}', typeLabel)
+            .replaceAll('{sec}', '${tip.crossfadeSeconds}');
+        if (tip.aiAdvice != null && tip.aiAdvice!.isNotEmpty) {
+          tipLine = '$tipLine — ${tip.aiAdvice}';
+        }
+        fullReply = '$fullReply\n\n$tipLine';
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
       _typing = false;
       _busy = false;
+      _typingLabel = null;
       _generated
         ..clear()
         ..addAll(playable);
       _activeMixId = mixId;
-      _chat.add(DjChatMessage.bot(reply, mixId: mixId));
+      _chat.add(DjChatMessage.bot(fullReply, mixId: mixId));
     });
     _chatScrollToBottom();
     _mainScrollToBottom();
     unawaited(_persistChat());
     unawaited(_refreshMixes());
-
-      final tips = DjMixTips(gemini: ref.read(geminiServiceProvider));
-      if (playable.length >= 2) {
-        final tip = await tips.analyze(playable.first, playable[1]);
-        if (tip != null && mounted) {
-          final typeLabel = tips.labelOf(tip.transitionType);
-        var text = l10n.djMixTip
-            .replaceAll('{type}', typeLabel)
-            .replaceAll('{sec}', '${tip.crossfadeSeconds}');
-        if (tip.aiAdvice != null && tip.aiAdvice!.isNotEmpty) {
-          text = '$text\n${tip.aiAdvice}';
-        }
-        setState(() => _chat.add(DjChatMessage.bot(text)));
-        _chatScrollToBottom();
-        unawaited(_persistChat());
-      }
-    }
 
     final isPlaying = ref.read(currentMediaItemProvider).valueOrNull != null;
     debugPrint('[TunefyDJ] mood=${mood?.name ?? 'custom'} '
@@ -699,22 +717,26 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               ],
             ),
           ),
-          _welcomeCard(l10n),
-          _durationAndRadioRow(l10n),
-          SizedBox(
-            height: 34,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                for (final mood in DjMood.values) ...[
-                  _moodChip(_moodName(l10n, mood), mood),
-                  const SizedBox(width: 8),
+          // Controls (welcome, duration, chips) only before any conversation.
+          if (_chat.isEmpty) ...[
+            _welcomeCard(l10n),
+            _durationAndRadioRow(l10n),
+            SizedBox(
+              height: 34,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (final mood in DjMood.values) ...[
+                    _moodChip(_moodName(l10n, mood), mood),
+                    const SizedBox(width: 8),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
+            const SizedBox(height: 4),
+          ] else
+            _durationAndRadioRow(l10n),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 240),
             child: ListView.builder(
@@ -724,20 +746,26 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               itemCount: _chat.length + (_typing ? 1 : 0),
               itemBuilder: (context, index) {
                 if (_typing && index == _chat.length) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Row(
                       children: [
-                        SizedBox(
+                        const SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Color(0xFF1DB954)),
                         ),
-                        SizedBox(width: 8),
-                        Text('…',
-                            style: TextStyle(
-                                color: Colors.white54, fontSize: 13)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _typingLabel ?? '…',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 13),
+                          ),
+                        ),
                       ],
                     ),
                   );
