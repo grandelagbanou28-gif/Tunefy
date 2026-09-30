@@ -137,10 +137,7 @@ def resolve_video(video_id: str) -> str:
                 )
                 produced = os.path.join(tmp_dir, f"{video_id}.mp4")
                 if not (os.path.exists(produced) and os.path.getsize(produced) > 0):
-                    err = (proc.stderr or "").strip().splitlines()
-                    raise RuntimeError(
-                        err[-1] if err else f"video mux failed ({proc.returncode})"
-                    )
+                    raise RuntimeError(_describe_failure(proc))
                 os.replace(produced, target)
     with _cache_lock:
         _cache[cache_key(video_id, "video")] = f"http://127.0.0.1:9877/file/{video_id}.mp4"
@@ -152,8 +149,23 @@ def _first_url(proc) -> str:
         line = line.strip()
         if line.startswith("http"):
             return line
-    err = (proc.stderr or "").strip().splitlines()
-    raise RuntimeError(err[-1] if err else f"yt-dlp exit {proc.returncode}")
+    raise RuntimeError(_describe_failure(proc))
+
+
+def _describe_failure(proc) -> str:
+    """Never return an empty reason.
+
+    An empty 502 body turns a dead track into a mystery: the device logs
+    "Empty reply" and nobody can tell an unavailable video from a broken
+    ffmpeg. yt-dlp's message is the last useful line it printed, and the exit
+    code always says something.
+    """
+    for blob in (proc.stderr, proc.stdout):
+        for line in reversed((blob or "").strip().splitlines()):
+            line = line.strip()
+            if line and not line.startswith("["):
+                return line[:200]
+    return f"yt-dlp exited with {proc.returncode}"
 
 
 class Handler(BaseHTTPRequestHandler):
