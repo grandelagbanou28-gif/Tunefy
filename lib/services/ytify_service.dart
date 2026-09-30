@@ -92,7 +92,7 @@ class YtifyApiService {
       }
       debugPrint('YTIFY SEARCH API Request: $uri');
       final response = await http.get(uri, headers: _headers);
-      debugPrint('YTIFY SEARCH API Response [${response.statusCode}]: ${response.body.length > 200 ? response.body.substring(0, 200) + '...' : response.body}');
+      debugPrint('YTIFY SEARCH API Response [${response.statusCode}]: ${response.body.length > 200 ? '${response.body.substring(0, 200)}...' : response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);

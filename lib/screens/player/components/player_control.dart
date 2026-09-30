@@ -12,6 +12,8 @@ import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
+import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class PlayerControlWidget extends ConsumerWidget {
   const PlayerControlWidget({super.key});
@@ -161,8 +163,8 @@ class PlayerControlWidget extends ConsumerWidget {
                             showGlassSnackBar(
                               context,
                               isFav
-                                  ? 'Removed from favorites'
-                                  : 'Added to favorites',
+                                  ? AppLocalizations.of(context).removedFromFavorites
+                                  : AppLocalizations.of(context).addedToFavorites,
                             );
                           }
                         },
@@ -265,7 +267,7 @@ class PlayerControlWidget extends ConsumerWidget {
                       ? SizedBox(
                           width: 24,
                           height: 24,
-                          child: CircularProgressIndicator(
+                          child: SpotifySpinner(
                             strokeWidth: 3,
                             color: Theme.of(context).colorScheme.surface,
                           ),

@@ -10,6 +10,7 @@ import 'package:muzo/widgets/result_tile.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/widgets/global_background.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class ChannelScreen extends ConsumerStatefulWidget {
   final String channelId;
@@ -73,11 +74,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Colors.white))
+            ? const Center(child: SpotifySpinner(color: Colors.white))
             : CustomScrollView(
                 slivers: [
                   SliverAppBar(
-                    expandedHeight: 340.0,
+                    expandedHeight: 220.0,
                     floating: false,
                     pinned: true,
                     backgroundColor: Colors.transparent,

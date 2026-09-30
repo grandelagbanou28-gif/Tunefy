@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:muzo/services/audio_handler.dart';
@@ -10,7 +11,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
-import 'package:muzo/main.dart'; // Just for container if needed
 
 class ShareService {
   final AudioHandler _audioHandler;
@@ -20,7 +20,7 @@ class ShareService {
   ShareService(this._audioHandler);
 
   void init(BuildContext context) {
-    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) return;
+    if (kIsWeb || Platform.isMacOS || Platform.isWindows || Platform.isLinux) return;
 
     // For sharing or opening urls/text coming from outside the app while the app is in the memory
     _intentDataStreamSubscription = ReceiveSharingIntent.instance

@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -22,6 +22,7 @@ import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/utils/app_colors.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 /// Tunefy DJ — studio d'écoute « sans fin ».
 ///
@@ -79,11 +80,24 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   Future<void> _loadHistory() async {
     final messages = await _history.loadMessages();
     final mixes = await _history.listMixes();
+    final session = await _history.loadSession();
     // Drop transient status lines from older sessions (building…, etc.).
     final cleaned = messages
         .where((m) => m.text != AppLocalizations.of(context).djSmartPlaylistBuilding)
         .toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    String? mixId;
+    if (cleaned.isNotEmpty) {
+      final lastWithMix = cleaned.lastWhere(
+        (m) => m.mixId != null,
+        orElse: () => cleaned.last,
+      );
+      mixId = lastWithMix.mixId;
+    }
+    // Restore the suggested-songs list from the active mix so quitting the
+    // page and coming back shows the same picks, not just the bubbles.
+    DjGeneratedMix? activeMix;
+    if (mixId != null) activeMix = await _history.loadMix(mixId);
     if (!mounted) return;
     setState(() {
       _chat
@@ -91,12 +105,19 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         ..addAll(cleaned);
       _recentMixes = mixes;
       _historyLoaded = true;
-      if (cleaned.isNotEmpty) {
-        final lastWithMix = cleaned.lastWhere(
-          (m) => m.mixId != null,
-          orElse: () => cleaned.last,
-        );
-        _activeMixId = lastWithMix.mixId;
+      _activeMixId = activeMix?.id ?? mixId;
+      if (activeMix != null) {
+        _generated
+          ..clear()
+          ..addAll(activeMix.tracks);
+      }
+      final dur = (session['durationMinutes'] as num?)?.toInt();
+      if (dur != null && dur > 0) _durationMinutes = dur;
+      _activeMood = _moodFromName(session['activeMood'] as String?);
+      _radio.setEnabled(session['radioEnabled'] == true);
+      if (_activeMood != null) {
+        _radio.setMood(_activeMood);
+        _bot.tracker.setActiveMood(_activeMood!.name);
       }
     });
     if (_chat.isNotEmpty) _chatScrollToBottom();
@@ -104,6 +125,23 @@ class _DjScreenState extends ConsumerState<DjScreen> {
 
   Future<void> _persistChat() async {
     await _history.saveMessages(List.of(_chat));
+  }
+
+  /// Persists duration / radio / active mood so the whole panel comes back.
+  Future<void> _persistSession() async {
+    await _history.saveSession({
+      'durationMinutes': _durationMinutes,
+      'radioEnabled': _radio.enabled,
+      'activeMood': _activeMood?.name,
+    });
+  }
+
+  DjMood? _moodFromName(String? name) {
+    if (name == null || name.isEmpty) return null;
+    for (final m in DjMood.values) {
+      if (m.name == name) return m;
+    }
+    return null;
   }
 
   @override
@@ -245,16 +283,6 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     unawaited(_runMoodChat(text));
   }
 
-  void _sendMoodChip(DjMood mood) {
-    if (_typing || _busy) return;
-    final l10n = AppLocalizations.of(context);
-    final label = _moodName(l10n, mood);
-    setState(() => _chat.add(DjChatMessage.user(label)));
-    _chatScrollToBottom();
-    unawaited(_persistChat());
-    unawaited(_runMoodChat('', preDetected: mood));
-  }
-
   Future<void> _runMoodChat(String raw, {DjMood? preDetected}) async {
     if (_typing || _busy) return;
     final l10n = AppLocalizations.of(context);
@@ -269,15 +297,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
 
     final mood = preDetected ?? _bot.detect(raw);
     if (mood == null) {
-      if (!mounted) return;
-      setState(() {
-        _typing = false;
-        _busy = false;
-        _typingLabel = null;
-        _chat.add(DjChatMessage.bot(l10n.djMoodUnknown));
-      });
-      _chatScrollToBottom();
-      unawaited(_persistChat());
+      await _runChatReply(raw);
       return;
     }
 
@@ -324,6 +344,63 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         _busy = false;
         _typingLabel = null;
         _chat.add(DjChatMessage.bot(l10n.djMoodError));
+      });
+      _chatScrollToBottom();
+      unawaited(_persistChat());
+    } finally {
+      if (mounted && (_typing || _busy)) {
+        setState(() {
+          _typing = false;
+          _busy = false;
+          _typingLabel = null;
+        });
+      }
+    }
+  }
+
+  /// Discussion libre : si aucun mood n'est détecté, le DJ répond comme un
+  /// vrai interlocuteur (Gemini) avec un repli local hors-ligne. Il ne
+  /// fabrique jamais de titres : il répond, puis invite à décrire une humeur.
+  Future<void> _runChatReply(String raw) async {
+    final l10n = AppLocalizations.of(context);
+    setState(() {
+      _typing = true;
+      _busy = true;
+      _typingLabel = l10n.djTyping;
+    });
+    _chatScrollToBottom();
+    try {
+      final gemini = ref.read(geminiServiceProvider);
+      final recentSlices = _chat
+          .skip(_chat.length > 8 ? _chat.length - 8 : 0)
+          .map((m) => '${m.fromUser ? 'User' : 'DJ'}: ${m.text}');
+      final prompt = 'You are Tunefy DJ, the DJ assistant of a music app. '
+          'Reply in the ${l10n.locale.languageCode} language, like a warm, '
+          'professional DJ. Keep it under 3 short sentences. If the user '
+          'shares a mood or feeling, acknowledge it and invite them to let '
+          'you spin a real mix. If the message is off-topic, steer gently '
+          'back to music. Never invent specific song titles, artists or '
+          'links.\n\n'
+          'Recent conversation:\n${recentSlices.join('\n')}\n\n'
+          'User: $raw\nDJ:';
+      final reply = await gemini.completeProse(prompt);
+      if (!mounted) return;
+      setState(() {
+        _typing = false;
+        _busy = false;
+        _typingLabel = null;
+        _chat.add(DjChatMessage.bot(reply ?? l10n.djChatFallback));
+      });
+      _chatScrollToBottom();
+      unawaited(_persistChat());
+    } catch (e, st) {
+      debugPrint('[TunefyDJ] chat reply error: $e\n$st');
+      if (!mounted) return;
+      setState(() {
+        _typing = false;
+        _busy = false;
+        _typingLabel = null;
+        _chat.add(DjChatMessage.bot(l10n.djChatFallback));
       });
       _chatScrollToBottom();
       unawaited(_persistChat());
@@ -429,6 +506,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       _radio.setMood(mood);
       _bot.tracker.setActiveMood(mood.name);
     }
+    unawaited(_persistSession());
 
     final mixId = DateTime.now().microsecondsSinceEpoch.toString();
     final mix = DjGeneratedMix(
@@ -491,15 +569,26 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     setState(() => _recentMixes = mixes);
   }
 
+  /// « Tout effacer » : chat, session (durée/radio/humeur), mixs générés,
+  /// feedbacks d'humeur appris et radio — tout repart de zéro.
   Future<void> _clearHistory() async {
-    await _history.clearMessages();
+    await Future.wait([
+      _history.clearAll(),
+      _bot.tracker.clearAll(),
+      _radio.tracker.clearAll(),
+    ]);
+    _radio.reset();
     if (!mounted) return;
     setState(() {
       _chat.clear();
       _activeMixId = null;
+      _generated.clear();
+      _recentMixes = [];
+      _activeMood = null;
+      _durationMinutes = 60;
     });
     final l10n = AppLocalizations.of(context);
-    showGlassSnackBar(context, l10n.djChatCleared);
+    showGlassSnackBar(context, l10n.djAllCleared);
   }
 
   Future<void> _openMix(String mixId) async {
@@ -652,14 +741,18 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                       ],
                     ),
                   ),
-                  if (_historyLoaded && _chat.isNotEmpty)
+                  if (_historyLoaded &&
+                      (_chat.isNotEmpty ||
+                          _generated.isNotEmpty ||
+                          _recentMixes.isNotEmpty ||
+                          _radio.enabled))
                     IconButton(
                       icon: Icon(Icons.delete_outline,
                           color: Colors.white.withValues(alpha: 0.45),
                           size: 20),
-                      tooltip: l10n.djClearChat,
+                      tooltip: l10n.djClearAll,
                       onPressed: () {
-                        HapticFeedback.lightImpact();
+                        HapticFeedback.selectionClick();
                         _confirmClearHistory(l10n);
                       },
                     )
@@ -704,9 +797,17 @@ class _DjScreenState extends ConsumerState<DjScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
               children: [
-                const Icon(Icons.forum_outlined,
-                    color: Color(0xFF1DB954), size: 18),
-                const SizedBox(width: 8),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1DB954),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.graphic_eq,
+                      color: Colors.black, size: 17),
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(l10n.tunefyDj,
                       style: const TextStyle(
@@ -714,29 +815,40 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                           fontSize: 14,
                           fontWeight: FontWeight.w700)),
                 ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1DB954)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: const Color(0xFF1DB954)
+                            .withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF1DB954),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      Text(l10n.djOnline,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-          // Controls (welcome, duration, chips) only before any conversation.
-          if (_chat.isEmpty) ...[
-            _welcomeCard(l10n),
-            _durationAndRadioRow(l10n),
-            SizedBox(
-              height: 34,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  for (final mood in DjMood.values) ...[
-                    _moodChip(_moodName(l10n, mood), mood),
-                    const SizedBox(width: 8),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-          ] else
-            _durationAndRadioRow(l10n),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 240),
             child: ListView.builder(
@@ -747,23 +859,50 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               itemBuilder: (context, index) {
                 if (_typing && index == _chat.length) {
                   return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Color(0xFF1DB954)),
-                        ),
+                        _bubbleAvatar(bot: true),
                         const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _typingLabel ?? '…',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white54, fontSize: 13),
+                        Flexible(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF232323),
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(18),
+                                topRight: Radius.circular(18),
+                                bottomRight: Radius.circular(18),
+                                bottomLeft: Radius.circular(5),
+                              ),
+                              border:
+                                  Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: SpotifySpinner(
+                                      strokeWidth: 2,
+                                      color: Color(0xFF1DB954)),
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    _typingLabel ?? '…',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Colors.white54,
+                                        fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -832,161 +971,14 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     );
   }
 
-  Widget _welcomeCard(AppLocalizations l10n) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1DB954).withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-            color: const Color(0xFF1DB954).withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: const BoxDecoration(
-                color: Color(0xFF1DB954), shape: BoxShape.circle),
-            child:
-                const Icon(Icons.graphic_eq, color: Colors.black, size: 20),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(l10n.djMoodAsk,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13.5, height: 1.35)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _moodChip(String label, DjMood mood) {
-    return GestureDetector(
-      onTap: () => _sendMoodChip(mood),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1DB954).withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(
-              color: const Color(0xFF1DB954).withValues(alpha: 0.4)),
-        ),
-        child: Text(label,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-      ),
-    );
-  }
-
-  /// Duration picker (Freedify) + toggle AI Radio (infinie).
-  Widget _durationAndRadioRow(AppLocalizations l10n) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-      child: Row(
-        children: [
-          const Icon(Icons.schedule, color: Color(0xFF1DB954), size: 16),
-          const SizedBox(width: 6),
-          Text(l10n.djDurationLabel,
-              style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SizedBox(
-              height: 30,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: DjMoodBot.durationChoices.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 6),
-                itemBuilder: (context, i) {
-                  final m = DjMoodBot.durationChoices[i];
-                  final selected = _durationMinutes == m;
-                  return GestureDetector(
-                    onTap: () => setState(() => _durationMinutes = m),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFF1DB954)
-                            : const Color(0xFF1DB954).withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: selected
-                              ? const Color(0xFF1DB954)
-                              : const Color(0xFF1DB954)
-                                  .withValues(alpha: 0.35),
-                        ),
-                      ),
-                      child: Text(
-                        m >= 60 ? '${m ~/ 60}h${m % 60 > 0 ? ' ${m % 60}' : ''}' : '${m}m',
-                        style: TextStyle(
-                          color: selected ? Colors.black : Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                final next = !_radio.enabled;
-                _radio.setEnabled(next, mood: next ? _activeMood : null);
-              });
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _radio.enabled
-                    ? const Color(0xFF1DB954)
-                    : Colors.white.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: _radio.enabled
-                      ? const Color(0xFF1DB954)
-                      : Colors.white24,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.radio,
-                      size: 14,
-                      color: _radio.enabled ? Colors.black : Colors.white70),
-                  const SizedBox(width: 4),
-                  Text(
-                    l10n.djRadioToggle,
-                    style: TextStyle(
-                      color: _radio.enabled ? Colors.black : Colors.white70,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _confirmClearHistory(AppLocalizations l10n) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: Text(l10n.djClearChat,
+        title: Text(l10n.djClearAll,
             style: const TextStyle(color: Colors.white, fontSize: 16)),
-        content: Text(l10n.djClearChatConfirm,
+        content: Text(l10n.djClearAllConfirm,
             style: const TextStyle(color: Colors.white70, fontSize: 13)),
         actions: [
           TextButton(
@@ -999,7 +991,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               Navigator.pop(ctx);
               unawaited(_clearHistory());
             },
-            child: Text(l10n.djClearChat,
+            child: Text(l10n.djClearAll,
                 style: const TextStyle(color: Color(0xFF1DB954))),
           ),
         ],
@@ -1009,73 +1001,157 @@ class _DjScreenState extends ConsumerState<DjScreen> {
 
   Widget _bubble(DjChatMessage m, AppLocalizations l10n) {
     final fromUser = m.fromUser;
-    return Align(
-      alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78),
-        decoration: BoxDecoration(
-          color: fromUser
-              ? const Color(0xFF1DB954).withValues(alpha: 0.14)
-              : const Color(0xFF232323),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(fromUser ? 18 : 5),
-            bottomRight: Radius.circular(fromUser ? 5 : 18),
-          ),
-          border: Border.all(
-              color: fromUser
-                  ? const Color(0xFF1DB954).withValues(alpha: 0.35)
-                  : Colors.white12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(m.text,
-                style: TextStyle(
-                    color: fromUser ? Colors.white : Colors.white70,
-                    fontSize: 13,
-                    height: 1.35)),
-            if (m.mixId != null) ...[
-              const SizedBox(height: 8),
-              GestureDetector(
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  unawaited(_openMix(m.mixId!));
-                },
-                child: Container(
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment:
+            fromUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          if (!fromUser) ...[
+            _bubbleAvatar(bot: true),
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            child: Column(
+              crossAxisAlignment:
+                  fromUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+                  constraints: BoxConstraints(
+                      maxWidth: MediaQuery.of(context).size.width * 0.68),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1DB954),
-                    borderRadius: BorderRadius.circular(14),
+                    gradient: fromUser
+                        ? const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF1DB954), Color(0xFF158d43)],
+                          )
+                        : null,
+                    color: fromUser ? null : const Color(0xFF232323),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(18),
+                      topRight: const Radius.circular(18),
+                      bottomLeft: Radius.circular(fromUser ? 18 : 5),
+                      bottomRight: Radius.circular(fromUser ? 5 : 18),
+                    ),
+                    border: Border.all(
+                        color: fromUser
+                            ? Colors.transparent
+                            : Colors.white12),
+                    boxShadow: [
+                      if (fromUser)
+                        BoxShadow(
+                          color: const Color(0xFF1DB954)
+                              .withValues(alpha: 0.25),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                    ],
                   ),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.queue_music,
-                          color: Colors.black, size: 15),
-                      const SizedBox(width: 6),
-                      Text(
-                        l10n.djOpenMixPage,
-                        style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800),
-                      ),
+                      Text(m.text,
+                          style: TextStyle(
+                              color: fromUser
+                                  ? Colors.white
+                                  : Colors.white70,
+                              fontSize: 13.5,
+                              height: 1.35)),
+                      if (m.mixId != null) ...[
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            unawaited(_openMix(m.mixId!));
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: fromUser
+                                  ? Colors.black.withValues(alpha: 0.25)
+                                  : const Color(0xFF1DB954),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.queue_music,
+                                    color: fromUser
+                                        ? Colors.white
+                                        : Colors.black,
+                                    size: 15),
+                                const SizedBox(width: 6),
+                                Text(
+                                  l10n.djOpenMixPage,
+                                  style: TextStyle(
+                                      color: fromUser
+                                          ? Colors.white
+                                          : Colors.black,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 3),
+                Text(_timeLabel(m.createdAt),
+                    style: const TextStyle(
+                        color: Colors.white24, fontSize: 10)),
+              ],
+            ),
+          ),
+          if (fromUser) ...[
+            const SizedBox(width: 8),
+            _bubbleAvatar(bot: false),
           ],
-        ),
+        ],
       ),
     );
+  }
+
+  Widget _bubbleAvatar({required bool bot}) {
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: bot
+            ? const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1DB954), Color(0xFF158d43)],
+              )
+            : null,
+        color: bot ? null : Colors.white.withValues(alpha: 0.08),
+        border: Border.all(
+            color: bot
+                ? Colors.transparent
+                : Colors.white.withValues(alpha: 0.25)),
+      ),
+      child: Icon(
+        bot ? Icons.graphic_eq : Icons.person,
+        size: 16,
+        color: bot ? Colors.black : Colors.white70,
+      ),
+    );
+  }
+
+  static String _timeLabel(DateTime t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final min = t.minute.toString().padLeft(2, '0');
+    return '$h:$min';
   }
 
   // ── Sélection générée pour l'humeur ───────────────────────────────────────
@@ -1107,7 +1183,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                 if (_activeMixId != null)
                   GestureDetector(
                     onTap: () {
-                      HapticFeedback.lightImpact();
+                      HapticFeedback.selectionClick();
                       unawaited(_openMix(_activeMixId!));
                     },
                     child: Container(
@@ -1137,7 +1213,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               child: GestureDetector(
                 onTap: () {
                   if (_activeMixId == null) return;
-                  HapticFeedback.lightImpact();
+                  HapticFeedback.selectionClick();
                   unawaited(_openMix(_activeMixId!));
                 },
                 child: Text(
@@ -1177,7 +1253,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                       : '';
                   return GestureDetector(
                     onTap: () {
-                      HapticFeedback.lightImpact();
+                      HapticFeedback.selectionClick();
                       unawaited(_openMix(mix.id));
                     },
                     child: Container(

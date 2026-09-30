@@ -134,9 +134,9 @@ class YouTubeMusicHomeService {
         final contents = shelf['contents'] as List? ?? [];
 
         final items = contents
-            .where((item) => item is Map)
+            .whereType<Map>()
             .map<HomeItem?>((item) {
-              final itemMap = item as Map<String, dynamic>;
+              final itemMap = Map<String, dynamic>.from(item);
               if (itemMap.containsKey('musicTwoRowItemRenderer')) {
                 return _parseMusicItem(itemMap['musicTwoRowItemRenderer']);
               } else if (itemMap.containsKey('musicResponsiveListItemRenderer')) {

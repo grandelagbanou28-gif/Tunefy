@@ -19,7 +19,7 @@ class AppAlertDialog extends StatelessWidget {
     final dividerCol = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08);
 
     return Dialog(
-      backgroundColor: Colors.transparent, // Important for glass effect
+      backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 44, vertical: 24),
       child: GlassContainer(
         borderRadius: BorderRadius.circular(14),
@@ -79,13 +79,9 @@ class AppAlertDialog extends StatelessWidget {
                     if (actions.length == 2) {
                       return Row(
                         children: [
-                          Expanded(
-                            child: actions[0],
-                          ),
+                          Expanded(child: actions[0]),
                           Container(width: 0.5, height: 44, color: dividerCol),
-                          Expanded(
-                            child: actions[1],
-                          ),
+                          Expanded(child: actions[1]),
                         ],
                       );
                     } else {
@@ -126,4 +122,3 @@ Future<T?> showAppAlertDialog<T>({
         AppAlertDialog(title: title, content: content, actions: actions),
   );
 }
-

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +10,8 @@ import 'package:muzo/services/lyrics_service.dart';
 import 'package:muzo/widgets/lyrics_view.dart';
 import 'package:muzo/providers/theme_provider.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class AlbumArtNLyrics extends ConsumerStatefulWidget {
   final double playerArtImageSize;
@@ -22,6 +26,15 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
   bool _isLoadingLyrics = false;
   Lyrics? _lyrics;
   String? _lastFetchedTitle;
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
 
   Future<void> _fetchLyrics(MediaItem mediaItem) async {
     if (_lastFetchedTitle == mediaItem.title) return;
@@ -63,20 +76,17 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(currentMediaItemProvider, (prev, next) {
+      final mediaItem = next.valueOrNull;
+      if (mediaItem != null &&
+          mediaItem.title != _lastFetchedTitle &&
+          _showLyrics) {
+        _fetchLyrics(mediaItem);
+      }
+    });
+
     final mediaItemAsync = ref.watch(currentMediaItemProvider);
     final audioHandler = ref.watch(audioHandlerProvider);
-
-    // Reset lyrics if song changes (optional, but good UX to clear old lyrics)
-    // Listen for media changes to auto-update lyrics
-    ref.listen(currentMediaItemProvider, (previous, next) {
-      next.whenData((mediaItem) {
-        if (mediaItem != null &&
-            mediaItem.title != _lastFetchedTitle &&
-            _showLyrics) {
-          _fetchLyrics(mediaItem);
-        }
-      });
-    });
 
     final safeSize = widget.playerArtImageSize.clamp(10.0, double.infinity);
 
@@ -144,7 +154,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                                 .withValues(alpha: 0.45),
                         child: _isLoadingLyrics
                             ? Center(
-                                child: CircularProgressIndicator(
+                                child: SpotifySpinner(
                                   color: Theme.of(
                                     context,
                                   ).colorScheme.onSurface,
@@ -153,7 +163,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                             : _lyrics == null
                             ? Center(
                                 child: Text(
-                                  "No lyrics found",
+                                  AppLocalizations.of(context).noLyricsFound,
                                   style: TextStyle(
                                     color: Theme.of(
                                       context,
@@ -232,7 +242,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
-                                    "Lyrics",
+                                    AppLocalizations.of(context).lyrics,
                                     style: TextStyle(
                                       color: Theme.of(
                                         context,

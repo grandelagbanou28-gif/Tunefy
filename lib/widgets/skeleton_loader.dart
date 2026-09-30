@@ -4,12 +4,14 @@ class SkeletonLoader extends StatefulWidget {
   final double width;
   final double height;
   final double borderRadius;
+  final bool forceDark;
 
   const SkeletonLoader({
     super.key,
     required this.width,
     required this.height,
     this.borderRadius = 8,
+    this.forceDark = false,
   });
 
   @override
@@ -42,9 +44,19 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
 
   @override
   Widget build(BuildContext context) {
-    // Determine base color based on brightness, assuming dark theme mostly
-    final baseColor = Colors.grey[850]!;
-    final highlightColor = Colors.grey[700]!;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = widget.forceDark || theme.brightness == Brightness.dark;
+    final surface = widget.forceDark ? const Color(0xFF121212) : scheme.surface;
+    final onSurface = widget.forceDark ? Colors.white : scheme.onSurface;
+    final baseColor = Color.alphaBlend(
+      onSurface.withValues(alpha: isDark ? 0.12 : 0.10),
+      surface,
+    );
+    final highlightColor = Color.alphaBlend(
+      onSurface.withValues(alpha: isDark ? 0.30 : 0.04),
+      surface,
+    );
 
     return AnimatedBuilder(
       animation: _controller,
@@ -68,37 +80,65 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
 }
 
 class HomeSkeletonSection extends StatelessWidget {
-  const HomeSkeletonSection({super.key});
+  final bool showTitle;
+  final double rowHeight;
+  final double itemSpacing;
+  final bool forceDark;
+
+  const HomeSkeletonSection({
+    super.key,
+    this.showTitle = true,
+    this.rowHeight = 180,
+    this.itemSpacing = 16,
+    this.forceDark = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-          child: SkeletonLoader(width: 200, height: 24, borderRadius: 4),
-        ),
+        if (showTitle)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+            child: SkeletonLoader(
+              width: 200,
+              height: 24,
+              borderRadius: 4,
+              forceDark: forceDark,
+            ),
+          ),
         SizedBox(
-          height: 180,
+          height: rowHeight,
           child: ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             scrollDirection: Axis.horizontal,
             itemCount: 4,
-            separatorBuilder: (_, __) => const SizedBox(width: 16),
+            separatorBuilder: (_, __) => SizedBox(width: itemSpacing),
             itemBuilder: (context, index) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SkeletonLoader(
+                  SkeletonLoader(
                     width: 140,
                     height: 140,
                     borderRadius: 12,
+                    forceDark: forceDark,
                   ),
                   const SizedBox(height: 8),
-                  const SkeletonLoader(width: 120, height: 14, borderRadius: 4),
+                  SkeletonLoader(
+                    width: 120,
+                    height: 14,
+                    borderRadius: 4,
+                    forceDark: forceDark,
+                  ),
                   const SizedBox(height: 4),
-                  const SkeletonLoader(width: 80, height: 12, borderRadius: 4),
+                  SkeletonLoader(
+                    width: 80,
+                    height: 12,
+                    borderRadius: 4,
+                    forceDark: forceDark,
+                  ),
                 ],
               );
             },

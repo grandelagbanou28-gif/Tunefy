@@ -223,7 +223,7 @@ class _SleepTimerDialogState extends ConsumerState<SleepTimerDialog> {
     final theme = Theme.of(context);
     return InkWell(
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         onTap();
       },
       borderRadius: BorderRadius.circular(18),

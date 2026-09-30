@@ -33,7 +33,33 @@ class MuzoItem {
   final String? category;
   final String? channelName;
   final String? addedAt;
+  final DateTime? releaseDate;
   final dynamic dbId;
+
+  /// Which real source produced this item ("itunes", "jamendo", "audius",
+  /// "ytify", "piped", "itunes podcast"…). Used for provenance/audit.
+  final String? source;
+
+  /// Identifier of this item inside its [source] (e.g. iTunes trackId).
+  final String? sourceId;
+
+  /// Canonical URL at the source when one exists (e.g. artwork / preview).
+  final String? sourceUrl;
+
+  /// When this item was fetched. Null when it came from parsing without a
+  /// fetch (artists, channels…) — batch harvesters set it explicitly.
+  final DateTime? fetchedAt;
+
+  /// Strict relevance score (see categoryMatchScore) after validation. Only
+  /// populated for items that went through a category gate; null otherwise.
+  final int? relevanceScore;
+
+  /// True once this item passed the strict category validation gate. Badges
+  /// "verified" content in the UI/audit without altering behavior.
+  final bool verified;
+
+  /// Arbitrary original metadata from the provider, preserved verbatim.
+  final Map<String, dynamic>? metadata;
 
   MuzoItem({
     required this.title,
@@ -55,8 +81,16 @@ class MuzoItem {
     this.category,
     this.channelName,
     this.addedAt,
+    this.releaseDate,
     this.dbId,
     this.audioUrl,
+    this.source,
+    this.sourceId,
+    this.sourceUrl,
+    this.fetchedAt,
+    this.relevanceScore,
+    this.verified = false,
+    this.metadata,
   });
 
   factory MuzoItem.fromJson(Map<String, dynamic> json) {
@@ -180,7 +214,24 @@ class MuzoItem {
       channelName: json['channelName']?.toString(),
       addedAt: json['added_at']?.toString(),
       dbId: json['db_id'],
+      releaseDate: json['releaseDate'] is String
+          ? DateTime.tryParse(json['releaseDate'] as String)
+          : (json['release_date'] is String
+                ? DateTime.tryParse(json['release_date'] as String)
+                : null),
       audioUrl: json['audioUrl']?.toString() ?? json['audio_url']?.toString(),
+      source: json['source']?.toString(),
+      sourceId: json['source_id']?.toString(),
+      sourceUrl: json['source_url']?.toString(),
+      fetchedAt: json['fetched_at'] != null
+          ? DateTime.tryParse(json['fetched_at'].toString())
+          : null,
+      relevanceScore:
+          json['relevance_score'] is int ? json['relevance_score'] : null,
+      verified: json['verified'] == true,
+      metadata: json['metadata'] is Map
+          ? Map<String, dynamic>.from(json['metadata'] as Map)
+          : null,
     );
   }
 
@@ -206,7 +257,15 @@ class MuzoItem {
       'channelName': channelName,
       'added_at': addedAt,
       'db_id': dbId,
+      'releaseDate': releaseDate?.toIso8601String(),
       'audio_url': audioUrl,
+      'source': source,
+      'source_id': sourceId,
+      'source_url': sourceUrl,
+      'fetched_at': fetchedAt?.toIso8601String(),
+      'relevance_score': relevanceScore,
+      'verified': verified,
+      'metadata': metadata,
     };
   }
 
@@ -233,7 +292,16 @@ class MuzoItem {
     String? uploaded,
     String? category,
     String? channelName,
+    String? addedAt,
+    DateTime? releaseDate,
     String? audioUrl,
+    String? source,
+    String? sourceId,
+    String? sourceUrl,
+    DateTime? fetchedAt,
+    int? relevanceScore,
+    bool? verified,
+    Map<String, dynamic>? metadata,
   }) {
     return MuzoItem(
       title: title ?? this.title,
@@ -255,8 +323,16 @@ class MuzoItem {
       category: category ?? this.category,
       channelName: channelName ?? this.channelName,
       addedAt: addedAt ?? this.addedAt,
-      dbId: dbId ?? this.dbId,
+      releaseDate: releaseDate ?? this.releaseDate,
+      dbId: dbId,
       audioUrl: audioUrl ?? this.audioUrl,
+      source: source ?? this.source,
+      sourceId: sourceId ?? this.sourceId,
+      sourceUrl: sourceUrl ?? this.sourceUrl,
+      fetchedAt: fetchedAt ?? this.fetchedAt,
+      relevanceScore: relevanceScore ?? this.relevanceScore,
+      verified: verified ?? this.verified,
+      metadata: metadata ?? this.metadata,
     );
   }
 }
@@ -324,4 +400,60 @@ class MuzoAlbum {
   Map<String, dynamic> toJson() {
     return {'name': name, 'id': id};
   }
+}
+
+/// Content identity key: normalized title + primary artist. Collapses the
+/// "same song, different upload/provider" duplicates — official audio vs
+/// lyric video vs live vs a Jamendo/Audius/iTunes copy — regardless of their
+/// unrelated videoIds or provider prefixes.
+String? normalizeContentKey(MuzoItem s) {
+  final t = compactSongTitle(s.title);
+  if (t.isEmpty) return null;
+  return '$t|${compactArtistName(s.displayArtist)}';
+}
+
+/// Lowercases and strips upload/flavor junk from a song title so "Song
+/// (Official Audio)", "Song - Lyrics", "Song feat. X" all reduce to "song".
+String compactSongTitle(String value) {
+  var v = value.toLowerCase().trim();
+  // Tag flavored parentheticals: (official video), [lyrics], (audio), ...
+  v = v.replaceAll(
+    RegExp(
+        r'[\(\[][^)\]]*(official|lyrics?|audio|video|vevo|hq|hd|explicit|clean|'
+        r'remaster|live|karaoke|instrumental|acoustic|session|short|edit|ft\.?|feat\.?)[^)\]]*[\)\]]'),
+    ' ',
+  );
+  // "- youtube" / "- topic" / "on Sundays" tails.
+  v = v.replaceAll(
+      RegExp(r'[-–—]*(youtube|topic|vevo|official)\b.*'), ' ');
+  // Feature suffixes.
+  v = v.replaceAll(RegExp(r'\s*(feat\.?|ft\.?)\b.*'), ' ');
+  v = v.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+  return v.trim();
+}
+
+/// Single primary-artist identity for dedupe purposes.
+String compactArtistName(String value) {
+  var v = value.toLowerCase().trim();
+  v = v.replaceAll(RegExp(r'\s*(feat\.?|ft\.?)\b.*'), ' ');
+  v = v.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+  return v.trim();
+}
+
+/// Remove duplicate songs (same videoId, or title+artist when videoId is
+/// null) so an artist's songs never appear twice in the same list. Also
+/// collapses normalized-content duplicates (same song, different upload).
+List<MuzoItem> dedupeMuzoSongs(List<MuzoItem> songs) {
+  final seen = <String>{};
+  final out = <MuzoItem>[];
+  for (final song in songs) {
+    final key =
+        (song.videoId ?? '${song.title}|${song.displayArtist}').toLowerCase();
+    if (key.isEmpty || seen.contains(key)) continue;
+    seen.add(key);
+    final norm = normalizeContentKey(song);
+    if (norm != null && !seen.add(norm)) continue;
+    out.add(song);
+  }
+  return out;
 }

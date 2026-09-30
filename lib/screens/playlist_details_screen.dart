@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,9 +9,11 @@ import 'package:muzo/models/user_data.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/providers/download_provider.dart';
+import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/global_background.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class PlaylistDetailsScreen extends ConsumerWidget {
   final String playlistName;
@@ -25,6 +28,7 @@ class PlaylistDetailsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final storage = ref.watch(storageServiceProvider);
+    final l10n = AppLocalizations.of(context);
 
     return GlobalBackground(
       child: Scaffold(
@@ -40,7 +44,7 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                   // Confirm delete
                   showAppAlertDialog(
                     context: context,
-                    title: 'Delete Playlist?',
+                    title: l10n.deletePlaylistTitle,
                     content: const Text(
                       'This cannot be undone.',
                       style: TextStyle(color: Colors.grey),
@@ -162,6 +166,7 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                   color: Colors.transparent,
                   child: InkWell(
                     onTap: () {
+                      storage.recordPlayedPlaylist(playlistName);
                       ref.read(audioHandlerProvider).playAll(songs);
                     },
                     child: Padding(
@@ -195,16 +200,30 @@ class PlaylistDetailsScreen extends ConsumerWidget {
 
         // Songs List
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(bottom: 120),
-            itemCount: songs.length,
-            itemBuilder: (context, index) {
-              final song = songs[index];
-              final progress = progressMap?[song.videoId];
-              final isDownloading = progress != null;
+          child: Builder(
+            builder: (context) {
+              final canReorder =
+                  playlistName != 'Favorites' && playlistName != 'Downloads';
+              return ReorderableListView.builder(
+                padding: const EdgeInsets.only(bottom: 120),
+                itemCount: songs.length,
+                buildDefaultDragHandles: false,
+                onReorderItem: (fromIndex, toIndex) =>
+                    storage.movePlaylistTrack(playlistName, fromIndex, toIndex),
+                proxyDecorator: (child, index, animation) => Material(
+                  color: Colors.transparent,
+                  elevation: 6,
+                  borderRadius: BorderRadius.circular(8),
+                  child: child,
+                ),
+                itemBuilder: (context, index) {
+                  final song = songs[index];
+                  final progress = progressMap?[song.videoId];
+                  final isDownloading = progress != null;
 
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
+                  return ListTile(
+                    key: ValueKey(song.videoId ?? 'playlist_idx_$index'),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(6),
                   child: CachedNetworkImage(
@@ -258,48 +277,75 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                           fontSize: 11,
                         ),
                       ),
-                trailing: IconButton(
-                  icon: Icon(
-                    playlistName == 'Favorites'
-                        ? FluentIcons.heart_24_filled
-                        : playlistName == 'Downloads'
-                            ? (isDownloading
-                                ? FluentIcons.dismiss_circle_24_regular
-                                : FluentIcons.delete_24_regular)
-                            : FluentIcons.subtract_circle_24_regular,
-                    color: playlistName == 'Favorites'
-                        ? const Color(0xFF1ED760)
-                        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
-                    size: 18,
-                  ),
-                  onPressed: () {
-                    if (playlistName == 'Favorites') {
-                      storage.toggleFavorite(song);
-                    } else if (playlistName == 'Downloads') {
-                      if (isDownloading) {
-                        ref
-                            .read(downloadProvider.notifier)
-                            .deleteDownload(song.videoId!);
-                      } else {
-                        storage.removeDownload(song.videoId!);
-                      }
-                    } else {
-                      storage.removeFromPlaylist(
-                        playlistName,
-                        song.videoId ?? '',
-                      );
-                    }
-                  },
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        playlistName == 'Favorites'
+                            ? FluentIcons.heart_24_filled
+                            : playlistName == 'Downloads'
+                                ? (isDownloading
+                                    ? FluentIcons.dismiss_circle_24_regular
+                                    : FluentIcons.delete_24_regular)
+                                : FluentIcons.subtract_circle_24_regular,
+                        color: playlistName == 'Favorites'
+                            ? const Color(0xFF1ED760)
+                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+                        size: 18,
+                      ),
+                      onPressed: () {
+                        if (playlistName == 'Favorites') {
+                          storage.toggleFavorite(song);
+                        } else if (playlistName == 'Downloads') {
+                          if (isDownloading) {
+                            ref
+                                .read(downloadProvider.notifier)
+                                .deleteDownload(song.videoId!);
+                          } else {
+                            storage.removeDownload(song.videoId!);
+                          }
+                        } else {
+                          storage.removeFromPlaylist(
+                            playlistName,
+                            song.videoId ?? '',
+                          );
+                        }
+                      },
+                    ),
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      icon: Icon(Icons.more_vert, size: 18, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4)),
+                      onPressed: () => SongOptionsMenu.show(ref, song),
+                    ),
+                    if (canReorder)
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Icon(
+                            Icons.drag_handle_rounded,
+                            size: 18,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.4),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 onTap: () {
-                  if (!isDownloading) {
-                    ref.read(audioHandlerProvider).playVideo(song);
-                  }
+                  HapticFeedback.selectionClick();
+                  openArtistForSong(context, song);
                 },
                 onLongPress: () {
                   if (!isDownloading) {
                     SongOptionsMenu.show(ref, song);
                   }
+                },
+              );
                 },
               );
             },

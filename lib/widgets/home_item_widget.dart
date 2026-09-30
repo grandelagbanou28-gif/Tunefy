@@ -4,14 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/providers/player_provider.dart';
-import 'package:muzo/screens/artist_screen.dart';
+import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/playlist_screen.dart';
 import 'package:muzo/screens/album_screen.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/screens/playlist_details_screen.dart';
 import 'package:muzo/services/ytm_home.dart';
 import 'package:muzo/utils/page_routes.dart';
+import 'package:muzo/utils/song_navigation.dart';
 
 class HomeItemWidget extends ConsumerWidget {
   final HomeItem item;
@@ -83,11 +83,11 @@ class HomeItemWidget extends ConsumerWidget {
   }
 
   void _handleTap(BuildContext context, WidgetRef ref) {
-    HapticFeedback.lightImpact();
+    HapticFeedback.selectionClick();
 
     if (item.videoId != null) {
       // It's a song or video
-      final muzoResult = MuzoItem(
+      openArtistForSong(context, MuzoItem(
         title: item.title,
         thumbnails: [
           if (item.thumbnailUrl != null)
@@ -97,8 +97,7 @@ class HomeItemWidget extends ConsumerWidget {
         isExplicit: false,
         videoId: item.videoId,
         artists: item.subtitle != null ? [MuzoArtist(name: item.subtitle!, id: null)] : null,
-      );
-      ref.read(audioHandlerProvider).playVideo(muzoResult);
+      ));
     } else if (item.type == 'album' && item.browseId != null) {
       Navigator.push(
         context,
@@ -142,10 +141,9 @@ class HomeItemWidget extends ConsumerWidget {
       Navigator.push(
         context,
         SlidePageRoute(
-          page: ArtistScreen(
-            browseId: item.browseId!,
+          page: ArtistPageScreen(
             artistName: item.title,
-            thumbnailUrl: item.thumbnailUrl,
+            imageUrl: item.thumbnailUrl,
           ),
         ),
       );

@@ -15,6 +15,6 @@ class ApiConstants {
   /// Surchargeable au build : --dart-define=WEB_STREAM_API_BASE=https://...
   static const String webStreamApiBaseUrl = String.fromEnvironment(
     'WEB_STREAM_API_BASE',
-    defaultValue: 'https://tunefy-ytdlp.onrender.com',
+    defaultValue: 'https://tunefy-ytdlp.vercel.app',
   );
 }

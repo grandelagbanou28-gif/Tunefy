@@ -132,4 +132,15 @@ class DjMoodTracker {
     _playedMs.clear();
     _durationMs.clear();
   }
+
+  /// Full wipe of the learned humeur feedback (« Tout effacer » du DJ).
+  Future<void> clearAll() async {
+    try {
+      final box = await _getBox();
+      await box.clear();
+    } catch (e) {
+      debugPrint('DjMoodTracker.clearAll: $e');
+    }
+    endSession();
+  }
 }

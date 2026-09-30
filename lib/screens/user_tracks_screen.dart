@@ -11,9 +11,12 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/models/user_track.dart';
 import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/global_background.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class UserTracksScreen extends ConsumerStatefulWidget {
   const UserTracksScreen({super.key});
@@ -90,8 +93,9 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentMediaItem = ref.watch(currentMediaItemProvider).value;
-    final isPlaying = ref.watch(isPlayingProvider).value ?? false;
+    final ui = ref.watch(playerUiStateProvider).value;
+    final currentMediaItem = ref.watch(currentMediaItemProvider).valueOrNull;
+    final isPlaying = ui?.isPlaying ?? false;
 
     return GlobalBackground(
       child: Scaffold(
@@ -128,7 +132,7 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
               if (_isLoading && _tracks.isEmpty)
                 const SliverFillRemaining(
                   child: Center(
-                    child: CircularProgressIndicator(),
+                    child: SpotifySpinner(),
                   ),
                 )
               else if (_errorMessage != null && _tracks.isEmpty)
@@ -188,7 +192,7 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Tap the button below or in the top right corner to upload your first audio track to Muzo!',
+                            'Tap the button below or in the top right corner to upload your first audio track to Tunefy!',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
@@ -223,8 +227,8 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
                         color: Colors.transparent,
                         child: InkWell(
                           onTap: () {
-                            HapticFeedback.lightImpact();
-                            ref.read(audioHandlerProvider).playVideo(muzoItem);
+                            HapticFeedback.selectionClick();
+                            openArtistForSong(context, muzoItem);
                           },
                            child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
@@ -316,7 +320,7 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
                                     size: 20,
                                   ),
                                   onSelected: (value) {
-                                    HapticFeedback.lightImpact();
+                                    HapticFeedback.selectionClick();
                                     if (value == 'edit') {
                                       _showEditDialog(context, track);
                                     } else if (value == 'delete') {
@@ -604,7 +608,7 @@ class _UploadTrackDialogState extends ConsumerState<UploadTrackDialog> {
                               ),
                             ),
                             Text(
-                              'Share your music with Muzo',
+                              'Share your music with Tunefy',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: cs.onSurface.withValues(alpha: 0.45),
@@ -878,7 +882,7 @@ class _UploadTrackDialogState extends ConsumerState<UploadTrackDialog> {
                               ),
                               child: Icon(
                                 _isPublic
-                                    ? FluentIcons.people_community_24_regular
+                                    ? FluentIcons.globe_24_regular
                                     : FluentIcons.lock_shield_24_regular,
                                 size: 17,
                                 color: _isPublic
@@ -978,7 +982,7 @@ class _UploadTrackDialogState extends ConsumerState<UploadTrackDialog> {
                             SizedBox(
                               width: 16,
                               height: 16,
-                              child: CircularProgressIndicator(
+                              child: SpotifySpinner(
                                 strokeWidth: 2,
                                 color: cs.surface,
                               ),
@@ -1320,7 +1324,7 @@ class _EditTrackDialogState extends ConsumerState<EditTrackDialog> {
                               ),
                               child: Icon(
                                 _isPublic
-                                    ? FluentIcons.people_community_24_regular
+                                    ? FluentIcons.globe_24_regular
                                     : FluentIcons.lock_shield_24_regular,
                                 size: 17,
                                 color: _isPublic
@@ -1420,7 +1424,7 @@ class _EditTrackDialogState extends ConsumerState<EditTrackDialog> {
                             SizedBox(
                               width: 16,
                               height: 16,
-                              child: CircularProgressIndicator(
+                              child: SpotifySpinner(
                                 strokeWidth: 2,
                                 color: cs.surface,
                               ),
@@ -1498,9 +1502,10 @@ class _DeleteTrackDialogState extends ConsumerState<DeleteTrackDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
 
     return AppAlertDialog(
-      title: 'Delete Track',
+      title: l10n.deleteTrack,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

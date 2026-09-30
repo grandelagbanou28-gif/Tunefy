@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/global_background.dart';
 
 class AboutScreen extends StatelessWidget {
@@ -8,6 +9,7 @@ class AboutScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return GlobalBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -15,7 +17,7 @@ class AboutScreen extends StatelessWidget {
           backgroundColor: Colors.transparent,
           elevation: 0,
           title: Text(
-            'About',
+            l10n.about,
             style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           ),
           centerTitle: true,
@@ -51,7 +53,7 @@ class AboutScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'Muzo',
+                  'Tunefy',
                   style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
                 ),
                 const SizedBox(height: 8),
@@ -69,7 +71,7 @@ class AboutScreen extends StatelessWidget {
                     ),
                   ),
                   child: const Text(
-                    'Premium Music Client',
+                    'Music Client',
                     style: TextStyle(
                       color: Colors.grey,
                       fontSize: 15,
@@ -82,7 +84,7 @@ class AboutScreen extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
                   child: Text(
-                    'Muzo is a powerful YouTube music client designed for a premium listening experience. Enjoy ad-free music, background playback, offline downloads, and a beautiful user interface.',
+                    'Tunefy is a powerful YouTube music client designed for a great listening experience. Enjoy ad-free music, background playback, offline downloads, and a beautiful user interface.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.grey[400],
@@ -93,12 +95,12 @@ class AboutScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 48),
-                _buildInfoRow(context, FluentIcons.info_24_regular, 'Version', '2.1.6'),
+                _buildInfoRow(context, FluentIcons.info_24_regular, l10n.version, '2.1.6'),
                 const SizedBox(height: 16),
                 _buildInfoRow(
                   context,
                   FluentIcons.person_24_regular,
-                  'Developer',
+                  l10n.developer,
                   'Shashwat',
                 ),
                 const SizedBox(height: 16),

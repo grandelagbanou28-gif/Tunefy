@@ -171,6 +171,84 @@ class MusicBrainzService {
     return out;
   }
 
+  /// Recent recordings (singles/tracks) released in [from, to]. The album feed
+  /// alone misses songs that came out without a parent album, so this is the
+  /// dedicated "new songs" source. Same disk cache and rate-limit care as
+  /// [releasesBetween].
+  Future<List<MuzoItem>> recentRecordings(
+    DateTime from,
+    DateTime to, {
+    int limit = 80,
+  }) async {
+    final key =
+        'mb|rec|${_iso(from)}..${_iso(to)}|d${ContentCacheService.dayBucket}';
+    try {
+      final cached = await ContentCacheService.instance
+          .readJsonIfFresh(key, maxAge: ContentCacheService.dailyTtl);
+      if (cached != null && cached.isNotEmpty) {
+        return cached
+            .whereType<Map>()
+            .map((m) => MuzoItem.fromJson(Map<String, dynamic>.from(m)))
+            .toList();
+      }
+    } catch (_) {}
+
+    final out = <MuzoItem>[];
+    try {
+      final query = 'releasedate:[${_iso(from)} TO ${_iso(to)}]';
+      final uri = Uri.parse(
+          '$_base/recording/?query=${Uri.encodeComponent(query)}'
+          '&fmt=json&limit=$limit');
+      final resp =
+          await http.get(uri, headers: {'User-Agent': _ua}).timeout(_timeout);
+      if (resp.statusCode != 200) {
+        debugPrint('MusicBrainz recentRecordings HTTP ${resp.statusCode}');
+        return const [];
+      }
+      final data = json.decode(resp.body) as Map<String, dynamic>;
+      final recordings = data['recordings'] as List? ?? const [];
+      for (final raw in recordings) {
+        if (raw is! Map) continue;
+        final m = Map<String, dynamic>.from(raw);
+        final title = (m['title'] as String? ?? '').trim();
+        if (title.isEmpty) continue;
+        final dateStr = (m['date'] as String? ?? '').trim();
+        final date = dateStr.isEmpty ? null : DateTime.tryParse(dateStr);
+        if (date == null) continue;
+        final credits = m['artist-credit'] as List? ?? const [];
+        final artists = <MuzoArtist>[];
+        for (final c in credits) {
+          if (c is! Map) continue;
+          final name = (c['name'] as String? ?? '').trim();
+          if (name.isEmpty) continue;
+          final id = (c['artist'] as Map?)?['id']?.toString();
+          artists.add(MuzoArtist(name: name, id: id));
+        }
+        if (artists.isEmpty) continue;
+        out.add(MuzoItem(
+          title: title,
+          thumbnails: const [],
+          resultType: 'track',
+          isExplicit: false,
+          artists: artists,
+          releaseDate: date,
+          source: 'musicbrainz',
+          sourceId: (m['id'] as String?) ?? '',
+          fetchedAt: DateTime.now(),
+        ));
+        if (out.length >= limit) break;
+      }
+    } catch (e) {
+      debugPrint('MusicBrainz recentRecordings error: $e');
+      return out;
+    }
+    if (out.isNotEmpty) {
+      await ContentCacheService.instance
+          .writeJson(key, out.map((e) => e.toJson()).toList());
+    }
+    return out;
+  }
+
   // ── Artist validation (geo + genre evidence) ──────────────────────────────
 
   static const Map<String, String> _countryName = {

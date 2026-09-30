@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
-import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/providers/explore_provider.dart';
+import 'package:muzo/utils/song_navigation.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/skeleton_loader.dart';
 
@@ -43,11 +44,11 @@ class TopOnMuzoSection extends ConsumerWidget {
                       title: item.title,
                       imageUrl: imageUrl,
                       onTap: () {
-                        HapticFeedback.lightImpact();
-                        ref.read(audioHandlerProvider).playVideo(item);
+                        HapticFeedback.selectionClick();
+                        openArtistForSong(context, item);
                       },
                       onLongPress: () {
-                        HapticFeedback.lightImpact();
+                        HapticFeedback.selectionClick();
                         SongOptionsMenu.show(ref, item);
                       },
                     ),
@@ -81,7 +82,7 @@ class TopOnMuzoSection extends ConsumerWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            'Top on Muzo',
+            AppLocalizations.of(context).topOnMuzo,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurface,
                   fontWeight: FontWeight.w700,

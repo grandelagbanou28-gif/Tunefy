@@ -7,6 +7,7 @@ import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class PlaylistSelectionDialog extends ConsumerStatefulWidget {
   final MuzoItem song;
@@ -26,9 +27,10 @@ class _PlaylistSelectionDialogState
     final playlists = storage.getPlaylistNames();
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final dividerCol = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08);
+    final l10n = AppLocalizations.of(context);
 
     return AppAlertDialog(
-      title: 'Add to Playlist',
+      title: l10n.addToPlaylist,
       content: SizedBox(
         width: double.maxFinite,
         child: playlists.isEmpty
@@ -66,7 +68,7 @@ class _PlaylistSelectionDialogState
                           children: [
                             InkWell(
                               onTap: () {
-                                HapticFeedback.lightImpact();
+                                HapticFeedback.selectionClick();
                                 storage.addToPlaylist(name, widget.song);
                                 Navigator.pop(context);
                                 showGlassSnackBar(context, 'Added to $name');
@@ -135,9 +137,10 @@ class _PlaylistSelectionDialogState
   void _showCreatePlaylistDialog(BuildContext context, StorageService storage) {
     final controller = TextEditingController();
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
     showAppAlertDialog(
       context: context,
-      title: 'Create Playlist',
+      title: l10n.createPlaylist,
       content: Padding(
         padding: const EdgeInsets.only(top: 10.0),
         child: CupertinoTextField(

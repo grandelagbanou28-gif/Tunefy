@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Logo background: the app icon (assets/icon.png) is a green mark on
+         black, so the adaptive background must be that same black for the
+         foreground's corners to blend away. -->
+    <color name="ic_launcher_background">#FF000000</color>
+</resources>

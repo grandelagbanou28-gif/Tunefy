@@ -8,6 +8,7 @@ import 'package:muzo/widgets/result_tile.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/widgets/global_background.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class PlaylistScreen extends ConsumerStatefulWidget {
   final String playlistId;
@@ -67,11 +68,11 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
+            ? const Center(child: SpotifySpinner())
             : CustomScrollView(
                 slivers: [
                   SliverAppBar(
-                    expandedHeight: 240.0,
+                    expandedHeight: 190.0,
                     floating: false,
                     pinned: true,
                     backgroundColor: Colors.transparent,

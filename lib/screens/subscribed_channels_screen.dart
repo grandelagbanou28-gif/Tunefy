@@ -7,7 +7,7 @@ import 'package:muzo/screens/channel_screen.dart';
 import 'package:muzo/widgets/result_tile.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/models/user_data.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class SubscribedChannelsScreen extends ConsumerStatefulWidget {
   const SubscribedChannelsScreen({super.key});
@@ -193,7 +193,7 @@ class _SubscribedChannelsScreenState
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const SliverToBoxAdapter(
-                          child: Center(child: CircularProgressIndicator()),
+                          child: Center(child: SpotifySpinner()),
                         );
                       } else if (snapshot.hasError) {
                         return SliverToBoxAdapter(

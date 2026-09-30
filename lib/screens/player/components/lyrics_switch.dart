@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/screens/lyrics_screen.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class LyricsSwitch extends ConsumerWidget {
   const LyricsSwitch({super.key});
@@ -42,7 +43,7 @@ class LyricsSwitch extends ConsumerWidget {
                 size: 16,
               ),
               label: Text(
-                "Lyrics",
+                AppLocalizations.of(context).lyrics,
                 style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
               ),
               style: TextButton.styleFrom(

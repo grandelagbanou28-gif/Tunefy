@@ -6,25 +6,28 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import 'package:muzo/models/muzo_item.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/services/storage_service.dart';
-import 'package:muzo/screens/artist_screen.dart';
+import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/playlist_screen.dart';
 import 'package:muzo/screens/channel_screen.dart';
 import 'package:muzo/screens/album_screen.dart';
+import 'package:muzo/screens/video_player_screen.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/utils/page_routes.dart';
+import 'package:muzo/utils/song_navigation.dart';
 
 class ResultTile extends ConsumerWidget {
   final MuzoItem result;
   final bool compact;
   final bool fromHistory;
+  final Widget? trailing;
 
   const ResultTile({
     super.key,
     required this.result,
     this.compact = false,
     this.fromHistory = false,
+    this.trailing,
   });
 
   @override
@@ -38,7 +41,7 @@ class ResultTile extends ConsumerWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: () {
-          HapticFeedback.lightImpact();
+          HapticFeedback.selectionClick();
           final type = result.resultType.toLowerCase();
           final bId = result.browseId;
           
@@ -47,10 +50,9 @@ class ResultTile extends ConsumerWidget {
           if (type == 'artist' && bId != null && bId.isNotEmpty) {
             nav.push(
               SlidePageRoute(
-                page: ArtistScreen(
-                  browseId: bId,
+                page: ArtistPageScreen(
                   artistName: result.title,
-                  thumbnailUrl: result.thumbnails.lastOrNull?.url,
+                  imageUrl: result.thumbnails.lastOrNull?.url,
                 ),
               ),
             );
@@ -61,6 +63,15 @@ class ResultTile extends ConsumerWidget {
                   playlistId: bId,
                   title: result.title,
                   thumbnailUrl: result.thumbnails.lastOrNull?.url,
+                ),
+              ),
+            );
+          } else if (type == 'channel' && bId != null && bId.isNotEmpty) {
+            nav.push(
+              SlidePageRoute(
+                page: ArtistPageScreen(
+                  artistName: result.title,
+                  imageUrl: result.thumbnails.lastOrNull?.url,
                 ),
               ),
             );
@@ -87,8 +98,15 @@ class ResultTile extends ConsumerWidget {
                 ),
               ),
             );
-          } else if (result.videoId != null) {
-            ref.read(audioHandlerProvider).playVideo(result);
+          } else if (type == 'video' && (result.videoId ?? '').isNotEmpty) {
+            Navigator.of(context).push(
+              SlidePageRoute(
+                page: VideoPlayerScreen(item: result),
+              ),
+            );
+          } else {
+            // Song / unknown → land on the artist profile instead of playing.
+            openArtistForSong(context, result);
           }
         },
         child: Padding(
@@ -141,7 +159,7 @@ class ResultTile extends ConsumerWidget {
                           : Container(
                               height: height,
                               width: defaultWidth,
-                              color: Theme.of(context).colorScheme.surfaceVariant.withValues(alpha: 0.3),
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
                               child: Icon(
                                 FluentIcons.music_note_2_24_regular,
                                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
@@ -197,6 +215,7 @@ class ResultTile extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              if (trailing != null) trailing!,
               // We need to wrap the PopupMenuButton with a Consumer to access storage
               Consumer(
                 builder: (context, ref, _) {
@@ -222,7 +241,7 @@ class ResultTile extends ConsumerWidget {
                           size: 20,
                         ),
                         onPressed: () {
-                          HapticFeedback.lightImpact();
+                          HapticFeedback.selectionClick();
                           SongOptionsMenu.show(
                             ref,
                             result,

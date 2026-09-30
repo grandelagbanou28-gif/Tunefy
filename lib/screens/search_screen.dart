@@ -4,9 +4,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/providers/search_provider.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/result_tile.dart';
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -26,6 +29,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
     focusNode.unfocus();
     ref.read(searchQueryProvider.notifier).state = query;
+    ref.read(storageServiceProvider).addSearchQuery(query);
   }
 
   @override
@@ -325,14 +329,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         );
       },
       loading: () => Center(
-        child: CircularProgressIndicator(
+        child: SpotifySpinner(
           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
           strokeWidth: 2,
         ),
       ),
       error: (error, stack) => Center(
         child: Text(
-          'Error: $error',
+          AppLocalizations.of(context).errorText('$error'),
           style: const TextStyle(color: Colors.red),
         ),
       ),

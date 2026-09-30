@@ -57,8 +57,9 @@ void main() {
   });
 
   group('GeminiService configured', () {
-    test('default key is present', () {
-      expect(GeminiService().isConfigured, isTrue);
+    test('isConfigured follows GEMINI_API_KEY build define', () {
+      final hasDefine = const String.fromEnvironment('GEMINI_API_KEY').isNotEmpty;
+      expect(GeminiService().isConfigured, hasDefine);
     });
   });
 }

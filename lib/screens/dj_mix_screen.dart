@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,7 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/dj_chat_models.dart';
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/providers/download_provider.dart';
 import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 
 /// Full play page for a generated DJ mix (can hold 50–60 tracks).
@@ -21,6 +26,7 @@ class DjMixScreen extends ConsumerStatefulWidget {
 
 class _DjMixScreenState extends ConsumerState<DjMixScreen> {
   bool _playing = false;
+  bool _downloadingMix = false;
 
   List<MuzoItem> get _tracks => widget.mix.tracks;
 
@@ -34,6 +40,52 @@ class _DjMixScreenState extends ConsumerState<DjMixScreen> {
       await handler.playAll(list, startIndex: shuffle ? 0 : startIndex);
     } finally {
       if (mounted) setState(() => _playing = false);
+    }
+  }
+
+  Future<void> _downloadTrack(MuzoItem song) async {
+    final l10n = AppLocalizations.of(context);
+    HapticFeedback.selectionClick();
+    final ok = await ref.read(downloadProvider.notifier).startDownload(song);
+    if (!mounted) return;
+    showGlassSnackBar(
+      context,
+      ok ? l10n.djDownloaded : l10n.djDownloadFailed,
+      error: !ok,
+    );
+  }
+
+  /// Downloads every track of the mix that isn't already on disk,
+  /// sequentially (bounded concurrency keeps backends happy).
+  Future<void> _downloadAll() async {
+    if (_downloadingMix) return;
+    final l10n = AppLocalizations.of(context);
+    final storage = ref.read(storageServiceProvider);
+    final pending = _tracks
+        .where((t) => t.videoId != null && !storage.isDownloaded(t.videoId!))
+        .toList();
+    if (pending.isEmpty) {
+      showGlassSnackBar(context, l10n.djAlreadyDownloaded);
+      return;
+    }
+    setState(() => _downloadingMix = true);
+    try {
+      var done = 0;
+      for (final t in pending) {
+        final ok = await ref.read(downloadProvider.notifier).startDownload(t);
+        if (ok) done++;
+        if (!mounted) return;
+      }
+      if (!mounted) return;
+      showGlassSnackBar(
+        context,
+        l10n.djDownloadAllDone
+            .replaceAll('{done}', '$done')
+            .replaceAll('{total}', '${pending.length}'),
+        error: done < pending.length,
+      );
+    } finally {
+      if (mounted) setState(() => _downloadingMix = false);
     }
   }
 
@@ -164,6 +216,17 @@ class _DjMixScreenState extends ConsumerState<DjMixScreen> {
                                   : () => _playAll(shuffle: true),
                             ),
                           ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _ActionPill(
+                              icon: Icons.download_rounded,
+                              label: l10n.djDownloadAll,
+                              filled: false,
+                              onTap: _downloadingMix
+                                  ? null
+                                  : () => unawaited(_downloadAll()),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -183,6 +246,8 @@ class _DjMixScreenState extends ConsumerState<DjMixScreen> {
                           index: i,
                           song: _tracks[i],
                           onTap: () => _playAll(startIndex: i),
+                          onDownload: () =>
+                              unawaited(_downloadTrack(_tracks[i])),
                           onOptions: () =>
                               SongOptionsMenu.show(ref, _tracks[i]),
                         ),
@@ -264,12 +329,14 @@ class _TrackRow extends StatelessWidget {
     required this.index,
     required this.song,
     required this.onTap,
+    required this.onDownload,
     required this.onOptions,
   });
 
   final int index;
   final MuzoItem song;
   final VoidCallback onTap;
+  final VoidCallback onDownload;
   final VoidCallback onOptions;
 
   @override
@@ -277,7 +344,7 @@ class _TrackRow extends StatelessWidget {
     final img = song.thumbnails.isNotEmpty ? song.thumbnails.last.url : '';
     return InkWell(
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         onTap();
       },
       child: Padding(
@@ -324,6 +391,11 @@ class _TrackRow extends StatelessWidget {
                           color: Colors.white54, fontSize: 11)),
                 ],
               ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.download_rounded,
+                  color: Colors.white38, size: 18),
+              onPressed: onDownload,
             ),
             IconButton(
               icon: const Icon(Icons.more_vert, color: Colors.white38, size: 18),

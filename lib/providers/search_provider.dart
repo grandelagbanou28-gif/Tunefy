@@ -1,8 +1,31 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive/hive.dart';
+import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/providers/category_providers.dart';
+import 'package:muzo/services/audius_api_service.dart';
+import 'package:muzo/services/category_curator.dart';
+import 'package:muzo/services/curated_artists_service.dart';
+import 'package:muzo/services/genre_catalog.dart';
+import 'package:muzo/services/sub_category_seeds.dart';
+import 'package:muzo/services/jamendo_api_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
-
+import 'package:muzo/services/strict_category_filter.dart';
+import 'package:muzo/services/category_resolution_service.dart';
+import 'package:muzo/services/category_resolvers.dart';
+import 'package:muzo/services/category_content_service.dart';
+import 'package:muzo/services/content_cache_service.dart';
+import 'package:muzo/services/itunes_api_service.dart';
+import 'package:muzo/services/trending_service.dart';
+import 'package:muzo/services/multi_api_service.dart';
+import 'package:muzo/services/relevance_engine.dart';
+import 'package:muzo/services/search_relevance.dart';
+import 'package:muzo/services/deezer_api_service.dart';
+import 'package:muzo/services/musicbrainz_service.dart';
+import 'package:muzo/services/youtube_api.dart';
 final searchControllerProvider = Provider<TextEditingController>((ref) {
   final controller = TextEditingController();
   ref.onDispose(() => controller.dispose());
@@ -26,9 +49,13 @@ final searchResultsProvider =
       },
     );
 
+
 class SearchResultsNotifier
     extends StateNotifier<AsyncValue<List<MuzoItem>>> {
   final Ref ref;
+
+
+
   late final MuzoApiService _api = ref.read(muzoApiServiceProvider);
   String? _continuationToken;
   bool _isLoadingMore = false;
@@ -53,22 +80,105 @@ class SearchResultsNotifier
     _continuationToken = null;
     try {
       if (filter == 'all') {
+        // Run each category search independently and NEVER let one failing
+        // or slow sibling abort the whole merge (otherwise a flaky
+        // videos/channels call could wipe out the artists that were fetched
+        // fine). A failed sub-search simply contributes nothing.
+        // Each bucket is ranked against the query so weak backend hits for
+        // that category never outrank a real title/artist match.
+        Future<List<MuzoItem>> safe(String f, String category) {
+          return _api
+              .search(query, filter: f)
+              .then((res) {
+                final tagged = res.results
+                    .map((x) => x.copyWith(category: category))
+                    .toList();
+                return SearchRelevance.rank(tagged, query, f);
+              })
+              .catchError((Object e, StackTrace st) {
+                debugPrint('search <all> $f failed: $e');
+                return <MuzoItem>[];
+              });
+        }
+
         final futures = [
-          _api.search(query, filter: 'songs').then((res) => res.results.map((r) => r.copyWith(category: 'Songs')).toList()),
-          _api.search(query, filter: 'videos').then((res) => res.results.map((r) => r.copyWith(category: 'Videos')).toList()),
-          _api.search(query, filter: 'albums').then((res) => res.results.map((r) => r.copyWith(category: 'Albums')).toList()),
-          _api.search(query, filter: 'artists').then((res) => res.results.map((r) => r.copyWith(category: 'Artists')).toList()),
-          _api.search(query, filter: 'playlists').then((res) => res.results.map((r) => r.copyWith(category: 'Playlists')).toList()),
-          _api.search(query, filter: 'channels').then((res) => res.results.map((r) => r.copyWith(category: 'Channels')).toList()),
+          safe('songs', 'Songs'),
+          safe('videos', 'Videos'),
+          safe('albums', 'Albums'),
+          safe('artists', 'Artists'),
+          safe('playlists', 'Playlists'),
+          safe('channels', 'Channels'),
         ];
         final resultsArray = await Future.wait(futures);
         _continuationToken = null;
-        state = AsyncValue.data(resultsArray.expand((i) => i).toList());
+        // Newest-first re-rank used to run here and buried exact matches;
+        // relevance is decided per-category above (age is only a tie-break).
+        var merged = resultsArray.expand((i) => i).toList();
+
+        // When the YouTube backend is thin, discover extra titles from the
+        // working keyless APIs (MusicBrainz / Spotify / iTunes) and
+        // resolve them to playable YouTube tracks.
+        if (merged.length < 20 && query.trim().isNotEmpty) {
+          try {
+            final multi = ref.read(multiApiServiceProvider);
+            final discovered = await multi.discover(query);
+            final playable = await multi.resolveToPlayable(discovered);
+            final known = merged
+                .map((r) => r.title.toLowerCase().trim())
+                .toSet();
+            for (final p in playable) {
+              final key = p.title.toLowerCase().trim();
+              if (known.add(key) && p.videoId != null) {
+                merged = [...merged, p];
+              }
+            }
+          } catch (e) {
+            debugPrint('MultiApi search enrichment failed: $e');
+          }
+        }
+
+        state = AsyncValue.data(merged);
+      } else if (filter == 'songs') {
+        // Songs chip → the artist's full tracklist (100+ tracks), exactly
+        // like the artist page's "Populaires".
+        final artistSongs =
+            await ref.read(artistSongsProvider(query).future);
+        _continuationToken = null;
+        state = AsyncValue.data(_dedupeSongs(artistSongs));
+      } else if (filter == 'albums') {
+        // Albums chip → only albums of the artist.
+        final albums = await ref.read(artistAlbumsProvider(query).future);
+        _continuationToken = null;
+        state = AsyncValue.data(_dedupeSongs(albums));
+      } else if (filter == 'playlists') {
+        // Playlists chip → only playlists of the artist.
+        final playlists =
+            await ref.read(artistPlaylistsProvider(query).future);
+        _continuationToken = null;
+        state = AsyncValue.data(_dedupeSongs(playlists));
+      } else if (filter == 'videos') {
+        // Videos chip → viewable videos of the artist.
+        final response = await _api.search(query, filter: 'videos');
+        _continuationToken = response.continuationToken;
+        final viewable = response.results
+            .where((r) => r.videoId != null && r.videoId!.isNotEmpty)
+            .map((r) => r.copyWith(resultType: 'video'))
+            .toList();
+        state = AsyncValue.data(SearchRelevance.rank(viewable, query, filter));
       } else {
         final response = await _api.search(query, filter: filter);
         _continuationToken = response.continuationToken;
-        state = AsyncValue.data(response.results);
+        // Type-gate + score against the query (age only breaks ties) so
+        // Artists chips never show off-topic backend hits.
+        state = AsyncValue.data(
+          SearchRelevance.rank(
+            _normalizeEntityTypes(response.results, filter),
+            query,
+            filter,
+          ),
+        );
       }
+      state = AsyncValue.data(_dedupeSongs(state.value ?? []));
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -89,7 +199,11 @@ class SearchResultsNotifier
         continuationToken: _continuationToken,
       );
       _continuationToken = response.continuationToken;
-      state = AsyncValue.data([...currentResults, ...response.results]);
+      state = AsyncValue.data(SearchRelevance.rank(
+        _dedupeSongs([...currentResults, ...response.results]),
+        query,
+        filter,
+      ));
     } catch (e) {
       debugPrint('Error loading more search results: $e');
     } finally {
@@ -108,3 +222,2007 @@ final searchSuggestionsProvider = FutureProvider.family<List<String>, String>((
   final apiService = ref.read(muzoApiServiceProvider);
   return await apiService.getSearchSuggestions(query);
 });
+
+/// Real songs for a Search "Browse All" category.
+///
+/// Genre-first engine (keyless multi-source):
+///   * If the query resolves to a [GenrePlan], the section is filled with real
+///     genre-exact content: Jamendo genre tag + Audius trending-by-genre
+///     (both directly playable, both exactly on genre) + a ytify search
+///     scoped to the genre word + iTunes metadata for that genre. There is
+///     NO generic "hits / trending / top songs" fallback any more — that's
+///     what used to drop Bachata / Arabic Kuthu into Gospel sections.
+///   * If the query is a seed artist name (no genre plan), we keep the
+///     artist-scoped path (Jamendo exact-artist, ytify artist songs, iTunes)
+///     which is already genre-correct because the seeds are editorial.
+/// All queries bounded, junk-filtered, deduplicated and capped.
+final categorySongsProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
+  if (query.isEmpty) return [];
+
+  // ─── Catalog-first: real artists from the curated catalog ───
+  // When the query maps to a catalog genre (hip-hop, afrobeats, latin, ...)
+  // the shelf is filled with real songs of real verified catalog artists —
+  // searching each artist by exact name — exactly like the Home shelves.
+  // Falls through to the generic pipeline when there is no catalog genre.
+  // Watching the catalog service re-checks the catalog-first branch once the
+  // 72h load finishes, so the shelf upgrades automatically.
+  ref.watch(curatedArtistsServiceProvider);
+  final genreKey = catalogGenreFor(query);
+  if (genreKey != null) {
+    final cat = await ref.read(
+      catalogTracksForGenreProvider(
+        (genre: genreKey, offset: 0, country: null),
+      ).future,
+    );
+    if (cat.isNotEmpty) {
+      return cat.map((i) => i.copyWith(verified: true)).toList();
+    }
+  }
+
+  final apiService = ref.read(muzoApiServiceProvider);
+  final jamendo = ref.read(jamendoApiServiceProvider);
+
+  final plan = genrePlanFor(query, query);
+  final ambient = isAmbientQuery(query) || plan.ambient;
+
+  final seen = <String>{};
+  final songs = <MuzoItem>[];
+
+  void addBatch(List<MuzoItem> batch, {bool genreExact = false}) {
+    for (final song in batch) {
+      if (!isActuallyPlayable(song)) continue;
+      if (isJunkSong(song.title, isAmbient: ambient)) continue;
+      final key =
+          (song.videoId ?? '${song.title}|${song.displayArtist}').toLowerCase();
+      if (key.isEmpty || seen.contains(key)) continue;
+      if (!genreExact && !plan.isEmpty) {
+        if (_conflictsGenre(song, plan)) continue;
+      }
+      seen.add(key);
+      songs.add(song);
+    }
+  }
+
+  // ─── Genre-driven section: source genre-exact music in parallel ───
+  if (!plan.isEmpty) {
+    // Fast layer: Jamendo tag + Audius genre — direct full audio, exact genre.
+    final fast = <Future<List<MuzoItem>>>[
+      if (plan.jamendoTag != null)
+        jamendo
+            .tracksByTag(plan.jamendoTag!, limit: 8)
+            .then((t) => t.map((t2) => t2.toMuzoItem()).toList())
+            .timeout(const Duration(seconds: 8), onTimeout: () => const []),
+      for (final g in plan.audiusGenres)
+        ref
+            .read(audiusApiServiceProvider)
+            .tracksByGenre(g, limit: 8)
+            .then((t) => t.map((t2) => t2.toMuzoItem()).toList())
+            .timeout(const Duration(seconds: 8), onTimeout: () => const []),
+    ];
+    for (final batch in await Future.wait(fast)) {
+      addBatch(batch, genreExact: true);
+    }
+
+    // Top-up layer: ytify scoped to the genre word. Music is served by
+    // muzoapi (YouTube) exclusively — iTunes song previews (30s clips) are
+    // intentionally excluded from every music pipeline.
+    if (songs.length < 10) {
+      final topups = <Future<List<MuzoItem>>>[
+        apiService
+            .search(plan.ytifyTerm, filter: 'songs')
+            .then((res) => _prioritizeWestern(res.results))
+            .timeout(const Duration(seconds: 10), onTimeout: () => const []),
+      ];
+      for (final batch in await Future.wait(topups)) {
+        addBatch(batch);
+      }
+    }
+
+    // Last resort, still genre-scoped: re-run the ytify genre search once.
+    if (songs.isEmpty) {
+      try {
+        final resp = await apiService
+            .search(plan.ytifyTerm, filter: 'songs')
+            .timeout(const Duration(seconds: 10));
+        addBatch(_prioritizeWestern(resp.results));
+      } catch (_) {}
+    }
+    return songs.take(15).toList();
+  }
+
+  // ─── Artist-driven section: a seed artist name — keep artist-scoped path ──
+  final seeds = seedsFor(query);
+  final sourceQueries = seeds.isNotEmpty
+      ? seeds.take(5).toList()
+      : <String>[query];
+
+  Future<List<MuzoItem>> jamendoBatch(String q) async {
+    final ql = q.trim().toLowerCase();
+    List<JamendoTrack> tracks;
+    final tag = jamendoTagFor(q);
+    if (tag != null) {
+      try {
+        tracks = await jamendo.tracksByTag(tag, limit: 8).timeout(
+              const Duration(seconds: 8),
+            );
+      } catch (_) {
+        tracks = [];
+      }
+    } else {
+      try {
+        tracks = await jamendo.searchTracks(q, limit: 10).timeout(
+              const Duration(seconds: 8),
+            );
+        tracks = tracks
+            .where((t) =>
+                t.artistName.toLowerCase().contains(ql) ||
+                (t.artistName.isNotEmpty &&
+                    ql.contains(t.artistName.toLowerCase())))
+            .take(8)
+            .toList();
+      } catch (_) {
+        tracks = [];
+      }
+    }
+    return tracks.map((t) => t.toMuzoItem()).toList();
+  }
+
+  await Future.wait(sourceQueries.map((q) async {
+    List<MuzoItem> batch = await jamendoBatch(q);
+    if (batch.isEmpty) {
+      try {
+        final resp = await apiService
+            .search(q, filter: 'songs')
+            .timeout(const Duration(seconds: 10));
+        batch = _prioritizeWestern(resp.results);
+      } catch (_) {
+        batch = [];
+      }
+    }
+    addBatch(batch);
+  }).toList());
+
+  return songs.take(15).toList();
+});
+
+/// Loose conformance guard for ytify/iTunes results in a genre section: only
+/// reject a song when its title/artist *explicitly* names a conflicting genre
+/// far from the section's (e.g. an "Arabic Kuthu" video surfacing inside a
+/// Gospel search would be dropped because it advertises Bollywood/Tamil).
+/// Otherwise we keep it — a seed artist like "Kirk Franklin" legitimately
+/// never says "gospel" in the title.
+bool _conflictsGenre(MuzoItem song, GenrePlan plan) {
+  final hay = '${song.title} ${song.displayArtist}'.toLowerCase();
+  if (_strongPositiveGenreMatch(hay, plan.key)) return false;
+  final conflicts = _genreConflictMarkers[plan.key];
+  if (conflicts == null) return false;
+  return conflicts.any(hay.contains);
+}
+
+const Map<String, Set<String>> _genreConflictMarkers = {
+  'gospel': {
+    'bollywood', 'tamil', 'punjabi', 'arabic', 'kuthu', 'hindi',
+  },
+  'gospel hits': {
+    'bollywood', 'tamil', 'punjabi', 'arabic', 'kuthu', 'hindi',
+  },
+  'contemporary gospel': {
+    'bollywood', 'tamil', 'punjabi', 'arabic', 'kuthu', 'hindi',
+  },
+  'salsa': {'reggaeton', 'bachata', 'cumbia', 'bollywood'},
+  'bachata': {'reggaeton', 'salsa', 'cumbia', 'bollywood'},
+  'reggaeton': {'salsa', 'bollywood', 'kuthu'},
+  'classical': {'bollywood', 'rave', 'techno', 'edm'},
+  'jazz': {'bollywood', 'edm', 'techno'},
+  'country': {'bollywood', 'kuthu', 'punjabi'},
+  'amapiano': {'bollywood', 'arabic', 'kuthu'},
+  'kpop': {'bollywood', 'arabic', 'kuthu', 'tamil'},
+};
+
+/// True when the song explicitly belongs to the section genre: the genre word
+/// (or its near synonyms) appears in title/artist. Used to accept a result even
+/// when a stray conflict marker also appears.
+bool _strongPositiveGenreMatch(String hay, String key) {
+  switch (key) {
+    case 'gospel':
+    case 'gospel hits':
+    case 'contemporary gospel':
+      return hay.contains('gospel') ||
+          hay.contains('worship') ||
+          hay.contains('christian');
+    case 'hip hop':
+    case 'rap':
+      return hay.contains('rap') || hay.contains('hip hop');
+    case 'r&b':
+      return hay.contains('rnb') || hay.contains('r&b');
+    default:
+      final kw = key
+          .replaceAll('&', ' ')
+          .replaceAll('-', ' ')
+          .replaceAll('  ', ' ')
+          .trim();
+      return hay.contains(kw);
+  }
+}
+
+/// True when a sub-section is ambient / spoken-word / long-form content where
+/// the junk filter must stay off (Sleep Music, Deep Focus, Rain, ASMR...).
+bool isAmbientSubCategory(String category, String sub) {
+  if (isAmbientQuery(category) || isAmbientQuery(sub)) return true;
+  final l = sub.toLowerCase();
+  final ambientSubs = {
+    'sleep music',
+    'deep sleep',
+    'white noise',
+    'brown noise',
+    'nature sounds',
+    'rain',
+    'ocean',
+    'asmr',
+    'meditation',
+    'guided meditation',
+    'breathing',
+    'yoga',
+    'sleep stories',
+    'baby sleep',
+    'whispers',
+    'scary stories',
+  };
+  return ambientSubs.contains(l) ||
+      l.contains('sleep') ||
+      l.contains('meditation') ||
+      l.contains('white noise') ||
+      l.contains('asmr') ||
+      l.contains('rain') ||
+      l.contains('shadowing') ||
+      l.contains('english') ||
+      l.contains('pronunciation');
+}
+
+/// Editorial seed artists for a specific sub-category. Walks three levels:
+/// 1. Sub-category-specific seeds (e.g. Marc Anthony for "Salsa").
+/// 2. Parent category seeds (from category_curator.dart) as fallback.
+/// Always returns at most 6 artists to bound backend round-trips.
+/// Lower-cased, accent-free, punctuation-free form of a category label, so
+/// "Hits Bénin", "hit benin" and "Hit-Bénin" all compare equal.
+String _foldCategoryKey(String value) {
+  const accents = <String, String>{
+    'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
+    'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
+    'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
+    'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+    'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+    'ç': 'c', 'ñ': 'n', 'ý': 'y', 'ÿ': 'y',
+  };
+  final buffer = StringBuffer();
+  for (final raw in value.toLowerCase().split('')) {
+    final ch = accents[raw] ?? raw;
+    if (RegExp(r'[a-z0-9 ]').hasMatch(ch)) buffer.write(ch);
+  }
+  return buffer.toString().trim();
+}
+
+List<String> seedsForSubCategory(String category, String sub) {  final specific = subCategorySeeds(category, sub);
+  if (specific != null && specific.isNotEmpty) return specific.take(6).toList();
+  final parent = seedsFor(category);
+  if (parent.isNotEmpty) return parent.take(6).toList();
+  return const [];
+}
+
+/// Composite search term for a term-driven sub-category that has no dedicated
+/// artist seeds. Combines the sub-category name with the parent genre so the
+/// backend returns on-topic results (e.g. "Salsa" + "Latin" -> "salsa latin").
+String queryForSubCategory(String category, String sub) {
+  final subLower = sub.trim().toLowerCase();
+  final catLower = category.trim().toLowerCase();
+  if (subLower == catLower || subLower.contains(catLower)) {
+    return sub.trim();
+  }
+  return '${sub.trim()} $category';
+}
+
+/// Per-sub-category editorial tuning for structural subs (Music category and
+/// beyond). Each flag changes how candidate songs are filtered / ranked so a
+/// section actually behaves like its name instead of being a generic list.
+class _SubTuning {
+  const _SubTuning({
+    this.rejectOld = false,
+    this.sortByViews = false,
+    this.singlesOnly = false,
+    this.albumTracksOnly = false,
+  });
+
+  /// Drop uploads older than ~1 year ("x years ago") and rank fresher first.
+  final bool rejectOld;
+
+  /// Rank most-viewed first (popularity proxy).
+  final bool sortByViews;
+
+  /// Keep single releases only: short tracks whose album is absent or named
+  /// after the song (YouTube Music convention for singles).
+  final bool singlesOnly;
+
+  /// Keep album cuts only: track must carry an album distinct from its title.
+  final bool albumTracksOnly;
+
+  bool get isActive =>
+      rejectOld || sortByViews || singlesOnly || albumTracksOnly;
+}
+
+/// Strategy table — extend as more structural subs are curated.
+_SubTuning _tuningForSub(String sub) {
+  switch (sub.trim().toLowerCase()) {
+    case 'new music':
+      return const _SubTuning(rejectOld: true);
+    case 'trending':
+      return const _SubTuning(rejectOld: true, sortByViews: true);
+    case 'popular':
+    case 'top songs':
+    case 'music videos':
+    case 'compilations':
+      return const _SubTuning(sortByViews: true);
+    case 'top albums':
+    case 'albums':
+      return const _SubTuning(albumTracksOnly: true, sortByViews: true);
+    case 'singles':
+      return const _SubTuning(singlesOnly: true, sortByViews: true);
+    default:
+      return const _SubTuning();
+  }
+}
+
+/// Numeric view count from labels like "1,234,567 views" (0 when unknown).
+int _viewsCount(MuzoItem s) => int.tryParse(
+      (s.views ?? '').replaceAll(RegExp(r'[^0-9]'), ''),
+    ) ??
+    0;
+
+/// Upload age bucket — lower is fresher; unknown uploads rank worst (99).
+int _uploadFreshness(String? uploaded) {
+  if (uploaded == null || uploaded.isEmpty) return 99;
+  final l = uploaded.toLowerCase();
+  final n = int.tryParse(l.split(' ').first) ?? 99;
+  if (l.contains('hour')) return n;
+  if (l.contains('day')) return 10 + n;
+  if (l.contains('week')) return 100 + n;
+  if (l.contains('month')) return 1000 + n;
+  if (l.contains('year')) return 10000 + n;
+  return 99;
+}
+
+bool _isOldUpload(MuzoItem s) =>
+    (s.uploaded ?? '').toLowerCase().contains('year');
+
+bool _normStartsWith(String a, String b) =>
+    a.startsWith(b) || b.startsWith(a);
+
+/// Single release: short track, no album or album named after the song.
+bool _looksLikeSingle(MuzoItem s) {
+  final dur = s.durationSeconds;
+  if (dur != null && dur > 360) return false;
+  final album = s.album?.name.trim().toLowerCase() ?? '';
+  if (album.isEmpty) return true;
+  final title = s.title.trim().toLowerCase();
+  return album == title || _normStartsWith(title, album);
+}
+
+/// Album cut: carries an album clearly distinct from the song title.
+bool _looksLikeAlbumTrack(MuzoItem s) {
+  final album = s.album?.name.trim().toLowerCase() ?? '';
+  if (album.isEmpty) return false;
+  final title = s.title.trim().toLowerCase();
+  return album != title && !_normStartsWith(title, album);
+}
+
+/// Applies the sub-category strategy to a raw candidate batch: filters by
+/// shape (singles / album cuts / freshness) then ranks (views or freshness).
+List<MuzoItem> _tuneBatchForSub(String sub, List<MuzoItem> batch) {
+  final t = _tuningForSub(sub);
+  if (!t.isActive) return batch;
+  var out = batch.where((s) {
+    if (t.rejectOld && _isOldUpload(s)) return false;
+    if (t.singlesOnly && !_looksLikeSingle(s)) return false;
+    if (t.albumTracksOnly && !_looksLikeAlbumTrack(s)) return false;
+    return true;
+  }).toList();
+  if (t.sortByViews) {
+    out.sort((a, b) => _viewsCount(b).compareTo(_viewsCount(a)));
+  } else if (t.rejectOld) {
+    out.sort((a, b) =>
+        _uploadFreshness(a.uploaded).compareTo(_uploadFreshness(b.uploaded)));
+  }
+  return out;
+}
+
+/// Up to 7 real songs for a category sub-category (e.g. "Salsa" inside "Latin",
+/// "French Pop" inside "Pop", or "Drill FR" inside "Rap Français").
+///
+/// Editorial & Conformance Logic:
+/// 1. Uses subcategory-specific seed anchors when available (e.g. Marc Anthony for Salsa,
+///    Stromae for French Pop, Gazo for Drill FR).
+/// 2. Generates composite queries (queryForSubCategory) when term-driven.
+/// 3. Applies strict artist diversity (max 1 track per artist per subcategory row).
+/// 4. Respects ambient/spoken-word exceptions (sleep, rain, white noise, focus).
+/// 5. Top-ups come strictly from the parent category before any global fallbacks.
+/// 6. Structural subs get dedicated strategies (_tuningForSub): New/Trending
+///    favour fresh uploads, Popular/Top Songs/Music Videos rank by views,
+///    Singles keep only single-shaped releases, Albums keep real album cuts.
+/// Categories whose content is spoken-word (shows, episodes) rather than
+/// music — they get their own iTunes podcast-episode source in addition to
+/// the regular music pipeline.
+bool _isSpokenWordCategory(String category, String sub) {
+  const spoken = {'podcasts', 'comedy', 'news & politics', 'live events'};
+  final catKey = category.trim().toLowerCase();
+  final subKey = sub.trim().toLowerCase();
+  if (spoken.contains(catKey)) return true;
+  // Any branch under a podcast category, or any podcast-titled branch, is a
+  // genuine spoken-word section: it must NEVER fall through to the music
+  // pipeline (which would surface genre songs / repeated content).
+  if (catKey.contains('podcast')) return true;
+  if (subKey.contains('podcast')) return true;
+  return false;
+}
+
+/// iTunes search term for a podcast subcategory: generic "podcasts" sections
+/// map to a broad directory search, everything else becomes "`genre` podcast".
+String _podcastTermFor(String sub) {
+  final s = sub.trim().toLowerCase();
+  if (s.isEmpty || s == 'all' || s == 'all podcasts') {
+    return 'podcast';
+  }
+  if (s == 'trending podcasts' || s == 'trending') return 'popular podcast';
+  if (s == 'new podcasts' || s == 'new') return 'new podcast';
+  if (s == 'popular podcasts' || s == 'popular') return 'top podcast';
+  if (s == 'news') return 'news podcast';
+  if (s == 'true crime') return 'true crime podcast';
+  if (s == 'comedy') return 'comedy podcast';
+  if (s == 'business') return 'business podcast';
+  if (s == 'technology') return 'technology podcast';
+  if (s == 'education') return 'education podcast';
+  if (s == 'sports') return 'sports podcast';
+  if (s == 'culture') return 'culture podcast';
+  if (s == 'music') return 'music podcast';
+  if (s == 'society') return 'society podcast';
+  if (s == 'history') return 'history podcast';
+  if (s == 'science') return 'science podcast';
+  if (s == 'stories') return 'stories podcast';
+  if (s == 'interviews') return 'interviews podcast';
+  if (s == 'religion & spirituality') return 'religion spirituality podcast';
+  if (s.contains('podcast')) return s;
+  return '$s podcast';
+}
+
+final categorySubSongsProvider =
+    FutureProvider.family<List<MuzoItem>, ({String category, String sub, Set<String>? excludedArtists})>(
+  (ref, args) async {
+    // Hard global budget: a stalled upstream dependency (seed provider,
+    // resolver, chart/RSS fetch, Deezer fallback) must never leave a category
+    // section hanging forever. Whatever was already resolved is returned, or
+    // the section simply ends empty and refills on the next visit.
+    final cacheKey = 'catsub|${args.category}|${args.sub}';
+    // Last-known-good content, bounded to 7 days. Used ONLY when the live
+    // attempt produced nothing, so a saturated backend (every Home section
+    // firing at launch) can never leave a shelf empty.
+    Future<List<MuzoItem>> lastKnown() async {
+      try {
+        final stale =
+            await ContentCacheService.instance.readStale(cacheKey);
+        if (stale != null && stale.length >= 2) return stale;
+      } catch (_) {}
+      return const <MuzoItem>[];
+    }
+
+    try {
+      final live = await _buildCategorySubSongs(ref, args)
+          .timeout(const Duration(seconds: 100));
+      if (live.isNotEmpty) return live;
+      debugPrint('[Pipe] ${args.category} > ${args.sub} EMPTY, using cache');
+      return await lastKnown();
+    } catch (_) {
+      debugPrint('[Pipe] ${args.category} > ${args.sub} TIMEOUT');
+      // Stale-while-revalidate: only now, with the live fetch having failed,
+      // may the last-known content be shown.
+      return await lastKnown();
+    }
+  },
+);
+
+Future<List<MuzoItem>> _buildCategorySubSongs(
+  Ref ref,
+  ({String category, String sub, Set<String>? excludedArtists}) args,
+) async {
+    final stopwatch = Stopwatch()..start();
+    void ts(String label) => debugPrint('[PipeTime] ${args.category} > ${args.sub} $label @${stopwatch.elapsedMilliseconds}ms');
+    ts('ENTRY');
+
+    final isAll = args.sub.trim().toLowerCase().startsWith('all ');
+    final category = args.category.trim();
+    final sub = args.sub.trim();
+    final excluded = args.excludedArtists ?? <String>{};
+    final isAmbient = isAmbientSubCategory(category, sub);
+    final isSpokenCat = _isSpokenWordCategory(category, sub);
+
+    // ─── Podcast categories: REAL podcast episodes only ───
+    // iTunes' podcast directory serves full-length MP3 episodes (user_track)
+    // that the player streams natively. These sections exist to surface SHOWS,
+    // not songs, so they are served exclusively from iTunes episodes — the
+    // generic 2-day cache below is never allowed to feed them old song lists.
+    // A dedicated fresh cache keeps reopen cheap while guaranteeing real
+    // episodes (never genre songs).
+    final bucket = ContentCacheService.refreshBucket;
+    if (isSpokenCat) {
+      final podCacheKey = 'podcat|$category|$sub';
+      final podAudit = CategoryAudit(category: category, sub: sub);
+      try {
+        final pc = await ContentCacheService.instance.readIfFresh(podCacheKey);
+        if (pc != null && pc.length >= 2) {
+          podAudit.report('episodes-cache');
+          return ContentCacheService.rotate(pc, bucket);
+        }
+      } catch (_) {}
+      try {
+        final itunesPod = ref.read(itunesApiServiceProvider);
+        // Rich search: several directory terms x FR+US storefronts so the
+        // rows are long and varied. Generic sections ("All Podcasts", "New",
+        // "Trending", "Popular") hit multiple broad terms; genre subs append
+        // "podcast" to their own name for a targeted directory search.
+        final s = sub.trim().toLowerCase();
+        final base = _podcastTermFor(sub);
+        // For genre subs the bare genre name (minus any "podcast" suffix) is
+        // both a search term and a genre-purity hint for the result filter.
+        final genreOnly = s
+            .replaceAll('podcast', '')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        final terms = <String>{base};
+        if (base == 'podcast') {
+          // Generic rows: several broad directory terms so the list is long
+          // and varied rather than a single top-Nc.
+          terms.addAll(['new podcast', 'trending podcast', 'top podcast']);
+        } else {
+          // Genre subs: cover both "<genre> podcast" and the bare genre term
+          // so sparse genres (news, technology, ...) still return real
+          // episodes instead of an empty hard-gate section.
+          if (genreOnly.isNotEmpty) terms.add(genreOnly);
+          terms.addAll(['$s podcast', '$genreOnly podcast']);
+        }
+        final batches = <Future<List<MuzoItem>>>[];
+        for (final t in terms.take(4)) {
+          batches.add(itunesPod.searchPodcastEpisodesFrUs(t,
+              limit: 12, maxPerShow: 2));
+        }
+        final episodeBatches = await Future.wait(batches)
+            .timeout(const Duration(seconds: 24));
+        var episodes = dedupeMuzoSongs([
+          for (final batch in episodeBatches) ...batch,
+        ]);
+        // A genre section must stay genre-pure: drop episodes whose show name
+        // doesn't mention the genre OR the generic "podcast" word, so the rows
+        // never read as a recycled orchard of unrelated shows. Only applied to
+        // actual genre subs (generic rows keep all broad-directory results).
+        if (base != 'podcast') {
+          final genreHints = <String>{
+            genreOnly,
+            s.replaceAll(RegExp(r'\s+'), ''),
+          }..removeWhere((h) => h.isEmpty);
+          if (genreHints.isNotEmpty) {
+            episodes = episodes.where((e) {
+              final show = (e.channelName ?? e.title).toLowerCase();
+              return genreHints.any(show.contains) ||
+                  show.contains('podcast');
+            }).toList();
+          }
+        }
+        // "New Podcasts" and friends: freshest episodes first so the section
+        // actually looks like newly-released content (falls back to iTunes'
+        // directory order for generic rows).
+        if (episodes.length > 1) {
+          final isFreshFirst = s == 'new podcasts' ||
+              s == 'new' ||
+              s == 'latest episodes';
+          if (isFreshFirst) {
+            episodes.sort((a, b) => (b.releaseDate?.millisecondsSinceEpoch ?? 0)
+                .compareTo(a.releaseDate?.millisecondsSinceEpoch ?? 0));
+          }
+        }
+        final podcastList = episodes
+            .map((e) => e.copyWith(
+                  verified: true,
+                  relevanceScore: 100,
+                  source: e.source ?? 'itunes podcast',
+                ))
+            .take(24)
+            .toList();
+        podAudit..onFetched(episodes.length)..onAccepted(podcastList.length);
+        if (episodes.length >= 3) {
+          unawaited(
+              ContentCacheService.instance.write(podCacheKey, podcastList));
+          podAudit.report('episodes');
+          return ContentCacheService.rotate(podcastList, bucket);
+        }
+        podAudit.report('episodes');
+      } catch (_) {
+        podAudit.report('episodes-error');
+      }
+
+      // ─── HARD GATE: a spoken-word/podcast sub NEVER shows music tracks ───
+      // When iTunes serves <3 real episodes (cache miss included) the section
+      // returns empty — it must never fall through to the music pipeline and
+      // surface genre songs inside "Podcasts / Comedy / News" browse rows.
+      // Real episodes, or nothing. Nothing is fabricated to fill the gap.
+      return const <MuzoItem>[];
+    }
+
+    // ─── Refresh cache (strict TTL) ───
+    // Only a FRESH entry may short-circuit the network: serving an expired one
+    // here would pin the shelf to the same snapshot forever, which is exactly
+    // what made a row look unchanged for days. The stale fallback now lives in
+    // the provider wrapper and only kicks in if the live fetch fails.
+    final cacheKey = 'catsub|$category|$sub';
+    try {
+      final cached = await ContentCacheService.instance.readIfFresh(cacheKey);
+      if (cached != null && cached.length >= 2) {
+        return ContentCacheService.rotate(cached, bucket);
+      }
+    } catch (_) {}
+
+    // ─── Static Supabase catalog (layer 2) ───
+    // When no fresh cache exists, serve the manually curated `category_content`
+    // rows BEFORE any live fetch: sub-sections that never yield verified live
+    // content (e.g. "Hits Bénin > Benin Gospel") still display real tracks
+    // instantly, with zero refresh. Falls through to the live pipeline when
+    // the table has no rows for this (category, sub).
+    try {
+      final statics = await CategoryContentService.instance.loadFor(category, sub);
+      if (statics.isNotEmpty) {
+        debugPrint('[Catalog] "$category > $sub" static=${statics.length}');
+        return ContentCacheService.rotate(
+          statics.map((s) => s.copyWith(verified: true)).toList(),
+          bucket,
+        );
+      }
+    } catch (e) {
+      debugPrint('[Catalog] "$category > $sub" unavailable: $e');
+    }
+
+// Strict category constraint (genre + country + language + region). A
+    // geo-scoped section (e.g. "Gospel > Benin Gospel") must ONLY show content
+    // that satisfies ALL its constraints — never generic parent-category music.
+    final constraint = categoryConstraintFor(category, sub);
+    final geoScoped = constraint.isGeoScoped;
+
+    final audit = CategoryAudit(category: category, sub: sub);
+
+    // ─── Hits Bénin: real Beninese artists ───
+    // Apple has no Benin storefront (bj RSS returns zero rows), so the chart
+    // path below surfaces nothing, and the YouTube worker rarely knows niche
+    // Beninese artists — yielding wrong artists and songs that fail to play.
+    // The curated Benin artist seeds (Bobo Wê, Fanicko, Vano Baby, Zeynab
+    // Abib, ...) are searched on the real YouTube Data API (key from
+    // youtube_api.dart), giving genuine full-length videos; iTunes previews
+    // are the fallback when YouTube has nothing playable.
+    final catKeyLower = category.trim().toLowerCase();
+    // Accent- and punctuation-insensitive: the exact `== 'hit benin'` test
+    // silently skipped this whole branch whenever the label carried an accent
+    // or a variant spelling, and the shelf then fell through to the generic
+    // pipeline and came back empty.
+    final catKeyFolded = _foldCategoryKey(catKeyLower);
+    if (catKeyFolded.contains('benin')) {
+      final beninSeeds = seedsForSubCategory(category, sub);
+      debugPrint('[Benin] gate="$catKeyFolded" seeds=${beninSeeds.length}');
+      if (beninSeeds.isNotEmpty) {
+        final yt = YoutubeApiService();
+        final itunes = ref.read(itunesApiServiceProvider);
+        // Both sources run CONCURRENTLY and each seed in parallel: the
+        // sequential version cost 6 x 10s per phase, and chaining the two
+        // phases pushed the shelf past the global budget so it came back
+        // empty. iTunes is a different provider, so it is unaffected by the
+        // YouTube worker being saturated by the other Home sections.
+        final ytFuture = Future.wait(
+          beninSeeds.take(6).map((seed) async {
+            final seedItems = <MuzoItem>[];
+            try {
+              final raw = await yt
+                  .search(query: seed, maxResults: 6)
+                  .timeout(const Duration(seconds: 12));
+              for (final m in raw.whereType<Map>()) {
+                final vid = m['id']?.toString();
+                if (vid == null || vid.isEmpty) continue;
+                seedItems.add(MuzoItem(
+                  title: (m['title'] ?? 'Unknown').toString(),
+                  videoId: vid,
+                  isExplicit: false,
+                  resultType: 'song',
+                  channelName: m['channel']?.toString(),
+                  artists: [
+                    MuzoArtist(name: m['channel']?.toString() ?? seed, id: ''),
+                  ],
+                  thumbnails: [
+                    if (m['thumbnail'] != null)
+                      MuzoThumbnail(
+                          url: m['thumbnail'].toString(),
+                          width: 480,
+                          height: 360),
+                  ],
+                ));
+              }
+            } catch (_) {}
+            final playable =
+                dedupeMuzoSongs(seedItems).where(isActuallyPlayable).toList();
+            debugPrint('[Benin-YT] seed="$seed" raw=${seedItems.length} playable=${playable.length}');
+            return playable;
+          }),
+        );
+        final itFuture = Future.wait(
+          beninSeeds.take(6).map((seed) async {
+            try {
+              final tracks = await itunes
+                  .searchArtistStreamTracks(seed, limit: 6)
+                  .timeout(const Duration(seconds: 12));
+              final playable =
+                  dedupeMuzoSongs(tracks).where(isActuallyPlayable).toList();
+              debugPrint('[Benin-iTunes] seed="$seed" playable=${playable.length}');
+              return playable;
+            } catch (_) {
+              return const <MuzoItem>[];
+            }
+          }),
+        );
+        final ytList =
+            _interleaveByArtist(await ytFuture, maxPerArtist: 1);
+        debugPrint('[Benin-YT] "$category > $sub" seeds=${beninSeeds.length} playable=${ytList.length}');
+        if (ytList.isNotEmpty) {
+          final list = ytList
+              .map((s) => s.copyWith(
+                  verified: true, source: s.source ?? 'youtube data api'))
+              .take(24)
+              .toList();
+          unawaited(ContentCacheService.instance.write(cacheKey, list));
+          return ContentCacheService.rotate(list, bucket);
+        }
+        // 2) Fallback: real iTunes preview tracks for the same artists.
+        final itList =
+            _interleaveByArtist(await itFuture, maxPerArtist: 1);
+        debugPrint('[Benin-iTunes] "$category > $sub" seeds=${beninSeeds.length} playable=${itList.length}');
+        if (itList.isNotEmpty) {
+          final list = itList
+              .map((s) => s.copyWith(
+                  verified: true, source: s.source ?? 'itunes benin'))
+              .take(24)
+              .toList();
+          unawaited(ContentCacheService.instance.write(cacheKey, list));
+          return ContentCacheService.rotate(list, bucket);
+        }
+      }
+    }
+
+    final seenArtists = <String, int>{};
+    final seenIds = <String>{};
+    final result = <MuzoItem>[];
+
+    /// MusicBrainz-confirmed artists (geo/genre evidence) that may bypass the
+    /// text gate — the ONLY exception to the strict rule, backed by real
+    /// database records, never a guess.
+    final mbWhitelist = <String>{};
+
+    void addUnique(
+      List<MuzoItem> batch, {
+      int maxPerArtist = 1,
+      bool applyConstraint = true,
+      bool sourceVerified = false,
+    }) {
+      audit.onFetched(batch.length);
+      for (final song0 in _tuneBatchForSub(sub, batch)) {
+        var song = song0;
+        if (!isActuallyPlayable(song)) {
+          audit.rejectedBecause(CategoryRejectReason.notPlayable);
+          continue;
+        }
+        if (isJunkSong(song.title, isAmbient: isAmbient)) {
+          audit.rejectedBecause(CategoryRejectReason.junkTitle);
+          continue;
+        }
+        final idKey = (song.videoId ?? '${song.title}|${song.displayArtist}')
+            .toLowerCase();
+        if (applyConstraint && !acceptsForCategory(song, constraint)) {
+          if (idKey.isNotEmpty && mbWhitelist.contains(idKey)) {
+            song = song.copyWith(verified: true);
+          } else {
+            final score = categoryMatchScore(song, constraint);
+            audit.rejectedBecause(
+              score == 0
+                  ? CategoryRejectReason.wrongCountry
+                  : CategoryRejectReason.belowThreshold,
+            );
+            continue;
+          }
+        }
+        if (idKey.isEmpty || seenIds.contains(idKey)) {
+          audit.rejectedBecause(CategoryRejectReason.duplicate);
+          continue;
+        }
+        final norm = normalizeContentKey(song);
+        if (norm != null && seenIds.contains(norm)) {
+          audit.rejectedBecause(CategoryRejectReason.duplicate);
+          continue;
+        }
+
+        final artistKey =
+            primaryArtistName(song.displayArtist).trim().toLowerCase();
+        if (artistKey.isNotEmpty &&
+            (seenArtists[artistKey] ?? 0) >= maxPerArtist) {
+          audit.rejectedBecause(CategoryRejectReason.artistLimit);
+          continue;
+        }
+        if (maxPerArtist <= 1 &&
+            artistKey.isNotEmpty &&
+            excluded.contains(artistKey)) {
+          audit.rejectedBecause(CategoryRejectReason.excludedArtist);
+          continue;
+        }
+
+        seenIds.add(idKey);
+        if (norm != null) seenIds.add(norm);
+        if (artistKey.isNotEmpty) {
+          seenArtists[artistKey] = (seenArtists[artistKey] ?? 0) + 1;
+        }
+        song = song.copyWith(
+          verified: applyConstraint || sourceVerified
+              ? true
+              : song.verified,
+          relevanceScore: song.relevanceScore ??
+              (applyConstraint
+                  ? categoryMatchScore(song, constraint)
+                  : null),
+        );
+audit.onAccepted();
+        result.add(song);
+        if (result.length >= 15) break;
+      }
+    }
+
+    /// Returns the id-keys of [items] whose artist is geo/genre-confirmed by
+    /// MusicBrainz — authoritative rescue for strict-gate rejections only.
+    Future<Set<String>> mbApprovedIds(List<MuzoItem> items) async {
+      if (!constraint.isGeoScoped || items.isEmpty) return const {};
+      try {
+        final approved = await ref
+            .read(musicBrainzServiceProvider)
+            .rescueMatches(
+              items,
+              geo: constraint.geo,
+              genre: constraint.hasGenre ? constraint.genre : null,
+            )
+            .timeout(const Duration(seconds: 6), onTimeout: () => const []);
+        return {
+          for (final s in approved)
+            (s.videoId ?? '${s.title}|${s.displayArtist}').toLowerCase(),
+        };
+      } catch (_) {
+        return const {};
+      }
+    }
+
+    // ─── Charts / Trending: real current tops from Apple's RSS charts ───
+    // Each chart sub mirrors a real storefront (France → fr, Nigeria → ng...).
+    // Trend entries carry no stream URL, so each pick is resolved to a
+    // playable item with one YT search.
+    final catLower = category.toLowerCase();
+    final isChartCat = catLower == 'charts' ||
+        catLower == 'trending' ||
+        catLower == 'hit benin';
+    // Curated sub-category seeds (non-chart, non-geo) run BEFORE algorithmic
+    // resolution so curated artists always lead the section and resolution's
+    // early-return (>=3 songs) can't override them (e.g. Rap charts leaking
+    // into "Romance > French Love"). Specific seeds also cover structural
+    // subs ("All Music" / "Top Songs"); parent seeds are the fallback.
+    final subSeeds = seedsForSubCategory(category, sub);
+    final useCuratedFirst = subSeeds.isNotEmpty && !isChartCat && !geoScoped;
+    if (isChartCat && !isAmbient) {
+      try {
+        final countries = catLower == 'hit benin'
+            ? const ['bj']
+            : TrendingService.countriesForSub(sub);
+        final pools =
+            await Future.wait(countries.map(TrendingService.topSongs));
+        final seenTrends = <String>{};
+        final trends = <TrendSong>[];
+        for (final pool in pools) {
+          for (final t in pool) {
+            final k = '${t.title}|${t.artist}'.toLowerCase();
+            if (seenTrends.contains(k)) continue;
+            seenTrends.add(k);
+            trends.add(t);
+          }
+        }
+        final api = ref.read(muzoApiServiceProvider);
+        for (final t in trends.take(16)) {
+          if (result.length >= 15) break;
+          try {
+            final resp = await api
+                .search('${t.title} ${t.artist}', filter: 'songs')
+                .timeout(const Duration(seconds: 8));
+            addUnique(
+              resp.results.take(2).toList(),
+              applyConstraint: false,
+              sourceVerified: true,
+              maxPerArtist: 1,
+            );
+          } catch (_) {}
+        }
+        debugPrint(
+            '[Charts] "$category > $sub" trends=${trends.length} result=${result.length}');
+        if (result.length >= 3) {
+          audit.report('charts');
+          final chartList = result.take(15).toList();
+          unawaited(ContentCacheService.instance.write(cacheKey, chartList));
+          return ContentCacheService.rotate(chartList, bucket);
+        }
+        // Below the minimum → fall through to the regular pipeline rather
+        // than showing nothing.
+      } catch (_) {}
+    }
+
+    // ─── New resolver: dispatch by category type (genre, geo, decades, etc.) ───
+    final service = CategoryResolutionService(ref);
+    ts('service-ready');
+
+    if (useCuratedFirst) {
+      // Curated seeds open the section: rotate per 2-day bucket so each
+      // refresh leads with different artists → genuinely different songs.
+      final off = subSeeds.length > 1 ? bucket % subSeeds.length : 0;
+      final orderedSeeds = ContentCacheService.rotate(subSeeds, off);
+      final seedFutures = <Future<List<MuzoItem>>>[
+        for (final seed in orderedSeeds.take(10))
+          ref.watch(categorySongsProvider(seed).future)
+              .catchError((_) => const <MuzoItem>[]),
+      ];
+      ts('before-seed-wait');
+      final batches = await Future.wait(seedFutures)
+          .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+      ts('after-seed-wait');
+      for (final batch in batches) {
+        addUnique(batch, maxPerArtist: 1);
+        if (result.length >= 8) break;
+      }
+      debugPrint('[Pipe] $category > $sub curated-after-seeds=${result.length}');
+      // Resolution only tops up when the curated seeds underfill; no
+      // early-return so it can never displace the curated artists.
+      if (result.length < 8) {
+        ts('before-resolver');
+        final resolutionResult = await service
+            .resolve(
+              category: category,
+              sub: sub,
+              excludedArtists: excluded,
+            )
+            .timeout(const Duration(seconds: 18), onTimeout: () =>
+                CategoryResolutionResult(
+                  songs: [], logs: const [], type: CategoryType.fallback,
+                ));
+        ts('after-resolver');
+        if (resolutionResult.type != CategoryType.fallback) {
+          addUnique(resolutionResult.songs);
+          logResolution(resolutionResult);
+        }
+      }
+    } else {
+      ts('else-branch: before-resolver');
+      final resolutionResult = await service
+          .resolve(
+            category: category,
+            sub: sub,
+            excludedArtists: excluded,
+          )
+          .catchError((_) => CategoryResolutionResult(
+                songs: [], logs: const [], type: CategoryType.fallback,
+              ))
+          .timeout(const Duration(seconds: 18), onTimeout: () =>
+              CategoryResolutionResult(
+                songs: [], logs: const [], type: CategoryType.fallback,
+              ));
+      ts('else-branch: after-resolver');
+      if (resolutionResult.type != CategoryType.fallback) {
+          addUnique(resolutionResult.songs);
+          logResolution(resolutionResult);
+          if (resolutionResult.songs.length >= 3) {
+          final resolved = resolutionResult.songs
+              .map((s) => s.copyWith(
+                  verified: true,
+                  relevanceScore: s.relevanceScore ??
+                      categoryMatchScore(s, constraint)))
+              .take(15)
+              .toList();
+          audit
+            ..onFetched(resolutionResult.songs.length)
+            ..onAccepted(resolved.length)
+            ..report('resolver');
+          unawaited(ContentCacheService.instance.write(cacheKey, resolved));
+          return ContentCacheService.rotate(resolved, bucket);
+        }
+      }
+
+      // ─── Fallback: old pipeline for unresolved categories ───
+      // Dedicated sub-category seeds are the fallback for geo-scoped and
+      // chart sections that keep algorithmic resolution / charts as the
+      // primary authority.
+      ts('else-branch: before-fallback-seeds, subSeeds=${subSeeds.length}');
+      if (subSeeds.isNotEmpty) {
+        // Rotate the seed order per 2-day bucket so each refresh leads with
+        // different artists → genuinely different songs, not the same top hits.
+        final off = subSeeds.length > 1 ? bucket % subSeeds.length : 0;
+        final orderedSeeds = ContentCacheService.rotate(subSeeds, off);
+        final seedFutures = <Future<List<MuzoItem>>>[
+          for (final seed in orderedSeeds.take(10))
+            ref.watch(categorySongsProvider(seed).future)
+                .catchError((_) => const <MuzoItem>[]),
+        ];
+        ts('fallback: before-seed-wait');
+        final batches = await Future.wait(seedFutures)
+            .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+        ts('fallback: after-seed-wait');
+        for (final batch in batches) {
+          try {
+            addUnique(batch, maxPerArtist: 1);
+          } catch (e, st) {
+            debugPrint('[Pipe] $category > $sub addUnique CRASH: $e\n$st');
+          }
+          if (result.length >= 8) break;
+        }
+        debugPrint('[Pipe] $category > $sub fallback-after-seeds=${result.length}');
+      } else {
+        final subQuery = queryForSubCategory(category, sub);
+        final futures = <Future<List<MuzoItem>>>[
+          ref.watch(categorySongsProvider(subQuery).future)
+              .catchError((_) => const <MuzoItem>[]),
+          if (!isAll && subQuery.toLowerCase() != category.toLowerCase())
+            ref.watch(categorySongsProvider(category).future)
+                .catchError((_) => const <MuzoItem>[]),
+        ];
+        final batches = await Future.wait(futures);
+        for (final batch in batches) {
+          addUnique(batch);
+          if (result.length >= 8) break;
+        }
+      }
+    }
+
+    // ─── Spoken-word categories ───
+    // Dead code since the hard gate above: spoken-word subs are fully resolved
+    // by the iTunes episode branch and can NEVER reach this music pipeline.
+
+    // Strict Category-Scoped top-up.
+    ts('topup: start, result.len=${result.length}, geoScoped=$geoScoped');
+    if (result.length < 7) {
+      final scopedPlan = genrePlanFor(category, sub);
+      final scopedTerm = scopedPlan.isEmpty
+          ? null
+          : (subSeeds.isNotEmpty
+              ? scopedPlan.ytifyTerm
+              : queryForSubCategory(category, sub));
+      final geoTerm = buildScopedSearchTerm(category, sub, scopedTerm ?? '');
+
+      if (geoScoped) {
+        Future<void> addScoped(List<MuzoItem> raw) async {
+          final scoped = _prioritizeWestern(raw);
+          // MusicBrainz rescue: real database evidence (artist country/region
+          // + genre) may accept a candidate the strict text gate rejected.
+          mbWhitelist.addAll(await mbApprovedIds(scoped));
+          addUnique(scoped);
+        }
+
+        if (geoTerm.isNotEmpty) {
+          try {
+            final scopedBatch = await ref
+                .read(muzoApiServiceProvider)
+                .search(geoTerm, filter: 'songs')
+                .timeout(const Duration(seconds: 12));
+            await addScoped(scopedBatch.results);
+          } catch (_) {}
+        }
+        if (result.length < 7) {
+          try {
+            final scopedBatch = await ref
+                .read(muzoApiServiceProvider)
+                .search(geoTerm, filter: 'songs')
+                .timeout(const Duration(seconds: 12));
+            await addScoped(scopedBatch.results);
+          } catch (_) {}
+        }
+        if (result.length < 7 && geoTerm.split(' ').length > 1) {
+          final flipped = geoTerm.split(' ').reversed.join(' ');
+          try {
+            final scopedBatch = await ref
+                .read(muzoApiServiceProvider)
+                .search(flipped, filter: 'songs')
+                .timeout(const Duration(seconds: 12));
+            await addScoped(scopedBatch.results);
+          } catch (_) {}
+        }
+      } else {
+        final categoryFuture = ref.watch(categorySongsProvider(category).future)
+            .catchError((_) => const <MuzoItem>[]);
+        if (geoTerm.isNotEmpty) {
+          try {
+            final scopedBatch = await ref
+                .read(muzoApiServiceProvider)
+                .search(geoTerm, filter: 'songs')
+                .timeout(const Duration(seconds: 12));
+            addUnique(_prioritizeWestern(scopedBatch.results));
+          } catch (_) {}
+        }
+        if (result.length < 7) {
+          final categoryBatch = await categoryFuture;
+          addUnique(categoryBatch);
+        }
+      }
+    }
+
+    // Last resort: genre batch from real keyless sources, then Dezeer catalog
+    // metadata resolved to full-length playable tracks.
+    if (result.isEmpty) {
+      final plan = genrePlanFor(category, sub);
+      if (!plan.isEmpty) {
+        final genreBatch = await fetchGenreBatch(
+          ref,
+          plan,
+          perSource: 8,
+        ).catchError((_) => const <MuzoItem>[])
+            .timeout(const Duration(seconds: 14), onTimeout: () => const []);
+        addUnique(genreBatch);
+      }
+      if (result.isEmpty) {
+        try {
+          final subTerm = isAll ? category : queryForSubCategory(category, sub);
+          final resp = await ref
+              .read(muzoApiServiceProvider)
+              .search(subTerm, filter: 'songs')
+              .timeout(const Duration(seconds: 10));
+          addUnique(_prioritizeWestern(resp.results));
+        } catch (_) {}
+      }
+      if (result.isEmpty) {
+        // Dezeer: real catalog metadata (title/artist/album/cover) resolved
+        // through the main search to playable YouTube tracks — the same
+        // contract as chart seeds.
+        try {
+          final dzTerm = !plan.isEmpty
+              ? plan.ytifyTerm
+              : (isAll ? category : queryForSubCategory(category, sub));
+          final discovered =
+              await ref.read(deezerApiServiceProvider).searchTracks(dzTerm,
+                  limit: 8);
+          final playable = await ref
+              .read(multiApiServiceProvider)
+              .resolveToPlayable(discovered, max: 6);
+          addUnique(playable);
+          debugPrint(
+              '[Fallback-Deezer] "$category > $sub" resolved=${playable.length}');
+        } catch (_) {}
+      }
+    }
+
+    // ─── Modern boost: current chart-matching tracks in every music sub ───
+    // A couple of TODAY's chart tracks (genre-matched via iTunes metadata)
+    // are inserted near the front so even healthy sections feel current, and
+    // every refresh cycle brings different ones.
+    if (!isChartCat &&
+        !useCuratedFirst &&
+        !geoScoped &&
+        !_isSpokenWordCategory(category, sub) &&
+        result.length < 9) {
+      try {
+        final subOffset =
+            (sub.trim().toLowerCase().hashCode.abs() % 5) * 3;
+        final picks =
+            await TrendingService.picksForCategory(catLower, bucket, 3,
+                rotationOffset: subOffset);
+        final startLen = result.length;
+        if (picks.isNotEmpty) {
+          final api = ref.read(muzoApiServiceProvider);
+          for (final t in picks) {
+            if (result.length >= 15) break;
+            try {
+              final resp = await api
+                  .search('${t.title} ${t.artist}', filter: 'songs')
+                  .timeout(const Duration(seconds: 8));
+              addUnique(
+                resp.results.take(1).toList(),
+                // Modern boost: the pick itself is genre-matched from TODAY's
+                // real Apple RSS chart, and the resolved track must ALSO pass
+                // the strict category gate before it can be injected.
+                applyConstraint: true,
+                maxPerArtist: 1,
+              );
+            } catch (_) {}
+          }
+          // Surface the freshly added modern tracks within the visible first
+          // cards instead of leaving them as an invisible tail.
+          final modernCount = result.length - startLen;
+          if (modernCount > 0) {
+            final modern = result.sublist(startLen);
+            result.removeRange(startLen, result.length);
+            result.insertAll(result.length >= 2 ? 2 : 0, modern);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // ─── Minimum garanti : ≥5 vrais sons par sous-catégorie ───
+    // Un client de musique ne montre jamais une ligne quasi vide. On complète
+    // d'abord avec TOUS les artistes éditoriaux de la sous-catégorie, puis
+    // ceux de la catégorie parente — jamais du contenu inventé. Le strict gate
+    // (addUnique) conserve l'identité géo/genre de la section.
+    const minSongs = 5;
+    if (result.length < minSongs) {
+      final seedPool = <String>[
+        ...?subCategorySeeds(category, sub),
+        ...seedsFor(category),
+      ];
+      final seenSeeds = <String>{};
+      final seedOrder = <String>[
+        for (final s in seedPool)
+          if (s.trim().isNotEmpty && seenSeeds.add(s.trim().toLowerCase())) s.trim(),
+      ];
+      final off = seedOrder.length > 1
+          ? (bucket + sub.trim().toLowerCase().hashCode.abs()) %
+              seedOrder.length
+          : 0;
+      final rotatedSeeds = ContentCacheService.rotate(seedOrder, off);
+      final fillFutures = <Future<List<MuzoItem>>>[
+        for (final seed in rotatedSeeds.take(14))
+          ref.watch(categorySongsProvider(seed).future)
+              .catchError((_) => const <MuzoItem>[]),
+      ];
+      final fillBatches = await Future.wait(fillFutures)
+          .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+      for (final batch in fillBatches) {
+        addUnique(batch, maxPerArtist: 1);
+        if (result.length >= minSongs) break;
+      }
+      if (result.isNotEmpty && result.length < minSongs) {
+        debugPrint('[Pipe] "$category > $sub" min-fill final=${result.length}');
+      }
+    }
+
+    ts('before-audit');
+    audit.report();
+    // ─── Final safety: enforce 1 song max per artist in the output ───
+    final seenFinalArtists = <String>{};
+    final finalList = <MuzoItem>[];
+    for (final song in result) {
+      if (finalList.length >= 10) break;
+      final artist = primaryArtistName(song.displayArtist).trim().toLowerCase();
+      if (artist.isNotEmpty && seenFinalArtists.contains(artist)) continue;
+      if (artist.isNotEmpty) seenFinalArtists.add(artist);
+      finalList.add(song);
+    }
+    // TEMP (seed helper): dumps the accepted REAL videoIds so we can build
+    // `insert into category_content ...` rows without inventing anything.
+    if (finalList.isNotEmpty) {
+      debugPrint('[Accepts] "$category > $sub" => '
+          '${finalList.map((s) => '${s.videoId}|${s.title}|${s.displayArtist}').join(' ;; ')}');
+    }
+    // Cache only sections that meet the display minimum, so a transient
+    // network failure is never frozen for 3 days.
+    if (finalList.length >= 3) {
+      unawaited(ContentCacheService.instance.write(cacheKey, finalList));
+    }
+    return ContentCacheService.rotate(finalList, bucket);
+  }
+
+/// 100+ real songs for an artist page.
+///
+/// Primary source: the artist's own "Top songs" playlist, resolved via
+/// search(artist, filter: 'artists') -> getArtistDetails(browseId) ->
+/// getPlaylistDetails(playlistId). That endpoint alone returns ~100 tracks.
+/// If that path fails (or yields fewer than [minCount] songs) the provider
+/// falls back to paging the plain search endpoint with continuation tokens,
+/// which tops out around 40 songs. It never returns an empty list: a final
+/// plain search for the artist name guarantees at least some tracks.
+/// Tracks the artist page is expected to show. Below this the cache is treated
+/// as thin and the top-up passes keep running until it is met (or the time
+/// budget is spent).
+const int kMinArtistTracks = 100;
+
+final artistSongsProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, artist) async {
+  if (artist.trim().isEmpty) return <MuzoItem>[];
+
+  // ─── 72h Hive cache ───
+  final cacheKey = 'artist_songs_${artist.trim().toLowerCase()}';
+  try {
+    final box = Hive.box('artist_songs_cache');
+    final cached = box.get(cacheKey) as Map?;
+    if (cached != null) {
+      final ts = cached['ts'] as int? ?? 0;
+      final jsonList = (cached['songs'] as List?) ?? [];
+      // A cache that missed the 100-track goal is not worth keeping for 3
+      // days: it would freeze a thin page. Those expire in 3 hours instead.
+      final thin = jsonList.length < kMinArtistTracks;
+      final maxAge = thin
+          ? const Duration(hours: 3)
+          : const Duration(hours: 72);
+      if (DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) <
+          maxAge) {
+        return jsonList.map((j) => MuzoItem.fromJson(Map<String, dynamic>.from(j))).toList();
+      }
+    }
+  } catch (_) {}
+
+  try {
+  final apiService = ref.read(muzoApiServiceProvider);
+
+  // Wall-clock budget for the top-up work. Generous on purpose: the page is
+  // asked to show 100+ tracks, and the browse path already covers the common
+  // case, so this budget is only ever spent on the artists that need topping
+  // up. The skeleton shows meanwhile, so the page is never blank.
+  final stopwatch = Stopwatch()..start();
+  const budget = Duration(seconds: 25);
+  bool outOfTime() => stopwatch.elapsed > budget;
+
+  final seen = <String>{};
+  final songs = <MuzoItem>[];
+  void addUnique(List<MuzoItem> batch) {
+    for (final song in batch) {
+      final key = (song.videoId ?? '${song.title}|${song.displayArtist}')
+          .toLowerCase();
+      if (key.isEmpty || seen.contains(key)) continue;
+      if (song.videoId == null && song.title.isEmpty) continue;
+      seen.add(key);
+      songs.add(song);
+    }
+  }
+
+  /// Warms the 72h cache as soon as the page already has a usable track list,
+  /// so a slow top-up that gets abandoned still leaves the next visit fast.
+  Future<void> cacheNow() async {
+    try {
+      final box = Hive.box('artist_songs_cache');
+      await box.put(cacheKey, {
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'songs': songs.map((s) => s.toJson()).toList(),
+      });
+    } catch (_) {}
+  }
+
+  final searchQuery = primaryArtistName(artist);
+
+  // Primary: artist browse playlist (~100 tracks).
+  try {
+    final artistSearch =
+        await apiService.search(searchQuery, filter: 'artists');
+    final results = _prioritizeWestern(artistSearch.results);
+    if (results.isNotEmpty) {
+      final match = results.firstWhere(
+        (r) =>
+            (r.browseId != null && r.browseId!.isNotEmpty) &&
+            r.title.trim().toLowerCase() == searchQuery.trim().toLowerCase(),
+        orElse: () => results.firstWhere(
+          (r) => r.browseId != null && r.browseId!.isNotEmpty,
+          orElse: () => results.first,
+        ),
+      );
+      final browseId = match.browseId;
+      if (browseId != null && browseId.isNotEmpty) {
+        final details = await apiService.getArtistDetails(browseId);
+        final playlistId = details?.playlistId ?? '';
+        if (playlistId.isNotEmpty) {
+          final playlist = await apiService.getPlaylistDetails(playlistId);
+          if (playlist != null && playlist.tracks.isNotEmpty) {
+            addUnique(playlist.tracks);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    debugPrint('Artist playlist path failed for "$artist": $e');
+  }
+
+  // Supplement / fallback: paged plain search. Only keep songs that are
+  // actually by the artist (search is fuzzy and would otherwise mix in
+  // unrelated tracks). Matches any individual artist token, not the whole
+  // comma-joined string.
+  final tokens = _artistTokens(searchQuery);
+  String? token;
+  // The artist page is expected to list 100+ tracks. Page deep until that
+  // goal is met or the budget runs out — a 60-track page felt thin.
+  try {
+    for (var page = 0; page < 6 && songs.length < kMinArtistTracks; page++) {
+      if (outOfTime()) break;
+      final response = await apiService.search(searchQuery, filter: 'songs',
+          continuationToken: token);
+      final batch = _prioritizeWestern(response.results)
+          .where((s) {
+            final names = (s.artists ?? const <MuzoArtist>[])
+                .map((a) => a.name)
+                .join(' ')
+                .toLowerCase();
+            final haystack = '${s.displayArtist} $names'.toLowerCase();
+            return tokens.any(haystack.contains);
+          })
+          .toList();
+      addUnique(batch);
+      token = response.continuationToken;
+      if (token == null || token.isEmpty) break;
+      if (response.results.isEmpty) break;
+    }
+  } catch (e) {
+    debugPrint('Artist paged search failed for "$artist": $e');
+  }
+
+  // Last resort: never return an empty page. A plain (unfiltered) search for
+  // the artist name gives the page real content even when the artist is not
+  // indexed as a browsable artist.
+  if (songs.isEmpty) {
+    try {
+      final response = await apiService.search(searchQuery, filter: 'songs');
+      addUnique(_prioritizeWestern(response.results));
+    } catch (e) {
+      debugPrint('Artist fallback search failed for "$artist": $e');
+    }
+  }
+
+  // ─── External API fallbacks — top up to the 100-track goal ───
+  // The iTunes catalogue discovers titles the YouTube backend missed, then
+  // each one is resolved to a FULL track. This is the last step of the
+  // top-up, so it gets the whole remaining budget.
+  if (songs.length < kMinArtistTracks) {
+    await cacheNow();
+    final discovered = <String>[];
+    // Discover titles from the iTunes catalog (fast, parallel). Resolved to
+    // FULL YouTube tracks below (never 30s previews).
+    try {
+      final itunes =
+          await ItunesApiService().searchSongsFrUs(searchQuery, limit: 200);
+      for (final it in itunes) {
+        final key = it.title.toLowerCase();
+        if (!seen.contains(key) && it.title.isNotEmpty) {
+          discovered.add('${it.title} ${primaryArtistName(it.displayArtist)}');
+          seen.add(key);
+        }
+      }
+    } catch (e) {
+      debugPrint('Artist iTunes discovery failed for "$artist": $e');
+    }
+    // Resolve discovered titles → full YouTube tracks in parallel batches.
+    // Bounded on purpose: each resolution is a network round trip through the
+    // worker, and a batch that hangs would freeze the whole page. Three
+    // batches of 12 is the most we spend on a top-up.
+    if (discovered.isNotEmpty && !outOfTime()) {
+      final pending = discovered.take(36).toList();
+      for (var start = 0; start < pending.length; start += 12) {
+        if (outOfTime() || songs.length >= kMinArtistTracks) break;
+        final chunk = pending.skip(start).take(12).toList();
+        final batchFutures = <Future<List<MuzoItem>>>[];
+        for (final q in chunk) {
+          batchFutures.add(
+            apiService
+                .search(q, filter: 'songs')
+                .then((r) => r.results)
+                .catchError((_) => <MuzoItem>[]),
+          );
+        }
+        try {
+          final batchResults = await Future.wait(batchFutures);
+          for (final batch in batchResults) {
+            addUnique(batch.take(2).toList());
+            if (songs.length >= kMinArtistTracks) break;
+          }
+        } catch (e) {
+          debugPrint('Artist ytify resolve failed for "$artist": $e');
+        }
+      }
+    }
+  }
+
+  // ─── Save to 72h cache ───
+  try {
+    final box = Hive.box('artist_songs_cache');
+    await box.put(cacheKey, {
+      'ts': DateTime.now().millisecondsSinceEpoch,
+      'songs': songs.map((s) => s.toJson()).toList(),
+    });
+  } catch (_) {}
+
+  return songs;
+  } catch (e) {
+    debugPrint('artistSongsProvider crashed for "$artist": $e');
+    return <MuzoItem>[];
+  }
+});
+
+/// Related artists for the artist page's "Fans also like" row: the backend
+/// artist search for the same query, minus the artist himself.
+final relatedArtistsProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, artist) async {
+  final q = primaryArtistName(artist);
+  if (q.trim().isEmpty) return [];
+  final apiService = ref.read(muzoApiServiceProvider);
+  try {
+    final response = await apiService.search(q, filter: 'artists');
+    final self = q.trim().toLowerCase();
+    return response.results
+        .where((r) => r.title.trim().toLowerCase() != self)
+        .toList();
+  } catch (e) {
+    debugPrint('Related artists failed for "$artist": $e');
+    return [];
+  }
+});
+
+/// Albums of the searched artist for the "Albums" chip: query the backend
+/// with "[artist] album" and keep only real album entities.
+final artistAlbumsProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
+  if (artistName.trim().isEmpty) return const <MuzoItem>[];
+  final api = ref.read(muzoApiServiceProvider);
+  // Le worker ne renvoie des browseId (MPREb_…) que lorsqu'on lui demande
+  // explicitement un type : sans filtre il ne répond qu'avec des morceaux, et
+  // le garde-fou _isEntityOfType rejetait alors toute la page → chip vide.
+  for (final q in [artistName, '$artistName album']) {
+    try {
+      final res = await api.search(q, filter: 'albums');
+      // The worker tags loosely, so a type is also inferred from the query it
+      // answered. Items are re-stamped with the type the chip asked for:
+      // without it the search screen type gate rejects them and the chip looks
+      // like a no-op.
+      final albums = res.results
+          .where((i) => _isEntityOfType(i, 'album'))
+          .take(30)
+          .map((i) => i.copyWith(resultType: 'album'))
+          .toList();
+      if (albums.isNotEmpty) return albums;
+    } catch (e) {
+      debugPrint('artistAlbumsProvider failed for "$q": $e');
+    }
+  }
+  return const <MuzoItem>[];
+});
+
+/// Playlists of the searched artist for the "Playlists" chip: the backend
+/// "playlists" filter returns real playlist entities (VLPL…), which the
+/// unfiltered endpoint never does.
+final artistPlaylistsProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
+  if (artistName.trim().isEmpty) return const <MuzoItem>[];
+  final api = ref.read(muzoApiServiceProvider);
+  for (final q in [artistName, '$artistName playlist']) {
+    try {
+      final res = await api.search(q, filter: 'playlists');
+      final playlists = res.results
+          .where((i) => _isEntityOfType(i, 'playlist'))
+          .take(30)
+          .map((i) => i.copyWith(resultType: 'playlist'))
+          .toList();
+      if (playlists.isNotEmpty) return playlists;
+    } catch (e) {
+      debugPrint('artistPlaylistsProvider failed for "$q": $e');
+    }
+  }
+  return const <MuzoItem>[];
+});
+
+/// True when [item] is a browse entity (album / playlist / artist) that the
+/// search worker either typed correctly or left untagged. Untagged entities
+/// are accepted because the backend only sets a type on some of them.
+bool _isEntityOfType(MuzoItem item, String type) {
+  final hasBrowseId = item.browseId?.isNotEmpty ?? false;
+  if (!hasBrowseId) return false;
+  final declared = item.resultType;
+  if (declared == type) return true;
+  return declared.isEmpty;
+}
+
+/// The worker sometimes answers an entity filter with rows tagged as songs.
+/// Re-stamping the playable-free browse entities lets the chip show the right
+/// kind of entity instead of falling back to the unfiltered page.
+List<MuzoItem> _normalizeEntityTypes(List<MuzoItem> items, String filter) {
+  const entityFilters = {'albums', 'album', 'playlists', 'playlist', 'artists', 'artist', 'channels'};
+  if (!entityFilters.contains(filter.toLowerCase())) return items;
+  return items.map((item) {
+    if (_isEntityOfType(item, item.resultType)) return item;
+    if (item.resultType.isNotEmpty && item.resultType != 'song') return item;
+    final hasBrowseId = item.browseId?.isNotEmpty ?? false;
+    if (!hasBrowseId) return item;
+    final normalized = switch (filter.toLowerCase()) {
+      'albums' || 'album' => 'album',
+      'playlists' || 'playlist' => 'playlist',
+      _ => 'artist',
+    };
+    return item.copyWith(resultType: normalized);
+  }).toList();
+}
+
+/// Key for [collectionTracksProvider]: identifies one album or playlist from
+/// the search grid precisely enough to fetch its EXACT track list.
+typedef CollectionKey = ({
+  String title,
+  String artist,
+  String browseId,
+  bool isAlbum,
+});
+
+/// Exact track list of a searched album or playlist. Primary path uses the
+/// browse id straight into the backend album/playlist endpoints so the page
+/// shows the real tracklist. Falls back to an exact-name song search when the
+/// browse id is missing or the endpoints fail — never an empty page.
+final collectionTracksProvider =
+    FutureProvider.family<List<MuzoItem>, CollectionKey>((ref, key) async {
+  final apiService = ref.read(muzoApiServiceProvider);
+  final id = key.browseId.trim();
+  if (id.isNotEmpty) {
+    try {
+      if (key.isAlbum) {
+        final album = await apiService.getAlbumDetails(id);
+        if (album != null && album.tracks.isNotEmpty) return album.tracks;
+      } else {
+        final playlist = await apiService.getPlaylistDetails(id);
+        if (playlist != null && playlist.tracks.isNotEmpty) {
+          return playlist.tracks;
+        }
+      }
+    } catch (e) {
+      debugPrint(
+          'Collection "${key.title}" browse fetch failed (${key.isAlbum ? 'album' : 'playlist'}): $e');
+    }
+  }
+  // Fallback: exact-name search keeps the page on-topic.
+  try {
+    final q = '${key.title} ${key.artist}'.trim();
+    final response = await apiService.search(q, filter: 'songs');
+    return response.results.take(40).toList();
+  } catch (e) {
+    debugPrint('Collection fallback search failed for "${key.title}": $e');
+    return [];
+  }
+});
+
+/// Best-guess primary artist from a display string like "Ninho, Niska" or
+/// "Sécu - Franglish, Ninho" -> the first real artist name.
+String primaryArtistName(String input) {
+  var name = input.trim();
+  if (name.isEmpty) return name;
+  // Cut off separators: commas, " & ", " x ", " feat. ", " ft. ", "-"
+  name = name.split(RegExp(r'[,]| & | x | feat\.? | ft\.? ')).first.trim();
+  // Remove parenthetical suffixes like "(feat. Niska)"
+  name = name.replaceAll(RegExp(r'\s*\(feat.*\)\s*'), '').trim();
+  return name;
+}
+
+/// Individual artist tokens from a name, used for fuzzy matching.
+List<String> _artistTokens(String name) {
+  final tokens = <String>{};
+  final lower = name.trim().toLowerCase();
+  if (lower.isNotEmpty) tokens.add(lower);
+  final split = lower
+      .split(RegExp(r'[,]| & | x | feat\.? | ft\.? '))
+      .map((t) => t.trim())
+      .where((t) => t.length >= 2);
+  tokens.addAll(split);
+  return tokens.toList();
+}
+
+
+/// Heuristic: true when a search result is very likely Indian content
+/// (Hindi/Tamil/Telugu/etc. film music) so it can be demoted below
+/// French / US / Afro / Euro results in "All" searches.
+bool _looksIndian(MuzoItem item) {
+  final text = [
+    item.title,
+    item.displayArtist,
+    item.channelName ?? '',
+  ].join(' ').toLowerCase();
+
+  // Devanagari, Bengali, Gurmukhi, Gujarati, Telugu, Kannada, Malayalam,
+  // Tamil and Odia scripts.
+  if (RegExp(
+    r'[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF'
+    r'\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF'
+    r'\u0D00-\u0D7F]',
+  ).hasMatch(text)) {
+    return true;
+  }
+
+  const markers = [
+    'bollywood',
+    'hindi song',
+    'punjabi',
+    'tamil song',
+    'telugu song',
+    'malayalam song',
+    'kannada song',
+    'bhojpuri',
+    't-series',
+    'saregama',
+    'zee music',
+    'sony music india',
+    'tips official',
+    'speed records',
+    'arijit singh',
+    'neha kakkar',
+    'dhvani bhanushali',
+    'jubin nautiyal',
+    'atif aslam',
+    'sidhu moosewala',
+    'yo yo honey singh',
+    'diljit dosanjh',
+    'karan aujla',
+    'shreya ghoshal',
+    'lata mangeshkar',
+    'kishore kumar',
+    'himesh reshammiya',
+    'amitabh bachchan',
+    'kabhi khushi',
+    'devdas',
+    'jab harry met sejal',
+    'raanjhanaa',
+    'dangal',
+    'bajrangi',
+    'dilwale',
+    'ae dil hai mushkil',
+    'tamasha',
+    '(from "',
+  ];
+  return markers.any(text.contains);
+}
+
+/// Stable partition: non-Indian (French / US / Afro / Euro...) results first,
+/// Indian results moved to the end, preserving original order within each
+/// group so YouTube's own relevance ranking is untouched.
+List<MuzoItem> _prioritizeWestern(List<MuzoItem> results) {
+  final preferred = <MuzoItem>[];
+  final indian = <MuzoItem>[];
+  for (final item in results) {
+    (_looksIndian(item) ? indian : preferred).add(item);
+  }
+  return [...preferred, ...indian];
+}
+
+/// Remove duplicate songs (same videoId, or title+artist when videoId is
+/// null) so an artist's tracks never appear twice in one result list.
+/// Non-song result types (artist / album / playlist / channel) are keyed by
+/// their own type so they can never be collapsed against a song that happens
+/// to share the same "title|artist" string.
+List<MuzoItem> _dedupeSongs(List<MuzoItem> items) {
+  final seen = <String>{};
+  final out = <MuzoItem>[];
+  for (final song in items) {
+    final isArtist =
+        song.resultType == 'artist' || song.resultType == 'channel';
+    final String key;
+    if (isArtist) {
+      key = '${song.resultType}:${song.title.trim().toLowerCase()}';
+    } else {
+      key =
+          (song.videoId ?? '${song.title}|${song.displayArtist}').toLowerCase();
+    }
+    if (key.isEmpty || seen.contains(key)) continue;
+    seen.add(key);
+    out.add(song);
+  }
+  return out;
+}
+
+/// Interleaves per-artist track streams round-robin while capping how many
+/// tracks each artist may contribute. Used by curated sections (Hits Bénin)
+/// so the same artist never repeats consecutively nor dominates the list.
+List<MuzoItem> _interleaveByArtist(
+  List<List<MuzoItem>> bySeed, {
+  int maxPerArtist = 1,
+  int maxTotal = 24,
+}) {
+  final out = <MuzoItem>[];
+  final seenIds = <String>{};
+  final artistCount = <String, int>{};
+  var maxDepth = 0;
+  for (final tracks in bySeed) {
+    if (tracks.length > maxDepth) maxDepth = tracks.length;
+  }
+  for (var round = 0; round < maxDepth && out.length < maxTotal; round++) {
+    for (final tracks in bySeed) {
+      if (round >= tracks.length) continue;
+      final item = tracks[round];
+      final idKey = (item.videoId ?? item.title).toLowerCase();
+      if (seenIds.contains(idKey)) continue;
+      final artist = item.displayArtist.toLowerCase().trim();
+      if ((artistCount[artist] ?? 0) >= maxPerArtist) continue;
+      seenIds.add(idKey);
+      artistCount[artist] = (artistCount[artist] ?? 0) + 1;
+      out.add(item);
+      if (out.length >= maxTotal) break;
+    }
+  }
+  return out;
+}
+
+/// Real cover image for a Search "Browse All" category. Chains free artwork
+/// providers (all keyless) until one returns an image:
+/// iTunes -> MusicBrainz + Cover Art Archive -> Wikipedia -> Wikimedia Commons
+/// -> Internet Archive -> Openverse -> Google Books -> muzo thumbnail.
+/// Returns null only when every source fails -> the UI shows the bundled cover.
+final categoryImageProvider =
+    FutureProvider.family<String?, String>((ref, query) async {
+  if (query.isEmpty) return null;
+  final apiService = ref.read(muzoApiServiceProvider);
+
+  final providers = <Future<String?> Function()>[
+    () => _iTunesCover(query),
+    () => _musicBrainzCover(query),
+    () => _wikipediaCover(query),
+    () => _commonsCover(query),
+    () => _archiveCover(query),
+    () => _openverseCover(query),
+    () => _booksCover(query),
+  ];
+  for (final provider in providers) {
+    try {
+      final url = await provider();
+      if (url != null && url.isNotEmpty) return url;
+    } catch (_) {}
+  }
+
+  // Last resort: muzo search thumbnail (may be a video/album thumb).
+  try {
+    final response =
+        await apiService.search(query, filter: 'songs').timeout(
+              const Duration(seconds: 10),
+            );
+    for (final item in response.results) {
+      if (item.thumbnails.isNotEmpty && item.thumbnails.last.url.isNotEmpty) {
+        return item.thumbnails.last.url;
+      }
+    }
+  } catch (_) {}
+
+  return null;
+});
+
+Future<String?> _iTunesCover(String query) async {
+  final uri = Uri.parse('https://itunes.apple.com/search').replace(
+    queryParameters: {'term': query, 'entity': 'album', 'limit': '1'},
+  );
+  final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final results = data['results'] as List?;
+  if (results == null || results.isEmpty) return null;
+  final art = (results.first as Map)['artworkUrl100'] as String?;
+  if (art == null || art.isEmpty) return null;
+  return art.replaceFirst('100x100bb', '300x300bb');
+}
+
+Future<String?> _musicBrainzCover(String query) async {
+  final mbUri = Uri.parse('https://musicbrainz.org/ws/2/release/').replace(
+    queryParameters: {'query': 'release:$query', 'fmt': 'json', 'limit': '1'},
+  );
+  final mbResp = await http.get(
+    mbUri,
+    headers: const {'User-Agent': 'Tunefy/3.9.0 (music app)'},
+  ).timeout(const Duration(seconds: 8));
+  if (mbResp.statusCode != 200) return null;
+  final mbData = jsonDecode(mbResp.body) as Map<String, dynamic>;
+  final releases = mbData['releases'] as List?;
+  if (releases == null || releases.isEmpty) return null;
+  final releaseId = (releases.first as Map)['id'] as String?;
+  if (releaseId == null || releaseId.isEmpty) return null;
+  final caResp = await http.head(
+    Uri.parse('https://coverartarchive.org/release/$releaseId/front-500'),
+  ).timeout(const Duration(seconds: 8));
+  if (caResp.statusCode != 200) return null;
+  return 'https://coverartarchive.org/release/$releaseId/front-500';
+}
+
+Future<String?> _wikipediaCover(String query) async {
+  final uri = Uri.parse('https://en.wikipedia.org/w/api.php').replace(
+    queryParameters: {
+      'action': 'query',
+      'generator': 'search',
+      'gsrsearch': query,
+      'gsrnamespace': '0',
+      'gsrlimit': '3',
+      'prop': 'pageimages',
+      'piprop': 'thumbnail',
+      'pithumbsize': '300',
+      'format': 'json',
+    },
+  );
+  final resp = await http.get(
+    uri,
+    headers: const {'User-Agent': 'Tunefy/3.9.0 (music app)'},
+  ).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final pages = data['query']?['pages'];
+  if (pages is! Map) return null;
+  for (final page in pages.values) {
+    final thumb = (page as Map)['thumbnail']?['source'] as String?;
+    if (thumb != null && thumb.isNotEmpty) return thumb;
+  }
+  return null;
+}
+
+Future<String?> _commonsCover(String query) async {
+  final uri = Uri.parse('https://commons.wikimedia.org/w/api.php').replace(
+    queryParameters: {
+      'action': 'query',
+      'generator': 'search',
+      'gsrsearch': '$query music cover',
+      'gsrnamespace': '6',
+      'gsrlimit': '3',
+      'prop': 'imageinfo',
+      'iiprop': 'url',
+      'iiurlwidth': '300',
+      'format': 'json',
+    },
+  );
+  final resp = await http.get(
+    uri,
+    headers: const {'User-Agent': 'Tunefy/3.9.0 (music app)'},
+  ).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final pages = data['query']?['pages'];
+  if (pages is! Map) return null;
+  for (final page in pages.values) {
+    final imageinfo = (page as Map)['imageinfo'];
+    if (imageinfo is List && imageinfo.isNotEmpty) {
+      final thumb = (imageinfo.first as Map)['thumburl'] as String?;
+      if (thumb != null && thumb.isNotEmpty) return thumb;
+    }
+  }
+  return null;
+}
+
+Future<String?> _archiveCover(String query) async {
+  final uri = Uri.parse('https://archive.org/advancedsearch.php').replace(
+    queryParameters: {
+      'q': '$query AND mediatype:audio',
+      'fl[]': 'identifier',
+      'rows': '1',
+      'output': 'json',
+    },
+  );
+  final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final docs = data['response']?['docs'] as List?;
+  if (docs == null || docs.isEmpty) return null;
+  final id = (docs.first as Map)['identifier'] as String?;
+  if (id == null || id.isEmpty) return null;
+  return 'https://archive.org/services/img/$id';
+}
+
+Future<String?> _openverseCover(String query) async {
+  final uri = Uri.parse('https://api.openverse.org/v1/images/').replace(
+    queryParameters: {'q': query, 'per_page': '1'},
+  );
+  final resp = await http.get(
+    uri,
+    headers: const {'User-Agent': 'Tunefy/3.9.0 (music app)'},
+  ).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final results = data['results'] as List?;
+  if (results == null || results.isEmpty) return null;
+  final url = (results.first as Map)['url'] as String?;
+  if (url == null || url.isEmpty) return null;
+  return url;
+}
+
+Future<String?> _booksCover(String query) async {
+  final uri = Uri.parse('https://www.googleapis.com/books/v1/volumes').replace(
+    queryParameters: {'q': '$query music', 'maxResults': '1'},
+  );
+  final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+  if (resp.statusCode != 200) return null;
+  final data = jsonDecode(resp.body) as Map<String, dynamic>;
+  final items = data['items'] as List?;
+  if (items == null || items.isEmpty) return null;
+  final links = (items.first as Map)['volumeInfo']?['imageLinks'] as Map?;
+  final thumb = links?['thumbnail'] as String?;
+  if (thumb == null || thumb.isEmpty) return null;
+  return thumb.replaceFirst('zoom=1', 'zoom=0');
+}
+

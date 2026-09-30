@@ -32,6 +32,9 @@ class LyricsView extends ConsumerStatefulWidget {
 class _LyricsViewState extends ConsumerState<LyricsView> {
   late LyricController _lyricController;
   StreamSubscription<Duration>? _positionSubscription;
+  final ScrollController _plainScrollController = ScrollController();
+  final List<GlobalKey> _plainLineKeys = [];
+  int _plainActiveLine = -1;
 
   bool get _isKaraoke => widget.lyrics.karaokeLines != null;
   bool get _isSynced => widget.lyrics.syncedLyrics.trim().isNotEmpty;
@@ -51,8 +54,38 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
   }
 
   @override
+  void didUpdateWidget(LyricsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Song changed: reload the synced controller and reset plain-line state so
+    // the newly fetched lyrics take effect immediately.
+    final karaokeChanged =
+        (_isKaraoke != (oldWidget.lyrics.karaokeLines != null));
+    final syncedChanged = widget.lyrics.syncedLyrics !=
+        oldWidget.lyrics.syncedLyrics;
+    final plainChanged =
+        widget.lyrics.plainLyrics != oldWidget.lyrics.plainLyrics;
+    if (karaokeChanged || syncedChanged || plainChanged) {
+      if (!_isKaraoke && _isSynced) {
+        _positionSubscription?.cancel();
+        _lyricController.dispose();
+        _lyricController = LyricController();
+        _lyricController.loadLyric(widget.lyrics.syncedLyrics);
+        _positionSubscription = widget.positionStream.listen((duration) {
+          _lyricController.setProgress(duration);
+        });
+      }
+      _plainLineKeys.clear();
+      _plainActiveLine = -1;
+      if (_plainScrollController.hasClients) {
+        _plainScrollController.jumpTo(0);
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _positionSubscription?.cancel();
+    _plainScrollController.dispose();
     if (!_isKaraoke && _isSynced) {
       _lyricController.dispose();
     }
@@ -85,60 +118,125 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
   }
 
   Widget _buildPlainLyricsView(BuildContext context, String? fontFamily) {
-    final List<String> rawLines = widget.lyrics.plainLyrics.split('\n');
+    final List<String> rawLines = widget.lyrics.plainLyrics
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (rawLines.isEmpty) {
+      return _buildFallbackView(context, fontFamily, isInstrumental: false);
+    }
+
     final double fontSize = widget.isEmbedded ? 18.0 : 22.0;
 
-    return ShaderMask(
-      shaderCallback: (rect) {
-        return const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.transparent,
-            Colors.black,
-            Colors.black,
-            Colors.transparent,
-          ],
-          stops: [0.0, 0.08, 0.92, 1.0],
-        ).createShader(rect);
-      },
-      blendMode: BlendMode.dstIn,
-      child: SingleChildScrollView(
-        physics: widget.scrollable
-            ? const BouncingScrollPhysics()
-            : const NeverScrollableScrollPhysics(),
-        padding: EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: widget.isEmbedded ? 24 : 40,
+    // Estimate timestamps: evenly spread the plain lines across the song
+    // duration so we can highlight and auto-scroll the current line even
+    // though the source has no timestamps (Spotify-style behaviour).
+    final totalMs = widget.totalDuration.inMilliseconds > 0
+        ? widget.totalDuration.inMilliseconds
+        : 4 * 60 * 1000;
+    Duration offsetAt(int i) =>
+        Duration(milliseconds: (totalMs ~/ (rawLines.length + 1)) * (i + 1));
+
+    if (_plainLineKeys.length != rawLines.length) {
+      _plainLineKeys
+        ..clear()
+        ..addAll(List.generate(rawLines.length, (_) => GlobalKey()));
+    }
+
+    void scrollTo(int index) {
+      if (index < 0 || index >= _plainLineKeys.length) return;
+      final ctx = _plainLineKeys[index].currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOut,
+        alignment: 0.2,
+      );
+    }
+
+    return Stack(
+      children: [
+        ShaderMask(
+          shaderCallback: (rect) {
+            return const LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.transparent,
+                Colors.black,
+                Colors.black,
+                Colors.transparent,
+              ],
+              stops: [0.0, 0.08, 0.92, 1.0],
+            ).createShader(rect);
+          },
+          blendMode: BlendMode.dstIn,
+          child: SingleChildScrollView(
+            controller: _plainScrollController,
+            physics: widget.scrollable
+                ? const BouncingScrollPhysics()
+                : const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: widget.isEmbedded ? 24 : 40,
+            ),
+            child: StreamBuilder<Duration>(
+              stream: widget.positionStream,
+              builder: (context, snap) {
+                final pos = snap.data ?? Duration.zero;
+                int active = 0;
+                for (var i = 0; i < rawLines.length; i++) {
+                  if (pos >= offsetAt(i)) {
+                    active = i;
+                  } else {
+                    break;
+                  }
+                }
+                if (active != _plainActiveLine) {
+                  _plainActiveLine = active;
+                  if (widget.scrollable) {
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => scrollTo(active));
+                  }
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(height: widget.isEmbedded ? 12 : 24),
+                    for (var i = 0; i < rawLines.length; i++)
+                      Padding(
+                        key: _plainLineKeys[i],
+                        padding: const EdgeInsets.symmetric(vertical: 6.0),
+                        child: AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 250),
+                          style: TextStyle(
+                            fontFamily: fontFamily,
+                            fontSize: i == active ? fontSize + 2 : fontSize,
+                            fontWeight: FontWeight.w700,
+                            color: i == active
+                                ? Theme.of(context).colorScheme.onSurface
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .onSurface
+                                    .withValues(alpha: 0.4),
+                            height: 1.4,
+                          ),
+                          child: Text(
+                            rawLines[i],
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    SizedBox(height: widget.isEmbedded ? 24 : 48),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(height: widget.isEmbedded ? 12 : 24),
-            ...rawLines.map((line) {
-              final trimmed = line.trim();
-              if (trimmed.isEmpty) {
-                return const SizedBox(height: 20);
-              }
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6.0),
-                child: Text(
-                  trimmed,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: fontFamily,
-                    fontSize: fontSize,
-                    fontWeight: FontWeight.w700,
-                    color: Theme.of(context).colorScheme.onSurface,
-                    height: 1.4,
-                  ),
-                ),
-              );
-            }),
-            SizedBox(height: widget.isEmbedded ? 24 : 48),
-          ],
-        ),
-      ),
+      ],
     );
   }
 

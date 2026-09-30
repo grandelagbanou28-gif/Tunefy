@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/providers/settings_provider.dart';
+import 'package:muzo/widgets/spotify_search_bar.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class FontPickerDialog extends ConsumerStatefulWidget {
   const FontPickerDialog({super.key});
@@ -107,34 +109,11 @@ class _FontPickerDialogState extends ConsumerState<FontPickerDialog> {
               // Search Bar
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: TextField(
+                child: SpotifySearchBar(
                   controller: _searchController,
                   onChanged: _filterFonts,
-                  style: TextStyle(color: cs.onSurface, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Search fonts...',
-                    hintStyle: TextStyle(color: cs.onSurface.withValues(alpha: 0.4), fontSize: 13),
-                    prefixIcon: Icon(FluentIcons.search_24_regular, color: cs.onSurface.withValues(alpha: 0.4), size: 18),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.02),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.05),
-                      ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.05),
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: theme.primaryColor.withValues(alpha: 0.3)),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
+                  hintText: AppLocalizations.of(context).searchFonts,
+                  height: 42,
                 ),
               ),
               const SizedBox(height: 8),

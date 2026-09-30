@@ -28,6 +28,8 @@ const cors = require('cors');
 const { execFile } = require('node:child_process');
 const http = require('node:http');
 const https = require('node:https');
+const dns = require('node:dns');
+const net = require('node:net');
 
 const PORT = parseInt(process.env.PORT || '9877', 10);
 const YTDLP_CMD = process.env.YTDLP_CMD || 'yt-dlp';
@@ -55,19 +57,47 @@ app.use(cors()); // CORS ouvert : requis par le frontend web (Vercel / localhost
 app.disable('x-powered-by');
 
 // ─── Cache memoire + single-flight -----------------------------------------
-const CACHE = new Map(); // videoId -> { url, exp }
+// La clé porte le type : une URL audio (`ba`) n'est pas substituable à une
+// URL vidéo muxée pour le même videoId.
+const cacheKeyOf = (videoId, kind) => (kind === 'video' ? `v:${videoId}` : `a:${videoId}`);
 
-const PENDING = new Map(); // videoId -> Promise → evite les extractions jumelles
+const CACHE = new Map(); // cacheKey -> { url, exp }
 
-function cacheGet(videoId) {
-  const entry = CACHE.get(videoId);
+const PENDING = new Map(); // cacheKey -> Promise → evite les extractions jumelles
+
+// Limite de concurrence yt-dlp : une page artiste peut demander ~26
+// videoIds d'un coup ; sans cap, autant de process yt-dlp saturent le CPU
+// et chaque extraction dépasse le timeout client (10-30s).
+const MAX_CONCURRENT_YTDLP = 4;
+let activeYtDlp = 0;
+const ytdlpQueue = [];
+
+function acquireYtDlpSlot() {
+  return new Promise((resolve) => {
+    if (activeYtDlp < MAX_CONCURRENT_YTDLP) {
+      activeYtDlp++;
+      resolve();
+    } else {
+      ytdlpQueue.push(resolve);
+    }
+  });
+}
+
+function releaseYtDlpSlot() {
+  const next = ytdlpQueue.shift();
+  if (next) next(); // slot transmis : activeYtDlp inchange
+  else activeYtDlp--;
+}
+
+function cacheGet(cacheKey) {
+  const entry = CACHE.get(cacheKey);
   if (entry && entry.exp > Date.now()) return entry.url;
-  if (entry) CACHE.delete(videoId);
+  if (entry) CACHE.delete(cacheKey);
   return null;
 }
 
-function cachePut(videoId, url) {
-  CACHE.set(videoId, { url, exp: Date.now() + CACHE_TTL_SECONDS * 1000 });
+function cachePut(cacheKey, url) {
+  CACHE.set(cacheKey, { url, exp: Date.now() + CACHE_TTL_SECONDS * 1000 });
 }
 
 // ─── Cache Supabase partage (optionnel) ------------------------------------
@@ -113,7 +143,96 @@ function supabaseWrite(videoId, url) {
 }
 
 // ─── yt-dlp ----------------------------------------------------------------
-function verifyUrl(url) {
+// Un videoId n'est jamais une URL : on n'accepte que les caractères d'un
+// identifiant YouTube. Sans ça, un appelant pourrait faire télécharger par
+// yt-dlp n'importe quelle URL (file://, IP internes) depuis ce serveur.
+const VIDEO_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function isValidVideoId(id) {
+  return typeof id === 'string' && VIDEO_ID_RE.test(id);
+}
+
+// ─── Garde SSRF sur les URL amont ------------------------------------------
+// /api/proxy reçoit une `streamUrl` fournie par l'appelant : on ne doit
+// relayer que des hôtes publics (jamais loopback, RFC1918, metadata cloud).
+const ALLOWED_STREAM_PROTOCOLS = new Set(['http:', 'https:']);
+const hostAllowCache = new Map(); // hostname -> { allowed, exp }
+const HOST_CACHE_TTL_MS = 5 * 60 * 1000;
+const HOST_CACHE_MAX = 512;
+
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local / metadata cloud
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    if (a >= 224) return true; // multicast / réservé
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const h = ip.toLowerCase().replace(/^\[|\]$/g, '');
+    if (h === '::' || h === '::1') return true;
+    if (h.startsWith('fe80')) return true;
+    if (/^f[cd]/.test(h)) return true; // unique local
+    if (h.startsWith('::ffff:')) {
+      const v4 = h.slice('::ffff:'.length);
+      if (net.isIPv4(v4)) return isPrivateIp(v4);
+    }
+    return false;
+  }
+  return true; // format inconnu → on bloque
+}
+
+async function checkUpstreamUrl(rawUrl) {
+  let u;
+  try {
+    u = new URL(String(rawUrl));
+  } catch {
+    return { allowed: false, reason: 'unparseable url' };
+  }
+  if (!ALLOWED_STREAM_PROTOCOLS.has(u.protocol)) {
+    return { allowed: false, reason: `protocol ${u.protocol}` };
+  }
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return { allowed: false, reason: 'empty host' };
+  const now = Date.now();
+  const cached = hostAllowCache.get(host);
+  if (cached && cached.exp > now) {
+    return { allowed: cached.allowed, reason: cached.reason || (cached.allowed ? 'public' : 'blocked') };
+  }
+  let allowed = false;
+  let reason = 'public';
+  try {
+    const records = await dns.promises.lookup(host, { all: true, verbatim: false });
+    const bad = records.filter((r) => isPrivateIp(r.address)).map((r) => r.address);
+    if (!records.length) {
+      allowed = false;
+      reason = 'dns: no record';
+    } else if (bad.length) {
+      allowed = false;
+      reason = `dns: private address ${bad[0]}`;
+    } else {
+      allowed = true;
+    }
+  } catch (e) {
+    allowed = false;
+    reason = `dns: ${String(e && e.code ? e.code : e)}`;
+  }
+  if (hostAllowCache.size >= HOST_CACHE_MAX) hostAllowCache.clear();
+  hostAllowCache.set(host, { allowed, reason, exp: now + HOST_CACHE_TTL_MS });
+  return { allowed, reason };
+}
+
+async function isAllowedUpstreamUrl(rawUrl) {
+  return (await checkUpstreamUrl(rawUrl)).allowed;
+}
+
+async function verifyUrl(url) {
+  // Même garde : les lignes du cache Supabase sont écrites avec la clé anon
+  // (publique) — on ne va jamais interroger une URL interne à votre place.
+  if (!(await isAllowedUpstreamUrl(url))) return false;
   const mod = url.startsWith('https:') ? https : http;
   return new Promise((resolve) => {
     const req = mod.get(url, { headers: { Range: 'bytes=0-1' } }, (res) => {
@@ -129,12 +248,22 @@ function verifyUrl(url) {
   });
 }
 
-function extractForClient(videoId, clientSet) {
+// ─── Formats ───────────────────────────────────────────────────────────────
+// audio : flux seul, le plus léger possible (lecture de musique).
+// video : rendition muxée plafonnée en hauteur — utilisée par le feed de clips
+//         pour afficher le VRAI clip de l'artiste (une URL audio ne peut pas
+//         être dessinée par un VideoPlayer).
+const FORMATS = {
+  audio: 'ba/b',
+  video: 'best[height<=480][ext=mp4]/best[height<=480]/bestvideo[height<=480]+bestaudio/best',
+};
+
+function extractForClient(videoId, clientSet, kind = 'audio') {
   return new Promise((resolve) => {
     const cmd = [
       '--no-warnings',
       '--no-playlist',
-      '-f', 'ba/b',
+      '-f', FORMATS[kind] || FORMATS.audio,
       '--get-url',
       '--extractor-args', clientSet,
       '--socket-timeout', '20',
@@ -157,62 +286,86 @@ function extractForClient(videoId, clientSet) {
   });
 }
 
-async function resolveWithYtDlp(videoId) {
-  const errors = [];
-  const deadline = Date.now() + GLOBAL_BUDGET_SECONDS * 1000;
-  for (const clientSet of CLIENT_SETS) {
-    if (Date.now() > deadline) {
-      errors.push('global budget exhausted');
-      break;
+async function resolveWithYtDlp(videoId, kind = 'audio') {
+  await acquireYtDlpSlot();
+  try {
+    const errors = [];
+    const deadline = Date.now() + GLOBAL_BUDGET_SECONDS * 1000;
+    for (const clientSet of CLIENT_SETS) {
+      if (Date.now() > deadline) {
+        errors.push('global budget exhausted');
+        break;
+      }
+      const { url, error } = await extractForClient(videoId, clientSet, kind);
+      if (!url) {
+        errors.push(`${clientSet}: ${error}`);
+        continue;
+      }
+      if (await verifyUrl(url)) return { url, source: clientSet };
+      errors.push(`${clientSet}: unverified URL`);
     }
-    const { url, error } = await extractForClient(videoId, clientSet);
-    if (!url) {
-      errors.push(`${clientSet}: ${error}`);
-      continue;
-    }
-    if (await verifyUrl(url)) return { url, source: clientSet };
-    errors.push(`${clientSet}: unverified URL`);
+    return { url: null, source: null, error: errors.join(' | ').slice(0, 600) };
+  } finally {
+    releaseYtDlpSlot();
   }
-  return { url: null, source: null, error: errors.join(' | ').slice(0, 600) };
 }
 
-async function resolve(videoId) {
+async function resolve(videoId, kind = 'audio') {
+  const cacheKey = cacheKeyOf(videoId, kind);
   // Cache memoire
-  const mem = cacheGet(videoId);
+  const mem = cacheGet(cacheKey);
   if (mem) return { url: mem, cached: true, source: 'memory' };
 
-  // Single-flight : une seule extraction concurrente par videoId.
-  if (PENDING.has(videoId)) return PENDING.get(videoId);
+  // Single-flight : une seule extraction concurrente par videoId + type.
+  if (PENDING.has(cacheKey)) return PENDING.get(cacheKey);
   const p = (async () => {
-    const supa = await supabaseRead(videoId);
-    if (supa) {
-      cachePut(videoId, supa);
+    // Le cache partage Supabase ne sert que l'audio : une ligne vidéo liée à
+    // l'IP de celui qui l'a écrite flue (403) et polluerait la lecture audio.
+    const supa = kind === 'audio' ? await supabaseRead(videoId) : null;
+    // Shared cache rows are googlevideo URLs bound to whoever wrote them —
+    // often another IP → 403 at proxy time = player Source error. Always
+    // verify before serving; dead rows fall through to a fresh yt-dlp run.
+    if (supa && (await verifyUrl(supa))) {
+      cachePut(cacheKey, supa);
       return { url: supa, cached: true, source: 'supabase' };
     }
-    const r = await resolveWithYtDlp(videoId);
+    if (supa) {
+      console.log(`[${new Date().toISOString()}] supabase dead for ${videoId} — re-extracting`);
+    }
+    const r = await resolveWithYtDlp(videoId, kind);
     if (r.url) {
-      cachePut(videoId, r.url);
-      supabaseWrite(videoId, r.url);
+      cachePut(cacheKey, r.url);
+      if (kind === 'audio') supabaseWrite(videoId, r.url);
     }
     return { url: r.url || null, cached: false, source: r.source || null, error: r.error || null };
   })();
-  PENDING.set(videoId, p);
+  PENDING.set(cacheKey, p);
   try {
     return await p;
   } finally {
-    PENDING.delete(videoId);
+    PENDING.delete(cacheKey);
   }
 }
 
 // ─── Helpers HTTP ----------------------------------------------------------
 function selfBase(req) {
-  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
-  const host = req.get('host') || `localhost:${PORT}`;
-  return `${proto}://${host}`;
+  const proto = req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  // Le header Host est client-controlled : on ne le réutilise tel quel que s'il
+  // est syntaxiquement valide (sinon on renvoie sur le port réel du serveur).
+  const host = req.get('host') || '';
+  const safeHost = /^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(host) ? host : `127.0.0.1:${PORT}`;
+  return `${proto}://${safeHost}`;
 }
 
-function proxyUrl(req, videoId, rawUrl) {
-  return `${selfBase(req)}/api/proxy?videoId=${encodeURIComponent(videoId)}&streamUrl=${encodeURIComponent(rawUrl)}`;
+function proxyUrl(req, videoId, rawUrl, kind = 'audio') {
+  const kindParam = kind === 'video' ? '&kind=video' : '';
+  return `${selfBase(req)}/api/proxy?videoId=${encodeURIComponent(videoId)}${kindParam}&streamUrl=${encodeURIComponent(rawUrl)}`;
+}
+
+// `kind=video` demande une rendition muxée (feed de clips) au lieu du flux
+// audio seul. Toute valeur inconnue retombe sur 'audio'.
+function kindOf(req) {
+  return String(req.query.kind || '') === 'video' ? 'video' : 'audio';
 }
 
 // ─── Routes -----------------------------------------------------------------
@@ -227,15 +380,19 @@ app.get('/api/stream', async (req, res) => {
     res.status(400).json({ error: 'missing videoId' });
     return;
   }
+  if (!isValidVideoId(videoId)) {
+    res.status(400).json({ error: 'invalid videoId' });
+    return;
+  }
   try {
-    const result = await resolve(videoId);
+    const result = await resolve(videoId, kindOf(req));
     if (!result.url) {
       console.log(`[${new Date().toISOString()}] /api/stream videoId=${videoId} => NULL (${result.error || 'no stream'}) [${Date.now() - started}ms]`);
       res.status(502).json({ error: result.error || 'no stream found' });
       return;
     }
     const body = {
-      url: proxyUrl(req, videoId, result.url),
+      url: proxyUrl(req, videoId, result.url, kindOf(req)),
       cached: result.cached,
       source: result.source,
     };
@@ -248,18 +405,69 @@ app.get('/api/stream', async (req, res) => {
   }
 });
 
+// Alias `/stream` : le player mobile interroge le serveur local via
+// `$candidate/stream?videoId=...` (loopback adb reverse). Même comportement
+// que /api/stream : on renvoie une URL self-proxy jouable côté client.
+app.get('/stream', async (req, res) => {
+  const started = Date.now();
+  const videoId = String(req.query.videoId || req.query.v || '').trim();
+  if (!videoId) {
+    res.status(400).json({ error: 'missing videoId' });
+    return;
+  }
+  if (!isValidVideoId(videoId)) {
+    res.status(400).json({ error: 'invalid videoId' });
+    return;
+  }
+  try {
+    const result = await resolve(videoId, kindOf(req));
+    if (!result.url) {
+      console.log(`[${new Date().toISOString()}] /stream videoId=${videoId} => NULL (${result.error || 'no stream'}) [${Date.now() - started}ms]`);
+      res.status(502).json({ error: result.error || 'no stream found' });
+      return;
+    }
+    const body = {
+      url: proxyUrl(req, videoId, result.url, kindOf(req)),
+      cached: result.cached,
+      source: result.source,
+    };
+    if (String(req.query.raw || '') === '1') body.rawUrl = result.url;
+    console.log(`[${new Date().toISOString()}] /stream videoId=${videoId} => ${result.source} (cached=${result.cached}) [${Date.now() - started}ms]`);
+    res.json(body);
+  } catch (e) {
+    console.log(`[${new Date().toISOString()}] /stream videoId=${videoId} => ERROR ${e}`);
+    res.status(500).json({ error: String(e && e.message ? e.message : e) });
+  }
+});
+
 app.get('/api/proxy', async (req, res) => {
   const started = Date.now();
   const videoId = String(req.query.videoId || '').trim();
   const streamUrl = String(req.query.streamUrl || '').trim();
+  if (videoId && !isValidVideoId(videoId)) {
+    res.status(400).json({ error: 'invalid videoId' });
+    return;
+  }
   let rawUrl = streamUrl;
   let cached = false;
+
+  // SSRF : l'appelant peut envoyer n'importe quelle URL ici. On ne relaie que
+  // des hôtes publics ; sinon on retombe sur une résolution yt-dlp interne
+  // (si un videoId est fourni) plutôt que d'atteindre l'infra locale.
+  if (rawUrl) {
+    const check = await checkUpstreamUrl(rawUrl);
+    if (!check.allowed) {
+      console.log(`[${new Date().toISOString()}] /api/proxy blocked upstream (${check.reason}): ${String(rawUrl).slice(0, 120)}`);
+      rawUrl = '';
+    }
+  }
+
   if (!rawUrl) {
     if (!videoId) {
       res.status(400).json({ error: 'missing videoId' });
       return;
     }
-    const result = await resolve(videoId);
+    const result = await resolve(videoId, kindOf(req));
     if (!result.url) {
       console.log(`[${new Date().toISOString()}] /api/proxy videoId=${videoId} => NULL`);
       res.status(502).json({ error: result.error || 'no stream found' });

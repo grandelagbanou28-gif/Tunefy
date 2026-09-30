@@ -227,6 +227,16 @@ Active mood: ${tracker.activeMood ?? 'none'}
     _seen.clear();
     _enabled = false;
   }
+
+  /// « Tout effacer » du DJ : radio off, session humeur et mémoire vue
+  /// remises à zéro (les feedbacks appris restent dans Hive jusqu'au
+  /// clearAll du tracker, appelé par l'écran).
+  void reset() {
+    _enabled = false;
+    _refilling = false;
+    _seen.clear();
+    tracker.endSession();
+  }
 }
 
 /// Minimal media info to avoid importing just_audio_background everywhere.

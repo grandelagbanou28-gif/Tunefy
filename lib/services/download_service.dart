@@ -5,14 +5,12 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/storage_service.dart';
-import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/services/notification_service.dart';
 
 class DownloadService {
   final Dio _dio = Dio();
   final StorageService _storage = StorageService();
-  late final MuzoApiService _apiService = MuzoApiService(_storage);
 
   Future<bool> downloadSong(
     MuzoItem result, {
@@ -20,6 +18,10 @@ class DownloadService {
   }) async {
     final notificationId = result.videoId.hashCode;
     try {
+      if (kIsWeb) {
+        debugPrint('Download not supported on web');
+        return false;
+      }
       if (result.videoId == null) return false;
 
       // Check permission
@@ -59,7 +61,12 @@ class DownloadService {
       );
 
       // Get stream URL
-      final streamUrl = await StreamExtractionService.getStreamUrl(result.videoId!);
+      final streamUrl = await StreamExtractionService.getStreamUrl(
+        result.videoId!,
+        title: result.title,
+        artist: result.displayArtist,
+        durationSeconds: result.durationSeconds,
+      );
       if (streamUrl == null) {
         debugPrint('Failed to get stream URL');
         await NotificationService().showCompletionNotification(
@@ -137,7 +144,7 @@ class DownloadService {
   }
 
   Future<bool> _requestPermission() async {
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       // On Android 10+ (API 29+), scoped storage is used, so WRITE_EXTERNAL_STORAGE
       // is not needed for app-specific directories (getApplicationDocumentsDirectory).
       // However, for older versions, it might be needed.

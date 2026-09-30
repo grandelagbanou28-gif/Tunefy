@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:muzo/providers/settings_provider.dart';
 import 'package:palette_generator/palette_generator.dart';
 import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/app_colors.dart';
 
 const String kDefaultFontFamily = 'AR One Sans';
@@ -99,6 +100,11 @@ final themeColorProvider = StateNotifierProvider<ThemeColorNotifier, Color?>((
 // Dynamic Color Scheme Provider from Device
 final dynamicColorSchemeProvider = StateProvider<ColorScheme?>((ref) => null);
 
+/// Tint taken from the artwork of the track that is currently playing, so the
+/// whole app can follow the cover the way Material You palettes follow the
+/// wallpaper. `null` while nothing plays (or when the user opted out).
+final albumArtColorProvider = StateProvider<Color?>((ref) => null);
+
 // Theme Logic Class (Helper)
 class ThemeLogic {
   // Global Text Color Controls
@@ -125,6 +131,25 @@ class ThemeLogic {
       );
     }
     return MaterialColor(color.toARGB32(), swatch);
+  }
+
+  /// Applies the Material You accents of [dynamicScheme] on top of the app's
+  /// own [base] scheme: the tinted primary/secondary/tertiary take over while
+  /// the surfaces stay the ones the app is designed with.
+  static ColorScheme tint(ColorScheme? dynamicScheme, ColorScheme base) {
+    if (dynamicScheme == null) return base;
+    return base.copyWith(
+      primary: dynamicScheme.primary,
+      onPrimary: dynamicScheme.onPrimary,
+      primaryContainer: dynamicScheme.primaryContainer,
+      onPrimaryContainer: dynamicScheme.onPrimaryContainer,
+      secondary: dynamicScheme.secondary,
+      onSecondary: dynamicScheme.onSecondary,
+      secondaryContainer: dynamicScheme.secondaryContainer,
+      onSecondaryContainer: dynamicScheme.onSecondaryContainer,
+      tertiary: dynamicScheme.tertiary,
+      onTertiary: dynamicScheme.onTertiary,
+    );
   }
 
   static ThemeData createThemeData(
@@ -181,12 +206,15 @@ class ThemeLogic {
             systemNavigationBarIconBrightness: Brightness.light,
           ),
         ),
-        colorScheme: ColorScheme.dark(
-          primary: Colors.white,
-          onPrimary: Colors.black,
-          secondary: const Color(0xFF888888),
-          surface: isAmoled ? Colors.black : const Color(0xFF121212),
-          onSurface: Colors.white,
+        colorScheme: tint(
+          effectiveColorScheme,
+          ColorScheme.dark(
+            primary: Colors.white,
+            onPrimary: Colors.black,
+            secondary: const Color(0xFF888888),
+            surface: isAmoled ? Colors.black : const Color(0xFF121212),
+            onSurface: Colors.white,
+          ),
         ),
         cardColor: isAmoled ? Colors.black : const Color(0xFF181818),
         primaryColorLight: Colors.white,
@@ -302,12 +330,15 @@ class ThemeLogic {
         canvasColor: const Color(0xFFFFFFFF),
         primaryColor: Colors.black,
         scaffoldBackgroundColor: const Color(0xFFFFFFFF),
-        colorScheme: const ColorScheme.light(
-          primary: Colors.black,
-          onPrimary: Colors.white,
-          secondary: Color(0xFF888888),
-          surface: Color(0xFFFFFFFF),
-          onSurface: Colors.black,
+        colorScheme: tint(
+          effectiveColorScheme,
+          const ColorScheme.light(
+            primary: Colors.black,
+            onPrimary: Colors.white,
+            secondary: Color(0xFF888888),
+            surface: Color(0xFFFFFFFF),
+            onSurface: Colors.black,
+          ),
         ),
         progressIndicatorTheme: const ProgressIndicatorThemeData(
           color: Colors.black,
@@ -346,8 +377,13 @@ class ThemeLogic {
         ),
         inputDecorationTheme: const InputDecorationTheme(
           focusColor: Colors.black,
-          focusedBorder: UnderlineInputBorder(
-            borderSide: BorderSide(color: Colors.black),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            borderSide: BorderSide(color: Colors.black26),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            borderSide: BorderSide(color: Colors.black12),
           ),
         ),
         textButtonTheme: TextButtonThemeData(
@@ -392,13 +428,17 @@ class ThemeLogic {
         canvasColor: isAmoled ? Colors.black : const Color(0xFF121212), // Spotify Dark Gray
         primaryColor: Colors.white,
         scaffoldBackgroundColor: isAmoled ? Colors.black : const Color(0xFF121212),
-        colorScheme: ColorScheme.dark(
-          primary: Colors.white,
-          onPrimary: Colors.black,
-          secondary: const Color(0xFF888888),
-          surface: isAmoled ? Colors.black : const Color(0xFF181818), // Slightly elevated dark gray
-          onSurface: Colors.white,
+        colorScheme: tint(
+          effectiveColorScheme,
+          ColorScheme.dark(
+            primary: Colors.white,
+            onPrimary: Colors.black,
+            secondary: const Color(0xFF888888),
+            surface: isAmoled ? Colors.black : const Color(0xFF181212),
+            onSurface: Colors.white,
+          ),
         ),
+
         progressIndicatorTheme: const ProgressIndicatorThemeData(
           color: Colors.white,
           linearTrackColor: Colors.white10,
@@ -436,8 +476,13 @@ class ThemeLogic {
         ),
         inputDecorationTheme: const InputDecorationTheme(
           focusColor: Colors.white,
-          focusedBorder: UnderlineInputBorder(
-            borderSide: BorderSide(color: Colors.white),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            borderSide: BorderSide(color: Colors.white24),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            borderSide: BorderSide(color: Colors.white12),
           ),
         ),
         textButtonTheme: TextButtonThemeData(
@@ -461,7 +506,8 @@ final themeProvider = Provider<ThemeData>((ref) {
   final themeType = settings.themeType;
   final fontFamily = settings.appFontFamily;
   final isAmoled = settings.isAmoled;
-  final dynamicColorScheme = ref.watch(dynamicColorSchemeProvider);
+  final albumArtColor = ref.watch(albumArtColorProvider);
+  final storage = ref.watch(storageServiceProvider);
 
   // Resolve auto → system brightness
   final effectiveType = themeType == ThemeType.auto
@@ -471,6 +517,18 @@ final themeProvider = Provider<ThemeData>((ref) {
             : ThemeType.dark)
       : themeType;
 
+  // Material You follows the artwork of the current track; without a track it
+  // falls back to the device wallpaper palette. Either can be switched off,
+  // which pins the app back to its Spotify green.
+  final brightness =
+      effectiveType == ThemeType.light ? Brightness.light : Brightness.dark;
+  ColorScheme? dynamicColorScheme;
+  if (storage.dynamicColorEnabled) {
+    dynamicColorScheme = albumArtColor != null
+        ? ColorScheme.fromSeed(seedColor: albumArtColor, brightness: brightness)
+        : ref.watch(dynamicColorSchemeProvider);
+  }
+
   if (effectiveType == ThemeType.light) {
     return ThemeLogic.createThemeData(
       null,
@@ -479,7 +537,6 @@ final themeProvider = Provider<ThemeData>((ref) {
       fontFamily: fontFamily,
     );
   } else {
-    // Return static dark mode theme without album art color overriding
     return ThemeLogic.createThemeData(
       null,
       ThemeType.dark,

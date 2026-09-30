@@ -1,12 +1,15 @@
 import 'dart:io';
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/services/auth_service.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/providers/auth_gate_provider.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -52,6 +55,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
   void _skip() {
     // Set guest mode — AuthGate will reactively show the main app.
     ref.read(isGuestModeProvider.notifier).state = true;
+    // Persist it so AuthGate still lets the user in after an app restart
+    // (previously this was in-memory only and the login screen reappeared).
+    ref.read(storageServiceProvider).setIsGuestMode(true);
     if (context.mounted && Navigator.canPop(context)) {
       Navigator.pop(context);
     }
@@ -88,7 +94,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
       }
 
       if (mounted) {
-        showGlassSnackBar(context, 'Welcome to Muzo!');
+        showGlassSnackBar(context, 'Welcome to Tunefy!');
         // AuthGate watches authServiceProvider and will reactively
         // switch to MainLayout+HomeScreen now that auth token is set.
         if (Navigator.canPop(context)) {
@@ -106,22 +112,31 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final surface = Theme.of(context).colorScheme.surface;
-    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final onSurface = Colors.white;
 
-    final primaryColor = Theme.of(context).primaryColor;
-    final orbColor1 = isDark
-        ? primaryColor.withValues(alpha: 0.08)
-        : primaryColor.withValues(alpha: 0.15);
-    final orbColor2 = isDark
-        ? primaryColor.withValues(alpha: 0.04)
-        : primaryColor.withValues(alpha: 0.1);
+    const spotifyGreen = Color(0xFF1DB954);
 
     return Scaffold(
-      backgroundColor: surface,
+      backgroundColor: const Color(0xFF000000),
       body: Stack(
         children: [
+          // Green/black gradient background
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0.0, -0.6),
+                  radius: 1.4,
+                  colors: [
+                    const Color(0xFF0F6B2F).withValues(alpha: 0.65),
+                    const Color(0xFF084018).withValues(alpha: 0.35),
+                    const Color(0xFF000000),
+                  ],
+                  stops: const [0.0, 0.45, 1.0],
+                ),
+              ),
+            ),
+          ),
           // Background decorative orbs
           Positioned(
             top: -120, left: -80,
@@ -129,7 +144,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               imageFilter: ImageFilter.blur(sigmaX: 90, sigmaY: 90),
               child: Container(
                 width: 340, height: 340,
-                decoration: BoxDecoration(shape: BoxShape.circle, color: orbColor1),
+                decoration: BoxDecoration(shape: BoxShape.circle, color: spotifyGreen.withValues(alpha: 0.18)),
               ),
             ),
           ),
@@ -139,7 +154,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
               imageFilter: ImageFilter.blur(sigmaX: 90, sigmaY: 90),
               child: Container(
                 width: 280, height: 280,
-                decoration: BoxDecoration(shape: BoxShape.circle, color: orbColor2),
+                decoration: BoxDecoration(shape: BoxShape.circle, color: spotifyGreen.withValues(alpha: 0.12)),
               ),
             ),
           ),
@@ -163,7 +178,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                     onSignup: () => _goToAuth(tab: 1),
                     onGuest: _skip,
                     onSurface: onSurface,
-                    isDark: isDark,
+                    isDark: true,
                   )
                 : _AuthPage(
                     key: const ValueKey('auth'),
@@ -178,7 +193,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                     onAuth: _handleAuth,
                     onBack: _back,
                     onSurface: onSurface,
-                    isDark: isDark,
+                    isDark: true,
                   ),
           ),
         ],
@@ -210,72 +225,114 @@ class _IntroPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28),
+        padding: const EdgeInsets.symmetric(horizontal: 32),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Spacer(flex: 2),
 
-            // Logo + wordmark
-            Row(
-              children: [
-                Image.asset('assets/logo.png', width: 52, height: 52),
-                const SizedBox(width: 14),
-                Text(
-                  'Muzo',
-                  style: TextStyle(
-                    fontSize: 36,
-                    fontWeight: FontWeight.w800,
-                    color: onSurface,
-                    letterSpacing: -1,
+            // Logo badge (centered, premium)
+            Center(
+              child: Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF1DB954), Color(0xFF0B6B31)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF1DB954).withValues(alpha: 0.4),
+                      blurRadius: 32,
+                      spreadRadius: -8,
+                    ),
+                    BoxShadow(
+                      color: const Color(0xFF000000).withValues(alpha: 0.5),
+                      blurRadius: 20,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(14),
+                child: Image.asset(
+                  'assets/icon.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) => const Icon(
+                    Icons.music_note_rounded,
+                    color: Colors.black,
+                    size: 48,
                   ),
                 ),
-              ],
+              ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
 
-            // Tagline
-            Text(
-              'Music without\nlimits.',
+            // Wordmark
+            const Text(
+              'Tunefy',
               style: TextStyle(
-                fontSize: 42,
+                fontSize: 40,
                 fontWeight: FontWeight.w800,
-                color: onSurface,
-                height: 1.1,
+                color: Colors.white,
                 letterSpacing: -1.5,
               ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Stream, discover, and vibe — all in one place. Free, forever.',
+            const SizedBox(height: 8),
+
+            // Tagline
+            const Text(
+              'MUSIC CLIENT',
               style: TextStyle(
-                fontSize: 15,
-                color: onSurface.withValues(alpha: 0.55),
-                height: 1.5,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1DB954),
+                letterSpacing: 4,
               ),
             ),
+            const SizedBox(height: 40),
 
-            // Feature pills
-            const SizedBox(height: 32),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
+            // Artist avatars row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _pill(context, Icons.music_note_rounded, 'Millions of songs'),
-                _pill(context, Icons.lyrics_rounded, 'Live lyrics'),
-                _pill(context, Icons.queue_music_rounded, 'Smart queue'),
-                _pill(context, Icons.offline_bolt_rounded, 'No ads'),
+                _artistAvatar('assets/ninho.jpg'),
+                Transform.translate(
+                  offset: const Offset(-10, 0),
+                  child: _artistAvatar('assets/gazo.jpg'),
+                ),
+                Transform.translate(
+                  offset: const Offset(-20, 0),
+                  child: _artistAvatar('assets/tiakola.jpg'),
+                ),
+                Transform.translate(
+                  offset: const Offset(-30, 0),
+                  child: _artistAvatar('assets/jul.jpg'),
+                ),
               ],
+            ),
+            const SizedBox(height: 20),
+
+            // App description
+            const Text(
+              'A powerful, privacy-focused music client. Ad-free, offline, synced lyrics and smart caching — free, forever.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0x99FFFFFF),
+                height: 1.5,
+              ),
             ),
 
             const Spacer(flex: 3),
 
             // CTA Buttons
-            if (!Platform.isWindows) ...[
+            if (!kIsWeb && !Platform.isWindows) ...[
               SizedBox(
                 width: double.infinity,
-                height: 52,
-                child: FilledButton(
+                height: 54,
+                child: FilledButton.icon(
                   onPressed: () async {
                     final authService = ref.read(authServiceProvider);
                     try {
@@ -294,26 +351,21 @@ class _IntroPage extends ConsumerWidget {
                       }
                     }
                   },
-                  style: FilledButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
-                    foregroundColor: onSurface,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: BorderSide(color: onSurface.withValues(alpha: 0.15)),
-                    ),
+                  icon: SvgPicture.asset(
+                    'assets/google_logo.svg',
+                    width: 20,
+                    height: 20,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SvgPicture.asset(
-                        'assets/google_logo.svg',
-                        width: 20,
-                        height: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text('Continue with Google',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: onSurface)),
-                    ],
+                  label: const Text(
+                    'Continue with Google',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: const Color(0xFF121212),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(28),
+                    ),
                   ),
                 ),
               ),
@@ -321,33 +373,34 @@ class _IntroPage extends ConsumerWidget {
             ],
             SizedBox(
               width: double.infinity,
-              height: 52,
+              height: 54,
               child: FilledButton(
                 onPressed: onSignup,
                 style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).primaryColor,
-                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  backgroundColor: const Color(0xFF1DB954),
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                  elevation: 0,
                 ),
-                child: const Text('Sign up with Email',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                child: const Text('Create account',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
               ),
             ),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              height: 52,
+              height: 54,
               child: OutlinedButton(
                 onPressed: onLogin,
                 style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: onSurface.withValues(alpha: 0.3)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
                 ),
-                child: Text('Log in',
+                child: const Text('Log in',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15,
                       fontWeight: FontWeight.bold,
-                      color: onSurface,
+                      color: Colors.white,
                     )),
               ),
             ),
@@ -359,9 +412,9 @@ class _IntroPage extends ConsumerWidget {
                   'Continue as Guest',
                   style: TextStyle(
                     fontSize: 14,
-                    color: onSurface.withValues(alpha: 0.45),
+                    color: Colors.white.withValues(alpha: 0.45),
                     decoration: TextDecoration.underline,
-                    decorationColor: onSurface.withValues(alpha: 0.25),
+                    decorationColor: Colors.white.withValues(alpha: 0.25),
                   ),
                 ),
               ),
@@ -373,28 +426,31 @@ class _IntroPage extends ConsumerWidget {
     );
   }
 
-  Widget _pill(BuildContext context, IconData icon, String label) {
-    final primaryColor = Theme.of(context).primaryColor;
-    final onSurf = Theme.of(context).colorScheme.onSurface;
+  Widget _artistAvatar(String assetPath) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      width: 60,
+      height: 60,
+      padding: const EdgeInsets.all(2.5),
       decoration: BoxDecoration(
-        color: primaryColor.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: primaryColor.withValues(alpha: 0.15)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: primaryColor),
-          const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: onSurf.withValues(alpha: 0.85),
-              )),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.55), width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1DB954).withValues(alpha: 0.25),
+            blurRadius: 12,
+            spreadRadius: -4,
+          ),
         ],
+      ),
+      child: ClipOval(
+        child: Image.asset(
+          assetPath,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => Container(
+            color: const Color(0xFF1DB954).withValues(alpha: 0.15),
+            child: const Icon(Icons.person_rounded, color: Color(0xFF1DB954), size: 26),
+          ),
+        ),
       ),
     );
   }
@@ -483,12 +539,12 @@ class _AuthPage extends StatelessWidget {
                     child: TabBar(
                       controller: tabController,
                       indicator: BoxDecoration(
-                        color: Theme.of(context).primaryColor,
+                        color: const Color(0xFF1DB954),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       indicatorPadding: const EdgeInsets.all(4),
                       indicatorSize: TabBarIndicatorSize.tab,
-                      labelColor: Theme.of(context).colorScheme.onPrimary,
+                      labelColor: Colors.black,
                       unselectedLabelColor: onSurface.withValues(alpha: 0.5),
                       labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                       unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -541,29 +597,29 @@ class _AuthPage extends StatelessWidget {
                   // Submit button
                   SizedBox(
                     width: double.infinity,
-                    height: 52,
+                    height: 54,
                     child: isLoading
                         ? Center(
-                            child: SizedBox(
-                              height: 24, width: 24,
-                              child: CircularProgressIndicator(
-                                  color: Theme.of(context).primaryColor, strokeWidth: 2),
-                            ),
-                          )
-                        : FilledButton(
+                              child: SizedBox(
+                                height: 24, width: 24,
+                                child: SpotifySpinner(
+                                    color: const Color(0xFF1DB954), strokeWidth: 2),
+                              ),
+                            )
+                          : FilledButton(
                             onPressed: onAuth,
                             style: FilledButton.styleFrom(
-                              backgroundColor: Theme.of(context).primaryColor,
-                              foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                              backgroundColor: const Color(0xFF1DB954),
+                              foregroundColor: Colors.black,
                               shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16)),
+                                  borderRadius: BorderRadius.circular(28)),
                             ),
                             child: AnimatedBuilder(
                               animation: tabController,
                               builder: (_, __) => Text(
                                 tabController.index == 0 ? 'Log in' : 'Create account',
                                 style: const TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold),
+                                    fontSize: 15, fontWeight: FontWeight.bold),
                               ),
                             ),
                           ),
@@ -586,25 +642,24 @@ class _AuthPage extends StatelessWidget {
     bool obscure = false,
     VoidCallback? onToggle,
   }) {
-    final onSurf = Theme.of(context).colorScheme.onSurface;
     return TextField(
       controller: controller,
       obscureText: isPassword && obscure,
-      style: TextStyle(color: onSurf),
-      cursorColor: onSurf,
+      style: const TextStyle(color: Colors.white, fontSize: 15),
+      cursorColor: const Color(0xFF1DB954),
       decoration: InputDecoration(
         hintText: hint,
         filled: true,
-        fillColor: onSurf.withValues(alpha: 0.06),
-        hintStyle: TextStyle(color: onSurf.withValues(alpha: 0.35)),
-        prefixIcon: Icon(icon, color: onSurf.withValues(alpha: 0.45), size: 20),
+        fillColor: Colors.white.withValues(alpha: 0.06),
+        hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35)),
+        prefixIcon: Icon(icon, color: Colors.white.withValues(alpha: 0.45), size: 20),
         suffixIcon: isPassword
             ? IconButton(
                 icon: Icon(
                   obscure
                       ? FluentIcons.eye_24_regular
                       : FluentIcons.eye_off_24_regular,
-                  color: onSurf.withValues(alpha: 0.4),
+                  color: Colors.white.withValues(alpha: 0.4),
                   size: 20,
                 ),
                 onPressed: onToggle,
@@ -616,13 +671,13 @@ class _AuthPage extends StatelessWidget {
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: onSurf.withValues(alpha: 0.1)),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: Theme.of(context).primaryColor, width: 1.5),
+          borderSide: const BorderSide(color: Color(0xFF1DB954), width: 1.5),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 17),
       ),
     );
   }

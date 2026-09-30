@@ -12,10 +12,11 @@ import 'package:muzo/services/download_service.dart';
 import 'package:muzo/widgets/playlist_selection_dialog.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/services/navigator_key.dart';
-import 'package:muzo/providers/overlay_provider.dart';
+import 'dart:async';
 import 'dart:ui';
 import 'package:share_plus/share_plus.dart';
 import 'package:muzo/widgets/sleep_timer_dialog.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class SongOptionsMenu extends ConsumerWidget {
   final MuzoItem result;
@@ -51,74 +52,43 @@ class SongOptionsMenu extends ConsumerWidget {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    if (fromPlayer) {
-      showModalBottomSheet(
-        context: context,
-        useRootNavigator: true,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (ctx) => DraggableScrollableSheet(
-          initialChildSize: 0.65,
-          minChildSize: 0.3,
-          maxChildSize: 0.85,
-          builder: (context, scrollController) => ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xD91C1C1E) : const Color(0xD9F2F2F7),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                  border: Border(
-                    top: BorderSide(
-                      color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08),
-                    ),
-                  ),
-                ),
-                child: SafeArea(
-                  top: false,
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: SongOptionsMenu(
-                      result: result,
-                      fromHistory: fromHistory,
-                      fromPlayer: fromPlayer,
-                      onClose: () => Navigator.of(ctx).pop(),
-                    ),
+    // A real modal sheet (DraggableScrollableSheet) so the menu can be
+    // dismissed by swiping down, its options scrolled with one continuous
+    // gesture, and the page behind is inert — no stuck overlay, no freeze.
+    showModalBottomSheet(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.55,
+        minChildSize: 0.25,
+        maxChildSize: 0.85,
+        builder: (context, scrollController) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xF00D0D0D) : const Color(0xD9F2F2F7),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(
+                  top: BorderSide(
+                    color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08),
                   ),
                 ),
               ),
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-
-    final screenHeight = MediaQuery.of(context).size.height;
-    ref.read(globalBottomSheetProvider.notifier).state = ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          constraints: BoxConstraints(maxHeight: screenHeight * 0.7),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xD91C1C1E) : const Color(0xD9F2F2F7),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            border: Border(
-              top: BorderSide(
-                color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08),
-              ),
-            ),
-          ),
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
-              child: SongOptionsMenu(
-                result: result,
-                fromHistory: fromHistory,
-                fromPlayer: fromPlayer,
-                onClose: () => ref.read(globalBottomSheetProvider.notifier).state = null,
+              child: SafeArea(
+                top: false,
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  child: SongOptionsMenu(
+                    result: result,
+                    fromHistory: fromHistory,
+                    fromPlayer: fromPlayer,
+                    onClose: () => Navigator.of(ctx).pop(),
+                  ),
+                ),
               ),
             ),
           ),
@@ -127,14 +97,63 @@ class SongOptionsMenu extends ConsumerWidget {
     );
   }
 
-  static void hide(WidgetRef ref) {
-    ref.read(globalBottomSheetProvider.notifier).state = null;
+  static void hide(WidgetRef ref) {}
+
+  /// Shares the track the way Hivefy does: a short text block (title, artist,
+  /// album, link) with the artwork attached as a PNG when it can be loaded.
+  Future<void> _shareItem() async {
+    final details = StringBuffer()
+      ..writeln(result.title)
+      ..writeln(result.displayArtist);
+    final album = result.album?.name;
+    if (album != null && album.isNotEmpty) details.writeln(album);
+    if (result.videoId != null) {
+      details.writeln('https://youtube.com/watch?v=${result.videoId}');
+    }
+
+    Uint8List? imageBytes;
+    final imageUrl = result.thumbnails.isNotEmpty
+        ? result.thumbnails.last.url
+        : '';
+    if (imageUrl.isNotEmpty) {
+      try {
+        final provider = NetworkImage(imageUrl);
+        final stream = provider.resolve(const ImageConfiguration());
+        final completer = Completer<ImageInfo>();
+        stream.addListener(ImageStreamListener((info, _) {
+          if (!completer.isCompleted) completer.complete(info);
+        }));
+        final info = await completer.future;
+        final byteData = await info.image.toByteData(
+          format: ImageByteFormat.png,
+        );
+        imageBytes = byteData?.buffer.asUint8List();
+        info.image.dispose();
+      } catch (e) {
+        debugPrint('Share artwork unavailable: $e');
+      }
+    }
+
+    await Share.shareXFiles(
+      imageBytes == null
+          ? const []
+          : [
+              XFile.fromData(
+                imageBytes,
+                name: '${result.title}.png',
+                mimeType: 'image/png',
+              ),
+            ],
+      text: details.toString(),
+      subject: result.title,
+    );
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final storage = ref.watch(storageServiceProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final l10n = AppLocalizations.of(context);
 
     return ValueListenableBuilder<List<MuzoItem>>(
       valueListenable: storage.favoritesListenable,
@@ -154,31 +173,37 @@ class SongOptionsMenu extends ConsumerWidget {
           _buildMenuOption(
             context,
             icon: FluentIcons.list_24_regular,
-            label: 'Add to queue',
-            onTap: () {
+            label: l10n.addToQueue,
+            onTap: () async {
               onClose?.call();
-              ref.read(audioHandlerProvider).addToQueue(result);
+              final queueMessage = l10n.addedToQueue;
+              final failureMessage = l10n.failedToAddToQueue;
+              final added = await ref
+                  .read(audioHandlerProvider)
+                  .addToQueue(result);
               final ctx = navigatorKey.currentContext;
-              if (ctx != null) showGlassSnackBar(ctx, 'Added to queue');
+              if (ctx != null && ctx.mounted) {
+                showGlassSnackBar(
+                  ctx,
+                  added ? queueMessage : failureMessage,
+                );
+              }
             },
           ),
           _buildMenuOption(
             context,
             icon: FluentIcons.share_24_regular,
-            label: 'Share',
-            onTap: () {
+            label: l10n.share,
+            onTap: () async {
               onClose?.call();
-              if (result.videoId != null) {
-                // ignore: deprecated_member_use
-                Share.share('https://youtube.com/watch?v=${result.videoId}');
-              }
+              await _shareItem();
             },
           ),
           if (fromPlayer) ...[
             _buildMenuOption(
               context,
               icon: FluentIcons.timer_24_regular,
-              label: 'Sleep Timer',
+              label: l10n.sleepTimer,
               onTap: () {
                 onClose?.call();
                 final ctx = navigatorKey.currentContext;
@@ -198,7 +223,7 @@ class SongOptionsMenu extends ConsumerWidget {
                 return _buildSwitchOption(
                   context,
                   icon: FluentIcons.wand_24_regular,
-                  label: 'Lofi Mode',
+                  label: l10n.lofiMode,
                   value: isLofi,
                   onChanged: (val) =>
                       ref.read(audioHandlerProvider).toggleLofiMode(),
@@ -209,7 +234,7 @@ class SongOptionsMenu extends ConsumerWidget {
           _buildMenuOption(
             context,
             icon: FluentIcons.play_circle_24_regular,
-            label: 'Play next',
+            label: l10n.playNext,
             onTap: () {
               onClose?.call();
               ref.read(audioHandlerProvider).playNext(result);
@@ -218,7 +243,7 @@ class SongOptionsMenu extends ConsumerWidget {
           _buildMenuOption(
             context,
             icon: FluentIcons.add_24_regular,
-            label: 'Add to playlist',
+            label: l10n.addToPlaylist,
             onTap: () {
               onClose?.call();
               final ctx = navigatorKey.currentContext;
@@ -236,7 +261,7 @@ class SongOptionsMenu extends ConsumerWidget {
             icon: isFav
                 ? FluentIcons.heart_24_filled
                 : FluentIcons.heart_24_regular,
-            label: isFav ? 'Remove from favorites' : 'Add to favorites',
+            label: isFav ? l10n.removeFromFavorites : l10n.addToFavorites,
             iconColor: isFav ? Colors.red : Theme.of(context).colorScheme.onSurface,
             onTap: () {
               onClose?.call();
@@ -245,7 +270,9 @@ class SongOptionsMenu extends ConsumerWidget {
               if (ctx != null) {
                 showGlassSnackBar(
                   ctx,
-                  isFav ? 'Removed from favorites' : 'Added to favorites',
+                  isFav
+                      ? l10n.removedFromFavoritesToast
+                      : l10n.addedToFavoritesToast,
                 );
               }
             },
@@ -254,14 +281,14 @@ class SongOptionsMenu extends ConsumerWidget {
             _buildMenuOption(
               context,
               icon: FluentIcons.history_24_regular,
-              label: 'Remove from history',
+              label: l10n.removeFromHistory,
               onTap: () {
                 onClose?.call();
                 if (result.videoId != null) {
                   storage.removeFromHistory(result.videoId!);
                   final ctx = navigatorKey.currentContext;
                   if (ctx != null) {
-                    showGlassSnackBar(ctx, 'Removed from history');
+                    showGlassSnackBar(ctx, l10n.removedFromHistory);
                   }
                 }
               },
@@ -272,7 +299,7 @@ class SongOptionsMenu extends ConsumerWidget {
             icon: isDownloaded
                 ? FluentIcons.checkmark_24_regular
                 : FluentIcons.arrow_download_24_regular,
-            label: isDownloaded ? 'Remove download' : 'Download',
+            label: isDownloaded ? l10n.removeDownload : l10n.downloaded,
             onTap: () async {
               onClose?.call();
               final downloadService = DownloadService();
@@ -281,11 +308,11 @@ class SongOptionsMenu extends ConsumerWidget {
                 if (storage.isDownloaded(result.videoId!)) {
                   await downloadService.deleteDownload(result.videoId!);
                   if (ctx != null && ctx.mounted) {
-                    showGlassSnackBar(ctx, 'Removed from downloads');
+                    showGlassSnackBar(ctx, l10n.removedDownloadToast);
                   }
                 } else {
                   if (ctx != null) {
-                    showGlassSnackBar(ctx, 'Downloading...');
+                    showGlassSnackBar(ctx, l10n.downloadStarted);
                   }
 
                   final success = await ref
@@ -294,14 +321,10 @@ class SongOptionsMenu extends ConsumerWidget {
 
                   final ctxAfter = navigatorKey.currentContext;
                   if (ctxAfter != null && ctxAfter.mounted) {
-                    if (success) {
-                      showGlassSnackBar(ctxAfter, 'Download complete');
-                    } else {
-                      showGlassSnackBar(
-                        ctxAfter,
-                        'Download failed - Please try again',
-                      );
-                    }
+                    showGlassSnackBar(
+                      ctxAfter,
+                      success ? l10n.downloadComplete : l10n.downloadFailed,
+                    );
                   }
                 }
               }
@@ -432,7 +455,7 @@ class SongOptionsMenu extends ConsumerWidget {
     final effectiveIconColor = iconColor ?? Theme.of(context).colorScheme.onSurface;
     return InkWell(
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         onTap();
       },
       child: Padding(
@@ -467,7 +490,7 @@ class SongOptionsMenu extends ConsumerWidget {
     final effectiveIconColor = iconColor ?? Theme.of(context).colorScheme.onSurface;
     return InkWell(
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         onChanged(!value);
       },
       child: Padding(
@@ -492,7 +515,7 @@ class SongOptionsMenu extends ConsumerWidget {
               child: CupertinoSwitch(
                 value: value,
                 onChanged: (val) {
-                  HapticFeedback.lightImpact();
+                  HapticFeedback.selectionClick();
                   onChanged(val);
                 },
                 activeTrackColor: Theme.of(context).colorScheme.primary,

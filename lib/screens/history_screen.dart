@@ -7,6 +7,8 @@ import 'package:muzo/widgets/result_tile.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
 import 'package:muzo/widgets/global_background.dart';
+import 'package:muzo/l10n/app_localizations.dart';
+import 'package:intl/intl.dart';
 
 class HistoryScreen extends ConsumerWidget {
   const HistoryScreen({super.key});
@@ -14,6 +16,7 @@ class HistoryScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final storage = ref.watch(storageServiceProvider);
+    final l10n = AppLocalizations.of(context);
 
     return GlobalBackground(
       child: Scaffold(
@@ -55,7 +58,7 @@ class HistoryScreen extends ConsumerWidget {
                       onPressed: () {
                         showAppAlertDialog(
                           context: context,
-                          title: 'Clear History',
+                          title: l10n.clearHistory,
                           content: Text(
                             'Are you sure you want to clear your listening history?',
                             style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
@@ -121,9 +124,13 @@ class HistoryScreen extends ConsumerWidget {
 
                 return SliverList(
                   delegate: SliverChildBuilderDelegate((context, index) {
+                    final item = history[index];
                     return ResultTile(
-                      result: history[index],
+                      result: item,
                       fromHistory: true,
+                      trailing: item.addedAt != null
+                          ? _HistoryTimestamp(timestamp: item.addedAt!)
+                          : null,
                     );
                   }, childCount: history.length),
                 );
@@ -135,5 +142,39 @@ class HistoryScreen extends ConsumerWidget {
         ),
       ),
     ),);
+  }
+}
+
+class _HistoryTimestamp extends StatelessWidget {
+  final String timestamp;
+  const _HistoryTimestamp({required this.timestamp});
+
+  String _format() {
+    final dt = DateTime.tryParse(timestamp);
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'Now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return DateFormat('MMM d').format(dt);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = _format();
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
+          fontSize: 11,
+          fontWeight: FontWeight.w400,
+        ),
+      ),
+    );
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/models/user_data.dart';
 import 'package:muzo/widgets/artist_tile.dart';
@@ -14,11 +16,11 @@ import 'package:muzo/providers/download_provider.dart';
 import 'package:muzo/screens/history_screen.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
 import 'package:muzo/utils/page_routes.dart';
-import 'package:muzo/widgets/spotify_import_dialog.dart';
 import 'package:muzo/providers/navigation_provider.dart';
 import 'package:muzo/screens/user_tracks_screen.dart';
 import 'package:muzo/screens/auth_screen.dart';
 import 'package:muzo/services/auth_service.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class LibraryScreen extends ConsumerStatefulWidget {
   const LibraryScreen({super.key});
@@ -50,6 +52,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Widget _buildAppBar(BuildContext context, StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -76,23 +79,38 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     radius: 16,
                     backgroundColor: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.1),
                     child: ClipOval(
-                      child: isSvg && cachedSvg != null
-                          ? SvgPicture.string(cachedSvg, height: 32, width: 32, fit: BoxFit.cover)
-                          : avatarUrl != null && !isSvg
-                              ? CachedNetworkImage(
-                                  imageUrl: avatarUrl,
-                                  height: 32, width: 32, fit: BoxFit.cover,
-                                  errorWidget: (_, __, ___) => Icon(
-                                    FluentIcons.person_24_regular,
-                                    color: Theme.of(context).colorScheme.onSurface,
-                                    size: 20,
-                                  ),
-                                )
-                              : Icon(
-                                  FluentIcons.person_24_regular,
-                                  color: Theme.of(context).colorScheme.onSurface,
-                                  size: 20,
-                                ),
+                      child: Builder(
+                        builder: (context) {
+                          final localPhoto = storage.profilePhotoPath;
+                          if (localPhoto != null && File(localPhoto).existsSync()) {
+                            return Image.file(
+                              File(localPhoto),
+                              height: 32,
+                              width: 32,
+                              fit: BoxFit.cover,
+                            );
+                          }
+                          if (isSvg && cachedSvg != null) {
+                            return SvgPicture.string(cachedSvg, height: 32, width: 32, fit: BoxFit.cover);
+                          }
+                          if (avatarUrl != null && !isSvg) {
+                            return CachedNetworkImage(
+                              imageUrl: avatarUrl,
+                              height: 32, width: 32, fit: BoxFit.cover,
+                              errorWidget: (_, __, ___) => Icon(
+                                FluentIcons.person_24_regular,
+                                color: Theme.of(context).colorScheme.onSurface,
+                                size: 20,
+                              ),
+                            );
+                          }
+                          return Icon(
+                            FluentIcons.person_24_regular,
+                            color: Theme.of(context).colorScheme.onSurface,
+                            size: 20,
+                          );
+                        },
+                      ),
                     ),
                   ),
                 );
@@ -100,7 +118,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             ),
             const SizedBox(width: 12),
             Text(
-              'Your Library',
+              l10n.yourLibrary,
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurface,
                 fontSize: 22,
@@ -220,10 +238,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             storage.downloadsListenable,
           ]),
           builder: (context, _) {
+            final l10n = AppLocalizations.of(context);
             final items = _getLibraryItems(storage);
 
             if (items.isEmpty) {
-              return const Center(
+              return Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -234,7 +253,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                     ),
                     SizedBox(height: 16),
                     Text(
-                      'Your library is empty',
+                      l10n.libraryEmpty,
                       style: TextStyle(color: Colors.grey),
                     ),
                   ],
@@ -254,6 +273,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Widget _buildGroupedSystemCard(BuildContext context, StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     final list = <Widget>[];
 
     // 1. Liked Songs
@@ -261,8 +281,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'Liked Songs',
-        subtitle: '$favoritesCount songs',
+        title: l10n.likedSongs,
+        subtitle: l10n.favoritesCountSongs(favoritesCount),
         icon: FluentIcons.heart_24_filled,
         iconBgColor: Colors.pinkAccent,
         onTap: () {
@@ -283,8 +303,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'History',
-        subtitle: 'Recently Played',
+        title: l10n.history,
+        subtitle: l10n.recentlyPlayed,
         icon: FluentIcons.history_24_filled,
         iconBgColor: Colors.orangeAccent,
         onTap: () {
@@ -303,8 +323,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'Downloads',
-        subtitle: '${downloads.length} files',
+        title: l10n.downloads,
+        subtitle: l10n.songsCountFiles(downloads.length),
         icon: FluentIcons.arrow_download_24_filled,
         iconBgColor: Colors.blueAccent,
         isLoading: isDownloading,
@@ -326,8 +346,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'My Uploads',
-        subtitle: 'Upload and manage your tracks',
+        title: l10n.myUploads,
+        subtitle: l10n.uploadAndManage,
         icon: FluentIcons.cloud_arrow_up_24_filled,
         iconBgColor: Colors.teal,
         onTap: () {
@@ -388,6 +408,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Widget _buildGroupedSystemCardForPlaylists(BuildContext context, StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     final list = <Widget>[];
 
     // 1. Liked Songs
@@ -395,8 +416,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'Liked Songs',
-        subtitle: '$favoritesCount songs',
+        title: l10n.likedSongs,
+        subtitle: l10n.favoritesCountSongs(favoritesCount),
         icon: FluentIcons.heart_24_filled,
         iconBgColor: Colors.pinkAccent,
         onTap: () {
@@ -417,8 +438,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'History',
-        subtitle: 'Recently Played',
+        title: l10n.history,
+        subtitle: l10n.recentlyPlayed,
         icon: FluentIcons.history_24_filled,
         iconBgColor: Colors.orangeAccent,
         onTap: () {
@@ -434,8 +455,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'My Uploads',
-        subtitle: 'Upload and manage your tracks',
+        title: l10n.myUploads,
+        subtitle: l10n.uploadAndManage,
         icon: FluentIcons.cloud_arrow_up_24_filled,
         iconBgColor: Colors.teal,
         onTap: () {
@@ -496,6 +517,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Widget _buildGroupedSystemCardForDownloads(BuildContext context, StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     final list = <Widget>[];
 
     // 1. Downloads
@@ -505,8 +527,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     list.add(
       _buildCompactSystemCell(
         context,
-        title: 'Downloads',
-        subtitle: '${downloads.length} files',
+        title: l10n.downloads,
+        subtitle: l10n.songsCountFiles(downloads.length),
         icon: FluentIcons.arrow_download_24_filled,
         iconBgColor: Colors.blueAccent,
         isLoading: isDownloading,
@@ -589,7 +611,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         child: isLoading
             ? const Padding(
                 padding: EdgeInsets.all(8.0),
-                child: CircularProgressIndicator(
+                child: SpotifySpinner(
                   color: Colors.white,
                   strokeWidth: 2,
                 ),
@@ -624,6 +646,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   List<Widget> _getLibraryItems(StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     final selectedFilter = ref.read(libraryFilterProvider);
     final List<Widget> list = [];
     final showPlaylists =
@@ -648,7 +671,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         list.add(
           LibraryTile(
             title: name,
-            subtitle: 'Playlist • ${songs.length} songs',
+            subtitle: l10n.playlistSongsCount(songs.length),
             imageUrl: songs.isNotEmpty && songs.first.thumbnails.isNotEmpty
                 ? songs.first.thumbnails.last.url
                 : null,
@@ -663,45 +686,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
           ),
         );
       }
-
-      // Add the "Import from Spotify" tile
-      list.add(
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-          leading: Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1DB954).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: const Icon(FluentIcons.arrow_import_24_filled, color: Color(0xFF1DB954), size: 22),
-          ),
-          title: Text(
-            'Import from Spotify',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 15,
-              color: Theme.of(context).colorScheme.onSurface,
-            ),
-          ),
-          subtitle: const Text(
-            'Add playlists via URL',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          trailing: Icon(
-            CupertinoIcons.chevron_right,
-            size: 13,
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.25),
-          ),
-          onTap: () {
-            showDialog(
-              context: context,
-              builder: (context) => const SpotifyImportDialog(),
-            );
-          },
-        ),
-      );
     }
 
     // 3. Artists (from History)
@@ -738,15 +722,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   void _showCreatePlaylistDialog(BuildContext context, StorageService storage) {
+    final l10n = AppLocalizations.of(context);
     final controller = TextEditingController();
     showAppAlertDialog(
       context: context,
-      title: 'Create Playlist',
+      title: l10n.createPlaylist,
       content: Padding(
         padding: const EdgeInsets.only(top: 16.0),
         child: CupertinoTextField(
           controller: controller,
-          placeholder: 'Playlist Name',
+          placeholder: l10n.playlistNameHint,
           placeholderStyle: const TextStyle(color: CupertinoColors.systemGrey),
           style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           decoration: BoxDecoration(
@@ -757,18 +742,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+          onPressed: () { if (context.mounted && Navigator.canPop(context)) Navigator.pop(context); },
+          child: Text(l10n.cancel, style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
         ),
         TextButton(
           onPressed: () {
             if (controller.text.isNotEmpty) {
               storage.createPlaylist(controller.text);
-              Navigator.pop(context);
+              if (context.mounted && Navigator.canPop(context)) Navigator.pop(context);
             }
           },
           child: Text(
-            'Create',
+            l10n.create,
             style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           ),
         ),
@@ -781,22 +766,23 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     String playlistName,
     StorageService storage,
   ) {
+    final l10n = AppLocalizations.of(context);
     showAppAlertDialog(
       context: context,
-      title: 'Playlist Options',
+      title: l10n.playlistOptions,
       content: Text('Are you sure you want to delete the playlist "$playlistName"?'),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          onPressed: () { if (context.mounted && Navigator.canPop(context)) Navigator.pop(context); },
+          child: Text(l10n.cancel),
         ),
         TextButton(
           onPressed: () {
-            Navigator.pop(context);
+            if (context.mounted && Navigator.canPop(context)) Navigator.pop(context);
             storage.deletePlaylist(playlistName);
           },
           child: Text(
-            'Delete',
+            l10n.delete,
             style: TextStyle(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.bold),
           ),
         ),
@@ -805,28 +791,29 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   void _showGuestLoginPrompt(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     showAppAlertDialog(
       context: context,
-      title: 'Sign In Required',
+      title: l10n.signInRequired,
       content: Text(
         'Uploads require a registered account. Sign in or sign up to start uploading your own tracks!',
         style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel', style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
+          onPressed: () { if (context.mounted && Navigator.canPop(context)) Navigator.pop(context); },
+          child: Text(l10n.cancel, style: TextStyle(color: Theme.of(context).colorScheme.onSurface)),
         ),
         TextButton(
           onPressed: () {
-            Navigator.pop(context); // Close dialog
+            if (context.mounted && Navigator.canPop(context)) Navigator.pop(context); // Close dialog
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const AuthScreen()),
             );
           },
           child: Text(
-            'Sign In',
+            l10n.signIn,
             style: TextStyle(
               color: Theme.of(context).primaryColor,
               fontWeight: FontWeight.bold,

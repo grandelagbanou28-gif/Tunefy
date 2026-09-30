@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/services/muzo_api_service.dart'; // Ensure valid import
 import 'package:muzo/widgets/library_tile.dart';
-import 'package:muzo/screens/artist_screen.dart';
+import 'package:muzo/screens/artist_page_screen.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/page_routes.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 
 class ArtistTile extends ConsumerStatefulWidget {
   final String artistName;
@@ -67,8 +68,8 @@ class _ArtistTileState extends ConsumerState<ArtistTile> {
           }
         } else {
           // Fallback if we only have the artistName (rare but possible)
-          final _apiService = ref.read(muzoApiServiceProvider);
-          final response = await _apiService.search(
+          final apiService = ref.read(muzoApiServiceProvider);
+          final response = await apiService.search(
             widget.artistName,
             filter: 'artists',
           );
@@ -76,10 +77,7 @@ class _ArtistTileState extends ConsumerState<ArtistTile> {
             final result = response.results.first;
             setState(() {
               if (result.thumbnails.isNotEmpty) {
-                final highResUrl = result.thumbnails.last.url.replaceAll(
-                  RegExp(r'=[sw]\d+(-h\d+)?'),
-                  '=s800',
-                );
+                final highResUrl = _highRes(result.thumbnails.last.url);
                 _avatarUrl = highResUrl;
                 storage.setArtistImage(widget.artistName, highResUrl);
               }
@@ -95,11 +93,20 @@ class _ArtistTileState extends ConsumerState<ArtistTile> {
     }
   }
 
+  /// Rebuilds the YouTube image URL at 800px. Simple `=s800` string swaps
+  /// conflict with multi-param sizes like `=w60-h60-p-l90-rj`, so we keep the
+  /// base path and set a single canonical size descriptor.
+  static String _highRes(String url) {
+    final base = url.split('=').first;
+    if (base == url) return url;
+    return '$base=s800-c-k-no';
+  }
+
   @override
   Widget build(BuildContext context) {
     return LibraryTile(
       title: widget.artistName,
-      subtitle: 'Artist',
+      subtitle: AppLocalizations.of(context).artistType,
       imageUrl: _avatarUrl,
       isRound: true,
       placeholderIcon: FluentIcons.person_24_regular,
@@ -109,10 +116,9 @@ class _ArtistTileState extends ConsumerState<ArtistTile> {
         if (id.isNotEmpty) {
           nav.push(
             SlidePageRoute(
-              page: ArtistScreen(
-                browseId: id,
+              page: ArtistPageScreen(
                 artistName: widget.artistName,
-                thumbnailUrl: _avatarUrl,
+                imageUrl: _avatarUrl,
               ),
             ),
           );

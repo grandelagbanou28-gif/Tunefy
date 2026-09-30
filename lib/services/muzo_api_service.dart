@@ -8,9 +8,11 @@ import 'package:muzo/models/user_data.dart';
 import 'package:muzo/models/artist_details.dart';
 import 'package:muzo/models/album_details.dart';
 import 'package:muzo/services/auth_service.dart';
+import 'package:muzo/services/indian_content_filter.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/api_constants.dart';
 import 'package:muzo/models/user_track.dart';
+import 'package:muzo/services/piped_api_service.dart';
 
 final muzoApiServiceProvider = Provider<MuzoApiService>((ref) {
   final storage = ref.watch(storageServiceProvider);
@@ -31,6 +33,37 @@ class MuzoApiService {
 
   MuzoApiService(this._storage) {
     _auth = AuthService(_storage);
+  }
+
+  /// Copies a raw backend map and stamps provenance so every item remembers
+  /// where it came from and when it was fetched (never fabricated — just the
+  /// actual retrieval metadata).
+  static Map<String, dynamic> _taggedJson(dynamic raw, String source) {
+    return Map<String, dynamic>.from(raw as Map)
+      ..['source'] = source
+      ..['fetched_at'] = DateTime.now().toIso8601String();
+  }
+
+  static String _stripAccents(String s) {
+    const map = {
+      'à': 'a', 'á': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'æ': 'ae',
+      'ç': 'c', 'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
+      'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
+      'ð': 'd', 'ñ': 'n', 'ò': 'o', 'ó': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o',
+      'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+      'ý': 'y', 'þ': 'th', 'ÿ': 'y',
+      'À': 'A', 'Á': 'A', 'Â': 'A', 'Ä': 'A', 'Ã': 'A', 'Å': 'A', 'Æ': 'AE',
+      'Ç': 'C', 'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E',
+      'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I',
+      'Ð': 'D', 'Ñ': 'N', 'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Ö': 'O', 'Õ': 'O',
+      'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U',
+      'Ý': 'Y', 'Þ': 'TH', 'Ÿ': 'Y',
+    };
+    var result = s;
+    for (final e in map.entries) {
+      result = result.replaceAll(e.key, e.value);
+    }
+    return result;
   }
 
   static const String _baseUrl = ApiConstants.mainApiBaseUrl;
@@ -308,12 +341,12 @@ class MuzoApiService {
 
   Future<List<MuzoItem>> getTopOnMuzo() async {
     try {
-      final uri = Uri.parse('https://veltrixcode-ytify.hf.space/api/trending');
+      final uri = Uri.parse('${ApiConstants.extendedWorkerBaseUrl}/api/trending');
       debugPrint('TOP ON MUZO Request: $uri');
       final response = await _client.get(
         uri,
         headers: _ytHeaders,
-      );
+      ).timeout(const Duration(seconds: 15));
       debugPrint('TOP ON MUZO Response [${response.statusCode}]');
 
       if (response.statusCode != 200) {
@@ -321,12 +354,12 @@ class MuzoApiService {
       }
 
       final data = jsonDecode(response.body);
-      final List? trendingList = data['trending'] as List?;
-      if (trendingList == null) {
+      final trendingList = data['data']?['songs'] as List? ?? data['trending'] as List?;
+      if (trendingList == null || trendingList.isEmpty) {
         return [];
       }
 
-      return trendingList.where((e) => e is Map).map((json) {
+      return filterIndianContent(trendingList.whereType<Map>().map((json) {
         final map = Map<String, dynamic>.from(json);
         final String durationStr = map['duration'] != null ? map['duration'].toString() : '';
         int? durationSecs;
@@ -355,7 +388,7 @@ class MuzoApiService {
           duration: durationStr.isNotEmpty ? durationStr : null,
           durationSeconds: durationSecs,
         );
-      }).toList();
+      }).toList());
     } catch (e) {
       debugPrint('Error fetching Top on Muzo: $e');
       return [];
@@ -385,10 +418,10 @@ class MuzoApiService {
         return [];
       }
 
-      return feedList
-          .where((e) => e is Map)
-          .map((json) => MuzoItem.fromJson(Map<String, dynamic>.from(json)))
-          .toList();
+      return filterIndianContent(feedList
+          .whereType<Map>()
+          .map((json) => MuzoItem.fromJson(_taggedJson(json, 'ytify')))
+          .toList());
     } catch (e) {
       debugPrint('Error fetching quick picks: $e');
       return [];
@@ -423,7 +456,10 @@ class MuzoApiService {
         debugPrint('UPNEXT: songs key is null');
         return [];
       }
-      return list.map((e) => MuzoItem.fromJson(Map<String, dynamic>.from(e)..putIfAbsent('resultType', () => 'song'))).toList();
+      return filterIndianContent(list
+          .map((e) => MuzoItem.fromJson(_taggedJson(e, 'ytify')
+            ..putIfAbsent('resultType', () => 'song')))
+          .toList());
     } catch (e) {
       debugPrint('Error fetching Up Next: $e');
       return [];
@@ -436,10 +472,11 @@ class MuzoApiService {
     String query, {
     String filter = 'songs',
     String? continuationToken,
+    bool shortOnly = false,
   }) async {
     try {
       Uri uri;
-      final queryParams = {'q': query};
+      final queryParams = {'q': _stripAccents(query)};
 
       // If filter is explicitly 'all', don't send the filter parameter so we get categorized results
       if (filter != 'all') {
@@ -458,15 +495,57 @@ class MuzoApiService {
           .replace(queryParameters: queryParams);
 
       debugPrint('YOUTUBE_API SEARCH Request: $uri');
-      final response = await _client.get(
-        uri,
-        headers: _ytHeaders,
-      );
+      http.Response? response;
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        try {
+          response = await _client
+              .get(
+                uri,
+                headers: _ytHeaders,
+              )
+              .timeout(const Duration(seconds: 15));
+        } catch (e) {
+          debugPrint('YOUTUBE_API SEARCH attempt $attempt error: $e');
+          if (attempt < 3) {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            continue;
+          }
+          return MuzoSearchResponse(results: []);
+        }
+        if (response.statusCode == 200) break;
+        // The main worker occasionally 500s under transient load. Retrying a
+        // couple of times keeps category sections and seeds reliably filled
+        // before falling back to Piped, which is frequently out of service.
+        if (attempt < 3) {
+          debugPrint(
+              'YOUTUBE_API SEARCH ${response.statusCode}, retry $attempt/3...');
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+      }
+      if (response == null) {
+        debugPrint('YOUTUBE_API SEARCH error: no response after retries');
+        return MuzoSearchResponse(results: []);
+      }
       debugPrint('YOUTUBE_API SEARCH Response [${response.statusCode}]');
       debugPrint(
         'YOUTUBE_API SEARCH RAW: ${response.body.substring(0, (response.body.length > 300) ? 300 : response.body.length)}',
       );
       if (response.statusCode != 200) {
+        // Fallback to Piped API
+        debugPrint('MuzoApi: Main API failed, trying Piped fallback...');
+        try {
+          final pipedSongs = filterIndianContent(
+            await PipedApiService()
+                .search(query, filter: filter, shortOnly: shortOnly)
+                .timeout(const Duration(seconds: 12)),
+            contextQuery: query,
+          );
+          if (pipedSongs.isNotEmpty) {
+            return MuzoSearchResponse(results: pipedSongs);
+          }
+        } catch (e) {
+          debugPrint('MuzoApi: Piped fallback error: $e');
+        }
         return MuzoSearchResponse(results: []);
       }
 
@@ -481,11 +560,21 @@ class MuzoApiService {
         return MuzoSearchResponse(results: []);
       }
 
-      final results = resultsJson
-          .where((e) => e is Map)
-          .map((json) => MuzoItem.fromJson(Map<String, dynamic>.from(json)))
+      var results = resultsJson
+          .whereType<Map>()
+          .map((json) => MuzoItem.fromJson(_taggedJson(json, 'ytify')))
           .toList();
-      return MuzoSearchResponse(results: results, continuationToken: token);
+      if (shortOnly) {
+        // Le worker yt_search renvoie aussi des vidéos longues : en mode
+        // clips on ne garde que les vraies pièces courtes (durée connue ≤ 60 s).
+        results = results
+            .where((r) => r.durationSeconds == null || r.durationSeconds! <= 60)
+            .toList();
+      }
+      return MuzoSearchResponse(
+        results: filterIndianContent(results, contextQuery: query),
+        continuationToken: token,
+      );
     } catch (e) {
       debugPrint('YOUTUBE_API SEARCH error: $e');
       return MuzoSearchResponse(results: []);
@@ -504,10 +593,10 @@ class MuzoApiService {
       );
       if (response.statusCode != 200) return [];
       final List<dynamic> data = jsonDecode(response.body);
-      return data
-          .where((e) => e is Map)
-          .map((json) => MuzoItem.fromJson(Map<String, dynamic>.from(json)))
-          .toList();
+      return filterIndianContent(data
+          .whereType<Map>()
+          .map((json) => MuzoItem.fromJson(_taggedJson(json, 'ytify')))
+          .toList());
     } catch (e) {
       return [];
     }
@@ -530,7 +619,7 @@ class MuzoApiService {
       if (response.statusCode != 200) return [];
       final List<dynamic> data = jsonDecode(response.body);
       return data
-          .where((e) => e is Map)
+          .whereType<Map>()
           .map((json) => MuzoItem.fromJson(Map<String, dynamic>.from(json)))
           .toList();
     } catch (e) {
@@ -569,6 +658,22 @@ class MuzoApiService {
         headers: _ytHeaders,
       );
       if (response.statusCode != 200) {
+        // Fallback to Piped search (trending endpoint est peu fiable)
+        debugPrint('MuzoApi: Trending failed, trying Piped fallback...');
+        try {
+          final pipedSongs = await PipedApiService()
+              .search('top hits', filter: 'songs')
+              .timeout(const Duration(seconds: 12));
+          if (pipedSongs.isNotEmpty) {
+            return {
+              'songs': filterIndianContent(pipedSongs),
+              'videos': <MuzoItem>[],
+              'playlists': <MuzoItem>[],
+            };
+          }
+        } catch (e) {
+          debugPrint('MuzoApi: Piped trending fallback error: $e');
+        }
         return {'songs': [], 'videos': [], 'playlists': []};
       }
       final data = jsonDecode(response.body);
@@ -580,7 +685,7 @@ class MuzoApiService {
       List<MuzoItem> parseList(String key, {String? forceType}) {
         final list = content[key] as List?;
         if (list == null) return [];
-        return list.where((e) => e is Map).map((json) {
+        return list.whereType<Map>().map((json) {
           final map = Map<String, dynamic>.from(json);
           if (forceType != null) map['resultType'] = forceType;
           return MuzoItem.fromJson(map);
@@ -588,8 +693,8 @@ class MuzoApiService {
       }
 
       return {
-        'songs': parseList('songs'),
-        'videos': parseList('videos'),
+        'songs': filterIndianContent(parseList('songs')),
+        'videos': filterIndianContent(parseList('videos')),
         'playlists': parseList('playlists', forceType: 'playlist'),
       };
     } catch (e) {

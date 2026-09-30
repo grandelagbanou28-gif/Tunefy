@@ -6,6 +6,8 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
+import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class UpNextQueue extends ConsumerWidget {
   final Function(int, int) onReorderStart;
@@ -49,7 +51,7 @@ class UpNextQueue extends ConsumerWidget {
                               size: 56,
                               color: cs.onSurface.withValues(alpha: 0.18)),
                           const SizedBox(height: 12),
-                          Text('Queue is empty',
+                          Text(AppLocalizations.of(context).queueIsEmpty,
                               style: TextStyle(
                                   color: cs.onSurface.withValues(alpha: 0.38),
                                   fontSize: 15)),
@@ -102,7 +104,7 @@ class UpNextQueue extends ConsumerWidget {
                               audioHandler.removeQueueItem(index),
                         );
                       },
-                      onReorder: (oldIndex, newIndex) {
+                      onReorderItem: (oldIndex, newIndex) {
                         audioHandler.reorderQueue(oldIndex, newIndex);
                       },
                     ),
@@ -142,7 +144,7 @@ class UpNextQueue extends ConsumerWidget {
                                   color: cs.onSurface.withValues(alpha: 0.6)),
                               const SizedBox(width: 6),
                               Text(
-                                '${sequence.length} song${sequence.length == 1 ? '' : 's'}',
+                                AppLocalizations.of(context).songCounts(sequence.length),
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -160,7 +162,7 @@ class UpNextQueue extends ConsumerWidget {
                               : () {
                                   audioHandler.clearQueue();
                                   showGlassSnackBar(
-                                      context, 'Queue cleared');
+                                      context, AppLocalizations.of(context).queueCleared);
                                 },
                           style: TextButton.styleFrom(
                             foregroundColor: cs.onSurface,
@@ -173,7 +175,7 @@ class UpNextQueue extends ConsumerWidget {
                           ),
                           icon: const Icon(Icons.delete_sweep_rounded,
                               size: 18),
-                          label: const Text('Clear',
+                          label: Text(AppLocalizations.of(context).clear,
                               style: TextStyle(
                                   fontWeight: FontWeight.w600, fontSize: 13)),
                         ),
@@ -326,7 +328,7 @@ class _QueueTile extends StatelessWidget {
                           SizedBox(
                             width: 10,
                             height: 10,
-                            child: CircularProgressIndicator(
+                            child: SpotifySpinner(
                               strokeWidth: 1.5,
                               color: cs.onSurface.withValues(alpha: 0.4),
                             ),

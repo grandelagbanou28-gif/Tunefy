@@ -4,9 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/providers/search_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/utils/song_navigation.dart';
+import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/skeleton_loader.dart';
 
@@ -93,10 +95,21 @@ class _QuickPicksSectionState extends ConsumerState<QuickPicksSection> {
     try {
       final apiService = ref.read(muzoApiServiceProvider);
       final results = await apiService.getQuickPicks(ids);
-      
+
+      // Never repeat an artist inside Quick Picks.
+      final seenArtists = <String>{};
+      final deduped = <MuzoItem>[];
+      for (final song in results) {
+        final artist =
+            primaryArtistName(song.displayArtist).trim().toLowerCase();
+        if (artist.isNotEmpty && seenArtists.contains(artist)) continue;
+        if (artist.isNotEmpty) seenArtists.add(artist);
+        deduped.add(song);
+      }
+
       if (mounted) {
         setState(() {
-          _quickPicks = results;
+          _quickPicks = deduped;
           _isLoading = false;
           _lastFetchedIds = ids;
         });
@@ -167,7 +180,7 @@ class _QuickPicksSectionState extends ConsumerState<QuickPicksSection> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
       child: Text(
-        'Quick Picks',
+        AppLocalizations.of(context).quickPicks,
         style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurface,
               fontWeight: FontWeight.bold,
@@ -190,11 +203,11 @@ class QuickPickRowItem extends ConsumerWidget {
     
     return InkWell(
       onTap: () {
-        HapticFeedback.lightImpact();
-        ref.read(audioHandlerProvider).playVideo(item);
+        HapticFeedback.selectionClick();
+        openArtistForSong(context, item);
       },
       onLongPress: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         SongOptionsMenu.show(ref, item);
       },
       borderRadius: BorderRadius.circular(8),
@@ -251,7 +264,7 @@ class QuickPickRowItem extends ConsumerWidget {
                 size: 18,
               ),
               onPressed: () {
-                HapticFeedback.lightImpact();
+                HapticFeedback.selectionClick();
                 SongOptionsMenu.show(ref, item);
               },
             ),

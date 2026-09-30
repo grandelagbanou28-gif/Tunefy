@@ -62,8 +62,76 @@ class Lyrics {
 
 final lyricsServiceProvider = Provider((ref) => LyricsService());
 
+/// A single timed lyric line shared by every lyrics view (now-playing preview,
+/// fullscreen lyrics page) so they all parse and highlight the same way.
+class TimedLyricLine {
+  final Duration time;
+  final String text;
+  const TimedLyricLine(this.time, this.text);
+}
+
+/// Parse `[mm:ss.xx]` lines from [Lyrics.syncedLyrics] when available. Falls
+/// back to plain lines evenly spread across [fallbackDuration] so unsynced
+/// lyrics still auto-scroll and highlight — the SAME behaviour everywhere.
+List<TimedLyricLine> parseTimedLyrics(
+  Lyrics? lyrics,
+  Duration fallbackDuration,
+) {
+  if (lyrics == null) return const [];
+  final synced = lyrics.syncedLyrics.trim();
+  if (synced.isNotEmpty) {
+    final re = RegExp(r'\[(\d+):(\d+)[.:](\d+)\]\s*(.*)');
+    final parsed = <TimedLyricLine>[];
+    for (final line in synced.split('\n')) {
+      final m = re.firstMatch(line);
+      if (m == null) continue;
+      final minutes = int.parse(m.group(1)!);
+      final seconds = int.parse(m.group(2)!);
+      final frac = m.group(3)!;
+      final ms = minutes * 60000 +
+          seconds * 1000 +
+          int.parse(frac.padRight(2, '0').substring(0, 2)) * 10;
+      final text = m.group(4)?.trim() ?? '';
+      if (text.isNotEmpty) {
+        parsed.add(TimedLyricLine(Duration(milliseconds: ms), text));
+      }
+    }
+    if (parsed.isNotEmpty) return parsed;
+  }
+
+  final plain = lyrics.plainLyrics
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
+  if (plain.isEmpty) return const [];
+
+  final total = fallbackDuration == Duration.zero
+      ? const Duration(minutes: 4)
+      : fallbackDuration;
+  final interval = total.inMilliseconds ~/ (plain.length + 1);
+  return [
+    for (var i = 0; i < plain.length; i++)
+      TimedLyricLine(Duration(milliseconds: interval * (i + 1)), plain[i]),
+  ];
+}
+
 class LyricsService {
   static const String _baseUrl = 'https://lrclib.net/api';
+
+  /// In-memory cache of fetched lyrics keyed by "track|artist". Lets a song
+  /// that was already played show its lyrics instantly (no spinner) instead of
+  /// hitting the network again on every track change.
+  final Map<String, Lyrics?> _cache = {};
+
+  String _cacheKey(String track, String artist) =>
+      '$track|${artist.toLowerCase()}';
+
+  /// Returns cached lyrics for [track]/[artist] without hitting the network.
+  Lyrics? cachedLyrics(String trackName, String artistName) {
+    final key = _cacheKey(_cleanTitle(trackName), _cleanTitle(artistName));
+    return _cache.containsKey(key) ? _cache[key] : null;
+  }
 
   Future<Lyrics?> fetchLyrics(
     String trackName,
@@ -72,6 +140,11 @@ class LyricsService {
   ) async {
     final cleanTrack = _cleanTitle(trackName);
     final cleanArtist = _cleanTitle(artistName);
+    final cacheKey = _cacheKey(cleanTrack, cleanArtist);
+    if (_cache.containsKey(cacheKey)) {
+      debugPrint('LyricsService: Cache hit for "$cleanTrack"');
+      return _cache[cacheKey];
+    }
 
     // 1. Try Atomix Lyrics API primary
     try {
@@ -132,7 +205,7 @@ class LyricsService {
 
           if (plainBuffer.isNotEmpty) {
              debugPrint('LyricsService: Found lyrics via Atomix API (type: $responseType)');
-             return Lyrics(
+             final result = Lyrics(
                id: 0,
                name: cleanTrack,
                trackName: cleanTrack,
@@ -144,6 +217,8 @@ class LyricsService {
                syncedLyrics: syncedBuffer.toString(),
                karaokeLines: karaokeLines,
              );
+             _cache[cacheKey] = result;
+             return result;
           }
         }
       }
@@ -166,19 +241,21 @@ class LyricsService {
         final data = json.decode(response.body);
         if (data['plainLyrics'] != null || data['syncedLyrics'] != null) {
           debugPrint('LyricsService: Found exact match via LRCLIB GET');
-          return Lyrics.fromJson(data);
+          final result = Lyrics.fromJson(data);
+          _cache[cacheKey] = result;
+          return result;
         }
       } else if (response.statusCode == 404) {
         // Fallback to search
         debugPrint('LyricsService: LRCLIB GET failed (404), falling back to SEARCH');
-        return _searchLyrics(cleanTrack, cleanArtist, duration);
+        return await _searchLyrics(cleanTrack, cleanArtist, duration, cacheKey);
       }
 
       return null;
     } catch (e) {
       debugPrint('LyricsService: Error in LRCLIB GET: $e');
       // Last resort try search on error too
-      return _searchLyrics(cleanTrack, cleanArtist, duration);
+      return await _searchLyrics(cleanTrack, cleanArtist, duration, cacheKey);
     }
   }
 
@@ -186,6 +263,7 @@ class LyricsService {
     String track,
     String artist,
     int duration,
+    String cacheKey,
   ) async {
     try {
       final uri = Uri.parse(
@@ -198,7 +276,10 @@ class LyricsService {
         final List<dynamic> list = json.decode(response.body);
         debugPrint('LyricsService: Search returned ${list.length} results');
 
-        if (list.isEmpty) return null;
+        if (list.isEmpty) {
+          _cache[cacheKey] = null;
+          return null;
+        }
 
         // Find best match based on duration
         Lyrics? bestMatch;
@@ -223,11 +304,13 @@ class LyricsService {
           debugPrint(
             'LyricsService: Found best match "${bestMatch.trackName}" with diff ${minDiff}s',
           );
+          _cache[cacheKey] = bestMatch;
           return bestMatch;
         } else {
           debugPrint(
             'LyricsService: No match within duration tolerance (Best diff: ${minDiff}s)',
           );
+          _cache[cacheKey] = null;
         }
       } else {
         debugPrint(
@@ -237,6 +320,7 @@ class LyricsService {
     } catch (e) {
       debugPrint('LyricsService: Search Error: $e');
     }
+    _cache[cacheKey] = null;
     return null;
   }
 

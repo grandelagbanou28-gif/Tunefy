@@ -30,6 +30,14 @@ class AuthService extends ChangeNotifier {
   String? get token => _storage.authToken;
   bool get isAuthenticated => token != null;
 
+  /// Google OAuth access token (for YouTube Music API)
+  String? _googleAccessToken;
+  String? get googleAccessToken => _googleAccessToken;
+
+  /// Google OAuth refresh token (for YouTube Music token refresh)
+  String? _googleRefreshToken;
+  String? get googleRefreshToken => _googleRefreshToken;
+
   Future<void> signup(String username, String email, String password) async {
     final response = await http.post(
       Uri.parse('$_baseUrl/signup'),
@@ -93,6 +101,10 @@ class AuthService extends ChangeNotifier {
 
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
       final String? idToken = googleAuth.idToken;
+
+      // Capture access_token for YouTube Music API
+      _googleAccessToken = googleAuth.accessToken;
+      debugPrint('Google Sign-In: accessToken=${_googleAccessToken != null ? "obtained" : "null"}');
 
       if (idToken == null) {
         throw Exception('Failed to get ID token from Google.');

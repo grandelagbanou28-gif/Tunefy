@@ -1,15 +1,39 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/models/user_data.dart';
+import 'package:muzo/services/category_artists_service.dart';
+import 'package:muzo/services/benin_catalog_service.dart';
+import 'package:muzo/services/listening_stats_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/services/supabase_store.dart';
 import 'package:muzo/services/ytm_home.dart';
 import 'package:http/http.dart' as http;
 
 final storageServiceProvider = Provider<StorageService>((ref) {
   return StorageService();
 });
+
+/// Reactive current username so UI that greets the user ("Bonjour, …")
+/// rebuilds the moment the name is changed on the profile screen.
+final usernameProvider = NotifierProvider<_UsernameNotifier, String>(
+  _UsernameNotifier.new,
+);
+
+class _UsernameNotifier extends Notifier<String> {
+  @override
+  String build() => ref.read(storageServiceProvider).username ?? 'User';
+
+  Future<void> update(String value) async {
+    final trimmed = value.trim();
+    final limited = trimmed.length > 20 ? trimmed.substring(0, 20) : trimmed;
+    final finalName = limited.isEmpty ? 'User' : limited;
+    await ref.read(storageServiceProvider).setUsername(finalName);
+    state = finalName;
+  }
+}
 
 class StorageService {
   static const String _settingsBoxName = 'settings';
@@ -19,8 +43,13 @@ class StorageService {
   static const String _historyBoxName = 'history_cache';
   static const String _homeBoxName = 'home_cache';
   static const String _favoritesBoxName = 'favorites_cache';
+  static const String _searchHistoryBoxName = 'search_history';
   static const String _subscriptionsBoxName = 'subscriptions_cache';
   static const String _playlistsBoxName = 'playlists_cache';
+  static const String _playedPlaylistsBoxName = 'played_playlists_cache';
+  static const String _foldersBoxName = 'folders_cache';
+  static const String _pinsBoxName = 'pins_cache';
+  static const String _qrHistoryBoxName = 'qr_history';
 
   MuzoApiService? _apiInstance;
   MuzoApiService get _api {
@@ -28,23 +57,51 @@ class StorageService {
     return _apiInstance!;
   }
 
+  SupabaseStore? _supabase;
+  SupabaseStore? get supabase => _supabase;
+
   // In-memory state with Notifiers
   final ValueNotifier<List<MuzoItem>> _historyNotifier = ValueNotifier([]);
   final ValueNotifier<List<MuzoItem>> _favoritesNotifier = ValueNotifier([]);
   final ValueNotifier<List<Channel>> _subscriptionsNotifier = ValueNotifier([]);
   final ValueNotifier<List<Playlist>> _playlistsNotifier =
       ValueNotifier([]);
+  final ValueNotifier<List<String>> _playedPlaylistsNotifier =
+      ValueNotifier([]);
+  final ValueNotifier<List<Map<String, dynamic>>> _qrHistoryNotifier =
+      ValueNotifier([]);
   final ValueNotifier<bool> isLoadingNotifier = ValueNotifier(false);
   final ValueNotifier<String?> errorNotifier = ValueNotifier(null);
 
   Future<void> init() async {
-    await Hive.initFlutter();
+    if (kIsWeb) {
+      Hive.init(''); // IndexedDB backend on web (path_provider unavailable)
+    } else {
+      await Hive.initFlutter();
+    }
     await Hive.openBox(_settingsBoxName);
     await Hive.openBox(_downloadsBoxName);
     await Hive.openBox(_artistImagesBoxName);
     await Hive.openBox(_userAvatarBoxName);
     await Hive.openBox(_historyBoxName);
     await Hive.openBox(_homeBoxName);
+    await Hive.openBox(_searchHistoryBoxName);
+    await Hive.openBox(_foldersBoxName);
+    await Hive.openBox(_pinsBoxName);
+    await Hive.openBox(_qrHistoryBoxName);
+    await stats.init();
+
+    // Load QR history
+    final qrBox = Hive.box(_qrHistoryBoxName);
+    final cachedQr = qrBox.get('list');
+    if (cachedQr != null) {
+      try {
+        _qrHistoryNotifier.value =
+            (cachedQr as List).map((e) => Map<String, dynamic>.from(e)).toList();
+      } catch (e) {
+        debugPrint('Error loading QR history: $e');
+      }
+    }
 
     // Load cached history
     final historyBox = Hive.box(_historyBoxName);
@@ -101,9 +158,194 @@ class StorageService {
       }
     }
 
+    // Load recently played playlists
+    await Hive.openBox(_playedPlaylistsBoxName);
+    final playedBox = Hive.box(_playedPlaylistsBoxName);
+    final cachedPlayed = playedBox.get('list');
+    if (cachedPlayed != null) {
+      try {
+        _playedPlaylistsNotifier.value = (cachedPlayed as List)
+            .map((e) => e.toString())
+            .toList();
+      } catch (e) {
+        debugPrint('Error loading played playlists: $e');
+      }
+    }
+
     // API is now lazily initialized
+    // Supabase seed + merge happens in the background (await-free so the app
+    // starts immediately even offline).
+    _initSupabase();
+    // Large gospel catalog (Supabase REST → Hive cache → built-in list).
+    BeninCatalogService.instance.init();
+    // Curated category/sub artist seeds (Supabase → Hive cache → built-in maps).
+    CategoryArtistsService.instance.init();
     debugPrint('StorageService initialized');
   }
+
+  // ─── Supabase (durable DB layer, local Hive always wins as cache) ─────
+  Future<void> _initSupabase() async {
+    try {
+      final store = SupabaseStore();
+      _supabase = store;
+      await store.init();
+      debugPrint('Supabase ready: ${store.ready} uid=${store.uid}');
+      if (!store.ready) return;
+      await _mergeRemote();
+    } catch (e) {
+      debugPrint('Supabase unavailable (local-only mode): $e');
+      _supabase = null;
+    }
+  }
+
+  /// Runs [dbOp] on Supabase first; falls back to the legacy HTTP API when
+  /// Supabase is unavailable or rejects the write.
+  Future<void> _dbSync(
+    Future<void> Function(SupabaseStore s) dbOp,
+    Future<void> Function() fallback,
+  ) async {
+    final s = _supabase;
+    if (s != null && s.ready) {
+      try {
+        await dbOp(s);
+        return;
+      } catch (e) {
+        debugPrint('Supabase sync failed, falling back: $e');
+      }
+    }
+    try {
+      await fallback();
+    } catch (e) {
+      debugPrint('Legacy API sync failed: $e');
+    }
+  }
+
+  /// One-shot bidirectional merge at startup: union of local (Hive) and remote
+  /// (Supabase) data, then the merged result is pushed back to the DB.
+  Future<void> _mergeRemote() async {
+    final s = _supabase;
+    if (s == null) return;
+    await _mergeFavorites(s);
+    await _mergeHistory(s);
+    await _mergeSubscriptions(s);
+    await _mergePlaylists(s);
+  }
+
+  Future<void> _mergeFavorites(SupabaseStore s) async {
+    try {
+      final remote = await s.fetchFavorites();
+      final local = _favoritesNotifier.value;
+      final merged = List<MuzoItem>.from(local);
+      final seen = local.map((e) => e.videoId).toSet();
+      for (final r in remote) {
+        if (r.videoId != null && !seen.contains(r.videoId)) {
+          merged.add(r);
+          seen.add(r.videoId);
+        }
+      }
+      if (merged.length != local.length) {
+        _favoritesNotifier.value = merged;
+        _saveFavoritesToCache(merged);
+      }
+      for (final m in merged) {
+        if (m.videoId == null) continue;
+        if (remote.any((r) => r.videoId == m.videoId)) continue;
+        try {
+          await s.addToFavorites(m);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Merge favorites failed: $e');
+    }
+  }
+
+  Future<void> _mergeHistory(SupabaseStore s) async {
+    try {
+      final remote = await s.fetchHistory();
+      final local = _historyNotifier.value;
+      final merged = List<MuzoItem>.from(local);
+      final seen = local.map((e) => e.videoId).toSet();
+      for (final r in remote) {
+        if (r.videoId != null && !seen.contains(r.videoId)) {
+          if (merged.length >= SupabaseStore.maxHistoryLength) break;
+          merged.add(r);
+          seen.add(r.videoId);
+        }
+      }
+      if (merged.length != local.length) {
+        _historyNotifier.value = merged;
+        _saveHistoryToCache(merged);
+      }
+      for (final m in merged) {
+        if (m.videoId == null) continue;
+        if (remote.any((r) => r.videoId == m.videoId)) continue;
+        try {
+          await s.addToHistory(m);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Merge history failed: $e');
+    }
+  }
+
+  Future<void> _mergeSubscriptions(SupabaseStore s) async {
+    try {
+      final remote = await s.fetchSubscriptions();
+      final local = _subscriptionsNotifier.value;
+      String keyOf(Channel c) => '${c.channelId ?? ''}|${c.name}';
+      final merged = List<Channel>.from(local);
+      final seen = local.map(keyOf).toSet();
+      for (final r in remote) {
+        final k = keyOf(r);
+        if (!seen.contains(k)) {
+          merged.add(r);
+          seen.add(k);
+        }
+      }
+      if (merged.length != local.length) {
+        _subscriptionsNotifier.value = merged;
+        _saveSubscriptionsToCache(merged);
+      }
+      for (final m in merged) {
+        final k = keyOf(m);
+        if (remote.any((r) => keyOf(r) == k)) continue;
+        try {
+          await s.addSubscription(m);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Merge subscriptions failed: $e');
+    }
+  }
+
+  Future<void> _mergePlaylists(SupabaseStore s) async {
+    try {
+      final remote = await s.fetchPlaylists();
+      final local = _playlistsNotifier.value;
+      final merged = List<Playlist>.from(local);
+      final seen = local.map((p) => p.name).toSet();
+      for (final r in remote) {
+        if (!seen.contains(r.name)) {
+          merged.add(r);
+          seen.add(r.name);
+        }
+      }
+      if (merged.length != local.length) {
+        _playlistsNotifier.value = merged;
+        _savePlaylistsToCache(merged);
+      }
+      for (final m in merged) {
+        if (remote.any((r) => r.name == m.name)) continue;
+        try {
+          await s.savePlaylist(m);
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Merge playlists failed: $e');
+    }
+  }
+
+  final ListeningStatsService stats = ListeningStatsService();
 
   Future<void> refreshAll({bool silent = false}) async {
     if (!silent) isLoadingNotifier.value = true;
@@ -151,12 +393,15 @@ class StorageService {
       _subscriptionsNotifier;
   ValueListenable<List<Playlist>> get playlistsListenable =>
       _playlistsNotifier;
+  ValueListenable<List<String>> get playedPlaylistsListenable =>
+      _playedPlaylistsNotifier;
 
   // Synchronous getters for current state
   List<MuzoItem> getHistory() => _historyNotifier.value;
   List<MuzoItem> getFavorites() => _favoritesNotifier.value;
   List<Channel> getSubscriptions() => _subscriptionsNotifier.value;
   List<String> getPlaylistNames() => _playlistsNotifier.value.map((p) => p.name).toList();
+  List<String> getPlayedPlaylists() => _playedPlaylistsNotifier.value;
   List<MuzoItem> getPlaylistSongs(String name) {
     try {
       return _playlistsNotifier.value.firstWhere((p) => p.name == name).songs;
@@ -167,20 +412,29 @@ class StorageService {
 
   // History
   Future<void> addToHistory(MuzoItem result) async {
-    if (result.resultType == 'user_track') {
+    // Broadcast/audio-only sources use 'user_track'; only podcast episodes
+    // (iTunes, it_pod_*) are allowed through so played shows/episodes end up
+    // in the Library podcasts tab and recently-played feeds.
+    final videoId = result.videoId ?? '';
+    final isPodcastEpisode = result.source == 'itunes podcast' &&
+        !videoId.startsWith('it_podshow');
+    if (result.resultType == 'user_track' && !isPodcastEpisode) {
       return;
     }
+    final timestamped = result.copyWith(addedAt: DateTime.now().toIso8601String());
     // Optimistic update
     final current = List<MuzoItem>.from(_historyNotifier.value);
-    current.insert(0, result);
+    current.insert(0, timestamped);
     _historyNotifier.value = current;
     _saveHistoryToCache(current);
 
     try {
-      await _api.addToHistory(result);
+      await _dbSync(
+        (s) => s.addToHistory(timestamped),
+        () => _api.addToHistory(timestamped),
+      );
     } catch (e) {
       debugPrint('Error adding to history API: $e');
-      // We don't set errorNotifier here to avoid spamming user on every song play
     }
   }
 
@@ -194,7 +448,10 @@ class StorageService {
     _saveHistoryToCache(current);
 
     try {
-      await _api.removeFromHistory(videoId);
+      await _dbSync(
+        (s) => s.removeFromHistory(videoId),
+        () => _api.removeFromHistory(videoId),
+      );
     } catch (e) {
       errorNotifier.value = 'Failed to remove from history: $e';
       // Revert optimistic update?
@@ -210,7 +467,7 @@ class StorageService {
   Future<void> clearHistory() async {
     isLoadingNotifier.value = true;
     try {
-      await _api.clearHistory();
+      await _dbSync((s) => s.clearHistory(), () => _api.clearHistory());
       _historyNotifier.value = [];
       _saveHistoryToCache([]);
     } catch (e) {
@@ -222,27 +479,52 @@ class StorageService {
 
   // Playlists
 
+  /// Records a playlist as recently played (most recent first, deduped).
+  /// Persisted locally so the Library Playlists tab can show played playlists
+  /// even after they are deleted.
+  Future<void> recordPlayedPlaylist(String name) async {
+    if (name.isEmpty) return;
+    final current = List<String>.from(_playedPlaylistsNotifier.value);
+    current.remove(name);
+    current.insert(0, name);
+    if (current.length > 100) {
+      current.removeRange(100, current.length);
+    }
+    _playedPlaylistsNotifier.value = current;
+    try {
+      final box = Hive.box(_playedPlaylistsBoxName);
+      await box.put('list', current);
+    } catch (e) {
+      debugPrint('Error saving played playlists: $e');
+    }
+  }
+
   Future<void> createPlaylist(String name) async {
     // Playlists are auto-created by the API when a song is added.
-    // Just update local state optimistically.
+    // Just update local state optimistically (and seed the DB row).
     final current = List<Playlist>.from(_playlistsNotifier.value);
     if (!current.any((p) => p.name == name)) {
-      current.add(Playlist(
+      final playlist = Playlist(
         id: 0,
         name: name,
         createdAt: DateTime.now().toIso8601String(),
         songCount: 0,
         songs: [],
-      ));
+      );
+      current.add(playlist);
       _playlistsNotifier.value = current;
       _savePlaylistsToCache(current);
+      await _dbSync((s) => s.savePlaylist(playlist), () async {});
     }
   }
 
   Future<void> deletePlaylist(String name) async {
     isLoadingNotifier.value = true;
     try {
-      await _api.deletePlaylist(name);
+      await _dbSync(
+        (s) => s.deletePlaylist(name),
+        () => _api.deletePlaylist(name),
+      );
       final current = List<Playlist>.from(_playlistsNotifier.value);
       current.removeWhere((p) => p.name == name);
       _playlistsNotifier.value = current;
@@ -266,15 +548,19 @@ class StorageService {
       if (!songs.any((s) => s.videoId == result.videoId)) {
         isLoadingNotifier.value = true;
         try {
-          await _api.addToPlaylist(name, result);
-          songs.add(result);
-          current[playlistIndex] = Playlist(
+          final updated = Playlist(
             id: playlist.id,
             name: playlist.name,
             createdAt: playlist.createdAt,
-            songCount: songs.length,
-            songs: songs,
+            songCount: songs.length + 1,
+            songs: [...songs, result],
           );
+          await _dbSync(
+            (s) => s.savePlaylist(updated),
+            () => _api.addToPlaylist(name, result),
+          );
+          songs.add(result);
+          current[playlistIndex] = updated;
           _playlistsNotifier.value = current;
           _savePlaylistsToCache(current);
         } catch (e) {
@@ -308,7 +594,10 @@ class StorageService {
 
       isLoadingNotifier.value = true;
       try {
-        await _api.removeSongFromPlaylist(name, videoId);
+        await _dbSync(
+          (s) => s.savePlaylist(current[playlistIndex]),
+          () => _api.removeSongFromPlaylist(name, videoId),
+        );
       } catch (e) {
         errorNotifier.value = 'Failed to remove from playlist: $e';
       } finally {
@@ -317,32 +606,227 @@ class StorageService {
     }
   }
 
+  /// Persists a manual track re-order inside a user playlist.
+  ///
+  /// [oldIndex] and [newIndex] come from a `ReorderableListView`, where
+  /// [newIndex] is an insertion slot in the list *before* the dragged row is
+  /// lifted out — hence the `- 1` when moving downwards. Delegates to
+  /// [movePlaylistTrack]. Prefer the latter with `onReorderItem`, which
+  /// already hands over a settled target index.
+  Future<void> reorderPlaylist(String name, int oldIndex, int newIndex) async {
+    final target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    return movePlaylistTrack(name, oldIndex, target);
+  }
+
+  /// Moves the track at [from] to the final position [to] (both already
+  /// resolved, no further adjustment applied).
+  Future<void> movePlaylistTrack(String name, int from, int to) async {
+    if (name == 'Favorites' || name == 'Downloads') return;
+
+    final current = List<Playlist>.from(_playlistsNotifier.value);
+    final playlistIndex = current.indexWhere((p) => p.name == name);
+    if (playlistIndex == -1) return;
+
+    final songs = List<MuzoItem>.from(current[playlistIndex].songs);
+    if (from < 0 || from >= songs.length) return;
+
+    var target = to;
+    if (target < 0) target = 0;
+    if (target > songs.length - 1) target = songs.length - 1;
+    if (target == from) return;
+
+    final moved = songs.removeAt(from);
+    songs.insert(target, moved);
+
+    final playlist = current[playlistIndex];
+    current[playlistIndex] = Playlist(
+      id: playlist.id,
+      name: playlist.name,
+      createdAt: playlist.createdAt,
+      songCount: songs.length,
+      songs: songs,
+    );
+    _playlistsNotifier.value = current;
+    _savePlaylistsToCache(current);
+
+    isLoadingNotifier.value = true;
+    try {
+      await _dbSync(
+        (s) => s.savePlaylist(current[playlistIndex]),
+        () async {},
+      );
+    } catch (e) {
+      errorNotifier.value = 'Failed to reorder playlist: $e';
+    } finally {
+      isLoadingNotifier.value = false;
+    }
+  }
+
+  // ─── Folders ───
+  List<Map<String, dynamic>> getFolders() {
+    final box = Hive.box(_foldersBoxName);
+    final data = box.get('list');
+    if (data == null) return [];
+    try {
+      return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  Future<void> createFolder(String name) async {
+    final folders = getFolders();
+    if (folders.any((f) => f['name'] == name)) return;
+    folders.insert(0, {'name': name, 'playlists': <String>[]});
+    final box = Hive.box(_foldersBoxName);
+    await box.put('list', folders);
+  }
+
+  Future<void> deleteFolder(String name) async {
+    final folders = getFolders();
+    folders.removeWhere((f) => f['name'] == name);
+    final box = Hive.box(_foldersBoxName);
+    await box.put('list', folders);
+  }
+
+  Future<void> renameFolder(String oldName, String newName) async {
+    final folders = getFolders();
+    final idx = folders.indexWhere((f) => f['name'] == oldName);
+    if (idx == -1) return;
+    folders[idx]['name'] = newName;
+    final box = Hive.box(_foldersBoxName);
+    await box.put('list', folders);
+  }
+
+  Future<void> addPlaylistToFolder(String folderName, String playlistName) async {
+    final folders = getFolders();
+    final idx = folders.indexWhere((f) => f['name'] == folderName);
+    if (idx == -1) return;
+    final playlists = List<String>.from(folders[idx]['playlists'] ?? []);
+    if (!playlists.contains(playlistName)) {
+      playlists.add(playlistName);
+      folders[idx]['playlists'] = playlists;
+      final box = Hive.box(_foldersBoxName);
+      await box.put('list', folders);
+    }
+  }
+
+  Future<void> removePlaylistFromFolder(String folderName, String playlistName) async {
+    final folders = getFolders();
+    final idx = folders.indexWhere((f) => f['name'] == folderName);
+    if (idx == -1) return;
+    final playlists = List<String>.from(folders[idx]['playlists'] ?? []);
+    playlists.remove(playlistName);
+    folders[idx]['playlists'] = playlists;
+    final box = Hive.box(_foldersBoxName);
+    await box.put('list', folders);
+  }
+
+  // ─── Pins ───
+  List<String> getPinnedItems() {
+    final box = Hive.box(_pinsBoxName);
+    final data = box.get('list');
+    if (data == null) return [];
+    try {
+      return List<String>.from(data);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  bool isPinned(String itemId) => getPinnedItems().contains(itemId);
+
+  Future<void> pinItem(String itemId) async {
+    final pins = getPinnedItems();
+    if (pins.contains(itemId) || pins.length >= 20) return;
+    pins.insert(0, itemId);
+    final box = Hive.box(_pinsBoxName);
+    await box.put('list', pins);
+  }
+
+  Future<void> unpinItem(String itemId) async {
+    final pins = getPinnedItems();
+    pins.remove(itemId);
+    final box = Hive.box(_pinsBoxName);
+    await box.put('list', pins);
+  }
+
   // Favorites
   bool isFavorite(String videoId) {
     return _favoritesNotifier.value.any((s) => s.videoId == videoId);
   }
 
   Future<void> toggleFavorite(MuzoItem result) async {
-    isLoadingNotifier.value = true;
     final current = List<MuzoItem>.from(_favoritesNotifier.value);
     final index = current.indexWhere((s) => s.videoId == result.videoId);
 
+    // Optimistic local update so the UI reflects the change immediately.
+    if (index != -1) {
+      current.removeAt(index);
+    } else {
+      current.insert(0, result);
+    }
+    _favoritesNotifier.value = current;
+    _saveFavoritesToCache(current);
+
     try {
       if (index != -1) {
-        // Remove
-        await _api.removeFromFavorites(result.videoId!);
-        current.removeAt(index);
-        _favoritesNotifier.value = current;
+        await _dbSync(
+          (s) => s.removeFromFavorites(result.videoId!),
+          () => _api.removeFromFavorites(result.videoId!),
+        );
       } else {
-        // Add
-        await _api.addToFavorites(result);
-        current.insert(0, result);
-        _favoritesNotifier.value = current;
+        await _dbSync(
+          (s) => s.addToFavorites(result),
+          () => _api.addToFavorites(result),
+        );
       }
     } catch (e) {
-      errorNotifier.value = 'Failed to update favorites: $e';
-    } finally {
-      isLoadingNotifier.value = false;
+      debugPrint('Failed to sync favorites: $e');
+      errorNotifier.value = 'Failed to sync favorites: $e';
+    }
+  }
+
+  /// Batch-sets [songs] as favorites (or removes them) with an optimistic local
+  /// update first, then syncs to the backend in the background.
+  Future<void> setFavoriteBatch(
+    List<MuzoItem> songs, {
+    required bool favorite,
+  }) async {
+    final current = List<MuzoItem>.from(_favoritesNotifier.value);
+    final targetIds = songs
+        .where((s) => s.videoId != null)
+        .map((s) => s.videoId!)
+        .toSet();
+
+    if (favorite) {
+      for (final s in songs) {
+        if (s.videoId != null &&
+            !current.any((c) => c.videoId == s.videoId)) {
+          current.insert(0, s);
+        }
+      }
+    } else {
+      current.removeWhere((c) => c.videoId != null && targetIds.contains(c.videoId));
+    }
+
+    _favoritesNotifier.value = current;
+    _saveFavoritesToCache(current);
+
+    for (final s in songs) {
+      if (s.videoId == null) continue;
+      try {
+        await _dbSync(
+          (db) => favorite
+              ? db.addToFavorites(s)
+              : db.removeFromFavorites(s.videoId!),
+          () => favorite
+              ? _api.addToFavorites(s)
+              : _api.removeFromFavorites(s.videoId!),
+        );
+      } catch (e) {
+        debugPrint('Failed to sync favorite "${s.title}": $e');
+      }
     }
   }
 
@@ -395,6 +879,14 @@ class StorageService {
     await _downloadsBox.put('list', downloads);
   }
 
+  /// Strict offline mode: when enabled, only downloaded tracks are playable
+  /// (queues are filtered and non-downloaded items are skipped).
+  bool get offlineMode => _downloadsBox.get('offlineMode') ?? false;
+
+  Future<void> setOfflineMode(bool value) async {
+    await _downloadsBox.put('offlineMode', value);
+  }
+
   // Subscriptions
   bool isSubscribed(String channelId) {
     return _subscriptionsNotifier.value.any(
@@ -413,12 +905,18 @@ class StorageService {
       if (index != -1) {
         // Unsubscribe — use channelId or name as the identifier
         final id = channel.channelId ?? channel.name;
-        await _api.removeSubscription(id);
+        await _dbSync(
+          (s) => s.removeSubscription(id),
+          () => _api.removeSubscription(id),
+        );
         current.removeAt(index);
         _subscriptionsNotifier.value = current;
       } else {
         // Subscribe
-        await _api.addSubscription(channel);
+        await _dbSync(
+          (s) => s.addSubscription(channel),
+          () => _api.addSubscription(channel),
+        );
         current.insert(0, channel);
         _subscriptionsNotifier.value = current;
       }
@@ -485,11 +983,48 @@ class StorageService {
   Future<void> setRapidApiCountryCode(String code) =>
       _settingsBox.put('rapidApiCountryCode', code);
 
+  // Browse All categories chosen by the user (Search screen).
+  List<String> get chosenCategories =>
+      ((_settingsBox.get('chosenCategories', defaultValue: <String>[]) as List)
+              .map((e) => e.toString()))
+          .toList();
+
+  Future<void> setChosenCategories(List<String> value) =>
+      _settingsBox.put('chosenCategories', value);
+
   // User Info
   String? get username => _settingsBox.get('username');
   String? get email => _settingsBox.get('email');
   String? get avatarUrl => _settingsBox.get('avatarUrl');
   String? get authToken => _settingsBox.get('authToken');
+
+  // Guest mode — persists "Continue as Guest" across app restarts so the
+  // auth screen doesn't come back every time the OS kills + relaunches the app.
+  bool get isGuestMode => _settingsBox.get('isGuestMode', defaultValue: false) == true;
+
+  Future<void> setIsGuestMode(bool value) => _settingsBox.put('isGuestMode', value);
+
+  // Last visited artist page — restored at cold start so the user lands back
+  // where they were instead of on the Home tab.
+  String? get lastVisitedArtistName => _settingsBox.get('lastVisitedArtistName');
+  String? get lastVisitedArtistImage => _settingsBox.get('lastVisitedArtistImage');
+
+  Future<void> setLastVisitedArtist(String name, {String? imageUrl}) async {
+    await _settingsBox.put('lastVisitedArtistName', name);
+    if (imageUrl != null && imageUrl.isNotEmpty) {
+      await _settingsBox.put('lastVisitedArtistImage', imageUrl);
+    }
+  }
+
+  // External API keys (free tiers)
+  String? get lastFmApiKey => _settingsBox.get('lastFmApiKey') ?? '';
+  String? get geniusToken => _settingsBox.get('geniusToken') ?? 'uQBl_OnFhA0E1tEm4JjdQhG5YY1u-d5jJRrv_Mre5rEVSwzbGHs-dUofNOSKDYhy';
+  String? get musixmatchApiKey => _settingsBox.get('musixmatchApiKey') ?? '';
+  String? get jamendoKey => _settingsBox.get('jamendoKey') ?? '';
+
+  Future<void> setUsername(String value) async {
+    await _settingsBox.put('username', value);
+  }
 
   Future<void> setUserInfo(
     String username,
@@ -516,6 +1051,7 @@ class StorageService {
     await _settingsBox.delete('email');
     await _settingsBox.delete('avatarUrl');
     await _settingsBox.delete('authToken');
+    await _settingsBox.delete('isGuestMode');
     await _userAvatarBox.delete('avatar_svg');
     // Clear in-memory state
     _playlistsNotifier.value = [];
@@ -581,8 +1117,188 @@ class StorageService {
   Future<void> setAppFontFamily(String value) =>
       _settingsBox.put('appFontFamily', value);
 
+  // App Language
+  String get appLanguage => _settingsBox.get('appLanguage', defaultValue: 'system');
+  Future<void> setAppLanguage(String value) async {
+    await _settingsBox.put('appLanguage', value);
+  }
+
+  // Playback preferences (persisted)
+  bool get autoplayEnabled =>
+      _settingsBox.get('autoplayEnabled', defaultValue: false);
+  Future<void> setAutoplayEnabled(bool value) =>
+      _settingsBox.put('autoplayEnabled', value);
+
+  bool get crossfadeEnabled =>
+      _settingsBox.get('crossfadeEnabled', defaultValue: false);
+  Future<void> setCrossfadeEnabled(bool value) =>
+      _settingsBox.put('crossfadeEnabled', value);
+
+  bool get gaplessEnabled =>
+      _settingsBox.get('gaplessEnabled', defaultValue: true);
+  Future<void> setGaplessEnabled(bool value) =>
+      _settingsBox.put('gaplessEnabled', value);
+
+  bool get loudnessNormalizationEnabled =>
+      _settingsBox.get('loudnessNormalizationEnabled', defaultValue: false);
+  Future<void> setLoudnessNormalizationEnabled(bool value) =>
+      _settingsBox.put('loudnessNormalizationEnabled', value);
+
+  int get crossfadeSeconds =>
+      _settingsBox.get('crossfadeSeconds', defaultValue: 6);
+  Future<void> setCrossfadeSeconds(int value) =>
+      _settingsBox.put('crossfadeSeconds', value);
+
+  bool get shuffleEnabled =>
+      _settingsBox.get('shuffleEnabled', defaultValue: false);
+  Future<void> setShuffleEnabled(bool value) =>
+      _settingsBox.put('shuffleEnabled', value);
+
+  bool get smartShuffleEnabled =>
+      _settingsBox.get('smartShuffleEnabled', defaultValue: true);
+  Future<void> setSmartShuffleEnabled(bool value) =>
+      _settingsBox.put('smartShuffleEnabled', value);
+
+  int get repeatModeIndex => _settingsBox.get('repeatModeIndex', defaultValue: 0);
+  Future<void> setRepeatModeIndex(int value) =>
+      _settingsBox.put('repeatModeIndex', value);
+
+  bool get dynamicColorEnabled =>
+      _settingsBox.get('dynamicColorEnabled', defaultValue: true);
+  Future<void> setDynamicColorEnabled(bool value) =>
+      _settingsBox.put('dynamicColorEnabled', value);
+
+  // Downloads preferences
+  bool get wifiOnlyDownloads =>
+      _settingsBox.get('wifiOnlyDownloads', defaultValue: true);
+  Future<void> setWifiOnlyDownloads(bool value) =>
+      _settingsBox.put('wifiOnlyDownloads', value);
+
+  bool get cellularDownloadsEnabled =>
+      _settingsBox.get('cellularDownloadsEnabled', defaultValue: false);
+  Future<void> setCellularDownloadsEnabled(bool value) =>
+      _settingsBox.put('cellularDownloadsEnabled', value);
+
+  String get storageLocation =>
+      _settingsBox.get('storageLocation', defaultValue: 'Internal');
+  Future<void> setStorageLocation(String value) =>
+      _settingsBox.put('storageLocation', value);
+
+  // Notifications preferences
+  bool get appNotificationsEnabled =>
+      _settingsBox.get('appNotificationsEnabled', defaultValue: true);
+  Future<void> setAppNotificationsEnabled(bool value) =>
+      _settingsBox.put('appNotificationsEnabled', value);
+
+  bool get newReleasesNotifications =>
+      _settingsBox.get('newReleasesNotifications', defaultValue: true);
+  Future<void> setNewReleasesNotifications(bool value) =>
+      _settingsBox.put('newReleasesNotifications', value);
+
+  bool get followedArtistNotifications =>
+      _settingsBox.get('followedArtistNotifications', defaultValue: true);
+  Future<void> setFollowedArtistNotifications(bool value) =>
+      _settingsBox.put('followedArtistNotifications', value);
+
+  bool get recommendationsNotifications =>
+      _settingsBox.get('recommendationsNotifications', defaultValue: false);
+  Future<void> setRecommendationsNotifications(bool value) =>
+      _settingsBox.put('recommendationsNotifications', value);
+
+  bool get promotionsNotifications =>
+      _settingsBox.get('promotionsNotifications', defaultValue: false);
+  Future<void> setPromotionsNotifications(bool value) =>
+      _settingsBox.put('promotionsNotifications', value);
+
+  // Privacy preferences
+  bool get isProfilePublic =>
+      _settingsBox.get('isProfilePublic', defaultValue: true);
+  Future<void> setIsProfilePublic(bool value) =>
+      _settingsBox.put('isProfilePublic', value);
+
+  bool get isHistoryVisible =>
+      _settingsBox.get('isHistoryVisible', defaultValue: true);
+  Future<void> setIsHistoryVisible(bool value) =>
+      _settingsBox.put('isHistoryVisible', value);
+
+  // Security preferences
+  bool get biometricAuthEnabled =>
+      _settingsBox.get('biometricAuthEnabled', defaultValue: false);
+  Future<void> setBiometricAuthEnabled(bool value) =>
+      _settingsBox.put('biometricAuthEnabled', value);
+
+  bool get pinLockEnabled =>
+      _settingsBox.get('pinLockEnabled', defaultValue: false);
+  Future<void> setPinLockEnabled(bool value) =>
+      _settingsBox.put('pinLockEnabled', value);
+
+  String? get localPin => _settingsBox.get('localPin');
+  Future<void> setLocalPin(String? value) async {
+    if (value == null || value.isEmpty) {
+      await _settingsBox.delete('localPin');
+    } else {
+      await _settingsBox.put('localPin', value);
+    }
+  }
+
+  String? get localPasswordHash => _settingsBox.get('localPasswordHash');
+  Future<void> setLocalPasswordHash(String? value) async {
+    if (value == null || value.isEmpty) {
+      await _settingsBox.delete('localPasswordHash');
+    } else {
+      await _settingsBox.put('localPasswordHash', value);
+    }
+  }
+
+  // Profile photo (local file path)
+  String? get profilePhotoPath => _settingsBox.get('profilePhotoPath');
+  Future<void> setProfilePhotoPath(String? value) async {
+    if (value == null || value.isEmpty) {
+      await _settingsBox.delete('profilePhotoPath');
+    } else {
+      await _settingsBox.put('profilePhotoPath', value);
+    }
+  }
+
+  // Updates
+  String? get lastUpdateCheck => _settingsBox.get('lastUpdateCheck');
+  Future<void> setLastUpdateCheck(String value) =>
+      _settingsBox.put('lastUpdateCheck', value);
+
+  /// Total size on disk (bytes) of all downloaded songs.
+  Future<int> downloadsTotalBytes() async {
+    var total = 0;
+    for (final d in getDownloads()) {
+      final path = d['path'];
+      if (path is String && path.isNotEmpty) {
+        try {
+          final f = File(path);
+          if (await f.exists()) total += await f.length();
+        } catch (_) {}
+      }
+    }
+    return total;
+  }
+
+  Future<void> clearDownloads() async {
+    await _downloadsBox.delete('list');
+  }
+
   // App Links
   bool get handleAppLinks => _settingsBox.get('handleAppLinks', defaultValue: true);
+
+  double get homeScrollOffset => _settingsBox.get('homeScrollOffset', defaultValue: 0.0);
+
+  Future<void> setHomeScrollOffset(double value) =>
+      _settingsBox.put('homeScrollOffset', value);
+
+  /// Last active bottom-tab index (0 Home, 1 Search, 2 Library, 3 Settings).
+  /// Restored on launch so quitting the app brings you back to the same tab.
+  int get lastTabIndex => _settingsBox.get('lastTabIndex', defaultValue: 0);
+
+  Future<void> setLastTabIndex(int value) =>
+      _settingsBox.put('lastTabIndex', value);
+
   Future<void> setHandleAppLinks(bool value) async {
     await _settingsBox.put('handleAppLinks', value);
   }
@@ -591,12 +1307,6 @@ class StorageService {
   bool get showYtmHome => _settingsBox.get('showYtmHome', defaultValue: true);
   Future<void> setShowYtmHome(bool value) async {
     await _settingsBox.put('showYtmHome', value);
-  }
-
-  // Spotify Import Announcement
-  bool get hasSeenSpotifyAnnouncement => _settingsBox.get('hasSeenSpotifyAnnouncement', defaultValue: false);
-  Future<void> setHasSeenSpotifyAnnouncement(bool value) async {
-    await _settingsBox.put('hasSeenSpotifyAnnouncement', value);
   }
 
   // Cache Helpers
@@ -663,5 +1373,89 @@ class StorageService {
     } catch (e) {
       debugPrint('Error saving home cache: $e');
     }
+  }
+
+  // Search History
+  Box get _searchHistoryBox => Hive.box(_searchHistoryBoxName);
+
+  List<String> getSearchHistory() {
+    final dynamic data = _searchHistoryBox.get('list');
+    if (data == null) return [];
+    try {
+      return (data as List).cast<String>();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  Future<void> addSearchQuery(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    final current = getSearchHistory();
+    current.removeWhere((q) => q.toLowerCase() == trimmed.toLowerCase());
+    current.insert(0, trimmed);
+    if (current.length > 20) current.removeRange(20, current.length);
+    await _searchHistoryBox.put('list', current);
+  }
+
+  Future<void> clearSearchHistory() async {
+    await _searchHistoryBox.delete('list');
+  }
+
+  Future<void> removeSearchQuery(String query) async {
+    final current = getSearchHistory();
+    current.removeWhere((q) => q == query);
+    await _searchHistoryBox.put('list', current);
+  }
+
+  // Cache Helpers for Settings
+  Future<void> clearSongsCache() async {
+    final historyBox = Hive.box(_historyBoxName);
+    await historyBox.delete('list');
+    final favoritesBox = Hive.box(_favoritesBoxName);
+    await favoritesBox.delete('list');
+  }
+
+  Future<void> clearArtistCache() async {
+    await _artistImagesBox.clear();
+  }
+
+  Future<void> clearAlbumCache() async {
+    await _homeBox.clear();
+  }
+
+  Future<void> clearPlaylistCache() async {
+    final playlistsBox = Hive.box(_playlistsBoxName);
+    await playlistsBox.delete('list');
+  }
+
+  // ─── QR History ───
+  ValueNotifier<List<Map<String, dynamic>>> get qrHistoryNotifier =>
+      _qrHistoryNotifier;
+
+  List<Map<String, dynamic>> getQrHistory() => _qrHistoryNotifier.value;
+
+  Future<void> addQrHistory({
+    required String value,
+    String? source,
+  }) async {
+    final entry = {
+      'value': value,
+      'source': source ?? 'unknown',
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
+    final current = List<Map<String,dynamic>>.from(_qrHistoryNotifier.value);
+    current.removeWhere((e) => e['value'] == value);
+    current.insert(0, entry);
+    if (current.length > 30) current.removeRange(30, current.length);
+    _qrHistoryNotifier.value = current;
+    final box = Hive.box(_qrHistoryBoxName);
+    await box.put('list', current);
+  }
+
+  Future<void> clearQrHistory() async {
+    _qrHistoryNotifier.value = [];
+    final box = Hive.box(_qrHistoryBoxName);
+    await box.delete('list');
   }
 }

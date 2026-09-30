@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/screens/playlist_screen.dart';
 import 'package:muzo/screens/playlist_details_screen.dart';
-import 'package:muzo/screens/artist_screen.dart';
+import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/utils/song_navigation.dart';
 
 class RectHomeItem extends ConsumerWidget {
   final MuzoItem item;
@@ -23,7 +23,7 @@ class RectHomeItem extends ConsumerWidget {
 
     return GestureDetector(
       onTap: () {
-        HapticFeedback.lightImpact();
+        HapticFeedback.selectionClick();
         if (isPlaylistOrAlbum) {
           final idToUse = item.browseId;
           final storage = ref.read(storageServiceProvider);
@@ -52,24 +52,22 @@ class RectHomeItem extends ConsumerWidget {
               ),
             );
           } else {
-            ref.read(audioHandlerProvider).playVideo(item);
+            openArtistForSong(context, item);
           }
         } else if (item.resultType == 'artist' && item.browseId != null) {
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ArtistScreen(
-                browseId: item.browseId!,
+              builder: (context) => ArtistPageScreen(
                 artistName: item.title,
-                thumbnailUrl: item.thumbnails.isNotEmpty
+                imageUrl: item.thumbnails.isNotEmpty
                     ? item.thumbnails.last.url
                     : null,
               ),
             ),
           );
-        } else if (item.videoId != null) {
-          // Play anything with a valid videoId if it's not a container
-          ref.read(audioHandlerProvider).playVideo(item);
+        } else {
+          openArtistForSong(context, item);
         }
       },
       child: Container(

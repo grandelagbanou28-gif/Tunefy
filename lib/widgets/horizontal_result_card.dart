@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/providers/player_provider.dart';
-import 'package:muzo/screens/artist_screen.dart';
+import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/playlist_screen.dart';
 import 'package:muzo/screens/channel_screen.dart';
+import 'package:muzo/utils/song_navigation.dart';
 
 class HorizontalResultCard extends ConsumerWidget {
   final MuzoItem result;
@@ -31,15 +31,14 @@ class HorizontalResultCard extends ConsumerWidget {
       onTap:
           onTap ??
           () {
-            HapticFeedback.lightImpact();
+            HapticFeedback.selectionClick();
             if (result.resultType == 'artist' && result.browseId != null) {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => ArtistScreen(
-                    browseId: result.browseId!,
+                  builder: (context) => ArtistPageScreen(
                     artistName: result.title,
-                    thumbnailUrl: result.thumbnails.lastOrNull?.url,
+                    imageUrl: result.thumbnails.lastOrNull?.url,
                   ),
                 ),
               );
@@ -71,12 +70,9 @@ class HorizontalResultCard extends ConsumerWidget {
                 ),
               );
             } else {
-              // Default action: Play the item
-              ref.read(audioHandlerProvider).playVideo(result);
+              // Default action: open the artist profile instead of playing.
+              openArtistForSong(context, result);
             }
-
-            // Also add to queue if it's a playlist or just play this one
-            // For now, just play this one.
           },
       child: Container(
         width: width,

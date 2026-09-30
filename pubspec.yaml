@@ -30,6 +30,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -50,11 +53,12 @@ dependencies:
   dio: ^5.9.0
   permission_handler: ^12.0.1
   palette_generator: ^0.3.3+7
-  receive_sharing_intent: ^1.8.1
+  receive_sharing_intent: 1.8.1
   flutter_local_notifications: ^19.5.0
   font_awesome_flutter: ^10.12.0
   flutter_svg: ^2.0.10
   connectivity_plus: ^7.0.0
+  connectivity_plus_platform_interface: ^2.0.1
   sliding_up_panel: ^2.0.0+1
   audio_video_progress_bar: ^2.0.3
   ionicons: ^0.2.2
@@ -65,7 +69,7 @@ dependencies:
   window_manager: ^0.5.1
   muzoapi: ^0.0.1
   get: ^4.7.3
-  audio_service: ^0.18.18
+  audio_service: 0.18.18
   url_launcher: ^6.3.1
   flutter_lyric: ^3.0.2
   dynamic_color: ^1.8.1
@@ -73,12 +77,16 @@ dependencies:
   app_links: ^6.2.1
   google_sign_in: ^6.2.1
   image_picker: ^1.1.2
+  photo_manager: ^3.2.0
+  shared_preferences: ^2.2.2
+  speech_to_text: ^7.4.0
   share_plus: ^10.1.0
   youtube_explode_dart:
     git:
       url: https://github.com/anandnet/youtube_explode_dart.git
       ref: 1d9ec9baa806705b1d859260eeb389ec28c6b024
   file_picker: ^11.0.2
+  mobile_scanner: ^5.2.3
 
   # ── Platform stubs (keep Windows/Linux builds from failing) ────────────────
   # google_sign_in has no Windows/Linux implementation; this local stub
@@ -88,6 +96,10 @@ dependencies:
   # receive_sharing_intent is Android/iOS only; stub for desktop builds.
   receive_sharing_intent_windows:
     path: packages/receive_sharing_intent_windows
+  disk_space_plus: ^0.2.6
+  google_mlkit_barcode_scanning: ^0.15.0
+  video_player: ^2.14.0
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:
@@ -137,8 +149,24 @@ flutter:
 
   assets:
     - assets/logo.png
+    - assets/icon.png
+    - assets/brand_mark.png
+    - assets/logo 1.png
     - assets/Spotify.png
     - assets/google_logo.svg
+    - assets/ninho.jpg
+    - assets/gazo.jpg
+    - assets/tiakola.jpg
+    - assets/jul.jpg
+    - assets/damso.jpg
+    - assets/artist1.jpg
+    - assets/artist2.jpg
+    - assets/artist3.jpg
+    - assets/covers/
+    - assets/spotify/
+    - assets/spotify/home/
+    - assets/spotify/artists/
+    - assets/icons/
 
   fonts:
     - family: Karst

@@ -15,6 +15,7 @@ final djChatHistoryServiceProvider = Provider<DjChatHistoryService>((ref) {
 class DjChatHistoryService {
   static const String _chatBoxName = 'dj_chat_history';
   static const String _mixBoxName = 'dj_generated_mixes';
+  static const String _sessionKey = 'session';
   static const int maxMessages = 80;
   static const int maxMixes = 24;
 
@@ -81,6 +82,42 @@ class DjChatHistoryService {
       await box.delete('messages');
     } catch (e) {
       debugPrint('DjChatHistory clearMessages: $e');
+    }
+  }
+
+  // ── Session UI state (duration / radio / active mood) ────────────────────
+  // Persisted separately from the messages so leaving the page and coming
+  // back restores the whole DJ panel, not just the bubbles.
+
+  Future<void> saveSession(Map<String, dynamic> values) async {
+    try {
+      final box = await _openChat();
+      await box.put(_sessionKey, values);
+    } catch (e) {
+      debugPrint('DjChatHistory saveSession: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> loadSession() async {
+    try {
+      final box = await _openChat();
+      final raw = box.get(_sessionKey);
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+    } catch (e) {
+      debugPrint('DjChatHistory loadSession: $e');
+    }
+    return const {};
+  }
+
+  /// Full wipe: chat + session state + all generated mixes.
+  Future<void> clearAll() async {
+    try {
+      final chat = await _openChat();
+      await chat.clear();
+      final mixes = await _openMix();
+      await mixes.clear();
+    } catch (e) {
+      debugPrint('DjChatHistory clearAll: $e');
     }
   }
 

@@ -15,7 +15,7 @@ class YtifySearchResponse {
 }
 
 class YouTubeApiService {
-  bool _enableFallbackApi = false; // Flag to enable/disable Invidious fallback
+  final bool _enableFallbackApi = false; // Flag to enable/disable Invidious fallback
 
   final _client = Dio(
     BaseOptions(
@@ -43,6 +43,7 @@ class YouTubeApiService {
     String? title,
     String? artist,
     VoidCallback? onFallback,
+    bool preferLowBitrate = false,
   }) async {
     // 0. Web Platform Check: le navigateur ne peut pas extraire googlevideo
     // lui-même (IP-lié, pas de CORS) → on passe par le backend proxy Tunefy
@@ -63,12 +64,12 @@ class YouTubeApiService {
 
     // Direct API: try up to 2 times before falling back
     debugPrint('Extracting stream for videoId: $videoId (attempt 1)...');
-    String? streamUrl = await _tryDirectApi(videoId);
+    String? streamUrl = await _tryDirectApi(videoId, preferLowBitrate: preferLowBitrate);
     if (streamUrl == null) {
       debugPrint('Direct API attempt 1 failed, retrying...');
       await Future.delayed(const Duration(milliseconds: 500));
       debugPrint('Direct API attempt 2...');
-      streamUrl = await _tryDirectApi(videoId);
+      streamUrl = await _tryDirectApi(videoId, preferLowBitrate: preferLowBitrate);
     }
 
     if (streamUrl != null) {
@@ -85,7 +86,8 @@ class YouTubeApiService {
       try {
         final provider = await StreamProvider.fetch(videoId, _yt);
         if (provider.playable) {
-          final url = provider.highestBitrateMp4aAudio?.url ??
+          final url = (preferLowBitrate ? provider.lowQualityAudio?.url : null) ??
+              provider.highestBitrateMp4aAudio?.url ??
               provider.highestQualityAudio?.url ??
               provider.audioFormats?.first.url;
           if (url != null) {
@@ -115,7 +117,10 @@ class YouTubeApiService {
 
   /// Attempts a single direct YouTube player API POST call.
   /// Returns the best stream URL on success, or null on any failure.
-  Future<String?> _tryDirectApi(String videoId) async {
+  Future<String?> _tryDirectApi(
+    String videoId, {
+    bool preferLowBitrate = false,
+  }) async {
     try {
       final url = Uri.parse('https://www.youtube.com/youtubei/v1/player');
       final body = {
@@ -163,29 +168,50 @@ class YouTubeApiService {
       final streamingData = data['streamingData'] as Map<String, dynamic>?;
       if (streamingData == null) return null;
 
-      // Prefer muxed formats (audio+video) first
+      // The manifest lists muxed formats first and then the audio-only ones,
+      // in no guaranteed order of bitrate. Picking the first entry with a URL
+      // therefore returned an arbitrary quality that changed from video to
+      // video, so the candidates are ranked explicitly now: audio-only first,
+      // then by average bitrate (highest unless the user asked for the
+      // data-saver tier).
       final formats = streamingData['formats'] as List?;
-      if (formats != null) {
-        for (final fmt in formats) {
-          final u = fmt['url'] as String?;
-          if (u != null) return u;
-        }
-      }
-
-      // Fall back to adaptive audio-only formats
       final adaptive = streamingData['adaptiveFormats'] as List?;
-      if (adaptive != null) {
-        for (final fmt in adaptive) {
-          final u = fmt['url'] as String?;
-          if (u != null) return u;
-        }
-      }
+      final candidates = <Map<String, dynamic>>[
+        ...?adaptive?.whereType<Map<String, dynamic>>().where((f) => f['url'] != null),
+        ...?formats?.whereType<Map<String, dynamic>>().where((f) => f['url'] != null),
+      ];
+      if (candidates.isEmpty) return null;
 
-      return null;
+      candidates.sort((a, b) {
+        final audioA = _isAudioOnly(a);
+        final audioB = _isAudioOnly(b);
+        if (audioA != audioB) return audioA ? -1 : 1;
+        final bitrateA = _averageBitrate(a);
+        final bitrateB = _averageBitrate(b);
+        return preferLowBitrate
+            ? bitrateA.compareTo(bitrateB)
+            : bitrateB.compareTo(bitrateA);
+      });
+
+      return candidates.first['url'] as String?;
     } catch (e) {
       debugPrint('_tryDirectApi error: $e');
       return null;
     }
+  }
+
+  static bool _isAudioOnly(Map<String, dynamic> format) {
+    final mime = format['mimeType'] as String?;
+    if (mime == null) return false;
+    return mime.startsWith('audio/');
+  }
+
+  /// `averageBitrate` is absent from some manifests, so fall back to the
+  /// per-format bitrate and finally to 0 so the sort stays total.
+  static int _averageBitrate(Map<String, dynamic> format) {
+    final average = (format['averageBitrate'] as num?)?.toInt();
+    if (average != null) return average;
+    return (format['bitrate'] as num?)?.toInt() ?? 0;
   }
 
   void _logLong(String text) {

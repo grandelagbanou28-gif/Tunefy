@@ -1,0 +1,17 @@
+# Render blueprint for Tunefy API
+services:
+  - type: web
+    name: tunefy-api
+    runtime: docker
+    plan: free
+    envVars:
+      - key: SUPABASE_URL
+        sync: false   # à renseigner dans Render
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: tunefy-media
+    autoDeploy: true
+    healthCheckPath: /health

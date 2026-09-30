@@ -19,6 +19,8 @@ import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/services/lyrics_service.dart';
 import 'package:muzo/widgets/lyrics_view.dart';
+import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class StandardPlayer extends ConsumerStatefulWidget {
   const StandardPlayer({super.key});
@@ -38,7 +40,6 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
   bool _isLoadingLyrics = false;
   Lyrics? _lyrics;
   String? _lastFetchedTitle;
-
   @override
   void initState() {
     super.initState();
@@ -79,8 +80,10 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
     if (_lastFetchedTitle == mediaItem.title) return;
     if (_isLoadingLyrics) return;
     if (!mounted) return;
+    // Don't clear the currently shown lyrics — keep them on screen while the
+    // new song's lyrics load instead of flashing an empty spinner.
+    final bool hadLyrics = _lyrics != null;
     setState(() {
-      _lyrics = null;
       _isLoadingLyrics = true;
     });
     try {
@@ -101,9 +104,8 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (!hadLyrics && mounted) {
         setState(() {
-          _lyrics = null;
           _lastFetchedTitle = mediaItem.title;
           _isLoadingLyrics = false;
         });
@@ -119,20 +121,18 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(currentMediaItemProvider, (prev, next) {
+      final item = next.valueOrNull;
+      if (item != null && mounted) {
+        _fetchLyrics(item);
+      }
+    });
+
     final size = MediaQuery.of(context).size;
     final mediaItemAsync = ref.watch(currentMediaItemProvider);
 
     final mediaItem = mediaItemAsync.value;
     final artUri = mediaItem?.artUri;
-
-    // Listen to track changes to fetch lyrics
-    ref.listen<AsyncValue<MediaItem?>>(currentMediaItemProvider, (previous, next) {
-      next.whenData((item) {
-        if (item != null) {
-          _fetchLyrics(item);
-        }
-      });
-    });
 
     // Initial lyrics fetch if mediaItem is already loaded
     if (mediaItem != null && _lyrics == null && !_isLoadingLyrics) {
@@ -426,7 +426,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
               ),
               const SizedBox(height: 4),
               Text(
-                mediaItem.artist ?? "Unknown Artist",
+                mediaItem.artist ?? AppLocalizations.of(context).unknownArtist,
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
                   fontSize: 16,
@@ -463,7 +463,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                 storage.toggleFavorite(result);
                 showGlassSnackBar(
                   context,
-                  isFav ? 'Removed from favorites' : 'Added to favorites',
+                  isFav ? AppLocalizations.of(context).removedFromFavorites : AppLocalizations.of(context).addedToFavorites,
                 );
               },
             );
@@ -572,7 +572,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    mediaItem.artist ?? "Unknown Artist",
+                    mediaItem.artist ?? AppLocalizations.of(context).unknownArtist,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                       fontSize: 12,
@@ -647,12 +647,12 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
         Expanded(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: _isLoadingLyrics
-                ? Center(child: CircularProgressIndicator(color: Theme.of(context).colorScheme.onSurface))
+            child: _isLoadingLyrics && _lyrics == null
+                ? Center(child: SpotifySpinner(color: Theme.of(context).colorScheme.onSurface))
                 : _lyrics == null
                     ? Center(
-                        child: Text(
-                          "No lyrics found",
+                        child:                   Text(
+                          AppLocalizations.of(context).noLyricsFound,
                           style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5), fontSize: 16),
                         ),
                       )
@@ -715,14 +715,14 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                 child: nextItems.isEmpty
                     ? Center(
                         child: Text(
-                          "No upcoming songs",
+                          AppLocalizations.of(context).noUpcomingSongs,
                           style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5), fontSize: 14),
                         ),
                       )
                     : ReorderableListView.builder(
                         padding: const EdgeInsets.only(bottom: 16),
                         itemCount: nextItems.length,
-                        onReorder: (oldIndex, newIndex) {
+                        onReorderItem: (oldIndex, newIndex) {
                           audioHandler.reorderQueue(
                             currentIndex + 1 + oldIndex,
                             currentIndex + 1 + newIndex,
@@ -738,8 +738,16 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                             item,
                             currentIndex + 1 + index,
                             onTap: () {
-                              audioHandler.player.seek(Duration.zero, index: currentIndex + 1 + index);
-                              audioHandler.player.play();
+                              final target = currentIndex + 1 + index;
+                              unawaited(() async {
+                                try {
+                                  await audioHandler.player
+                                      .seek(Duration.zero, index: target);
+                                  await audioHandler.player.play();
+                                } catch (e) {
+                                  debugPrint('Queue jump failed: $e');
+                                }
+                              }());
                             },
                             onRemove: () {
                               audioHandler.removeQueueItem(currentIndex + 1 + index);
@@ -875,7 +883,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
   Widget _buildPlayingNextRow(BuildContext context, WidgetRef ref, int queueLength) {
     final audioHandler = ref.watch(audioHandlerProvider);
     final currentItem = ref.watch(currentMediaItemProvider).value;
-    final albumName = currentItem?.album ?? "Muzo";
+    final albumName = currentItem?.album ?? "Tunefy";
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -888,7 +896,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  "Playing Next",
+                  AppLocalizations.of(context).playingNext,
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurface,
                     fontWeight: FontWeight.bold,
@@ -897,7 +905,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  "From $albumName",
+                  AppLocalizations.of(context).fromAlbum(albumName),
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
                     fontSize: 13,
@@ -913,10 +921,10 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                 ? null
                 : () {
                     audioHandler.clearQueue();
-                    showGlassSnackBar(context, 'Queue cleared');
+                    showGlassSnackBar(context, AppLocalizations.of(context).queueCleared);
                   },
             child: Text(
-              "Clear",
+              AppLocalizations.of(context).clear,
               style: TextStyle(
                 color: queueLength <= 1 ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3) : Theme.of(context).primaryColor,
                 fontWeight: FontWeight.bold,
@@ -981,7 +989,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      item.artist ?? 'Unknown Artist',
+                      item.artist ?? AppLocalizations.of(context).unknownArtist,
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6), fontSize: 12),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1089,7 +1097,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                     return SizedBox(
                       width: 46,
                       height: 46,
-                      child: CircularProgressIndicator(color: Theme.of(context).colorScheme.onSurface, strokeWidth: 3),
+                      child: SpotifySpinner(color: Theme.of(context).colorScheme.onSurface, strokeWidth: 3),
                     );
                   }
 

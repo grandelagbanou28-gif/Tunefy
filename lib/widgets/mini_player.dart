@@ -9,6 +9,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/screens/player_screen.dart';
 import 'package:muzo/services/navigator_key.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 
 class MiniPlayer extends ConsumerWidget {
   const MiniPlayer({super.key});
@@ -24,22 +25,25 @@ class MiniPlayer extends ConsumerWidget {
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () async {
-            HapticFeedback.lightImpact();
-            if (navigatorKey.currentContext != null) {
+onTap: () async {
+              HapticFeedback.selectionClick();
+              final navContext = navigatorKey.currentContext;
+              if (navContext == null) return;
               ref.read(isPlayerExpandedProvider.notifier).state = true;
               try {
-                await Navigator.of(navigatorKey.currentContext!).push(
+                await Navigator.of(navContext).push(
                   MaterialPageRoute(
                     builder: (context) => const ExpandedPlayer(),
                     fullscreenDialog: true,
                   ),
                 );
               } finally {
+                // Toujours relâcher le flag, même si la route est retirée
+                // brutalement: sans ça la barre de navigation et le
+                // mini-player restent masqués pour le reste de la session.
                 ref.read(isPlayerExpandedProvider.notifier).state = false;
               }
-            }
-          },
+            },
           child: Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: 8.0,
@@ -113,7 +117,7 @@ class MiniPlayer extends ConsumerWidget {
                         child: SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 1.5),
+                          child: SpotifySpinner(strokeWidth: 1.5),
                         ),
                       );
                     }
@@ -121,7 +125,7 @@ class MiniPlayer extends ConsumerWidget {
                     return GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
-                        HapticFeedback.lightImpact();
+                        HapticFeedback.selectionClick();
                         if (isPlaying) {
                           audioHandler.pause();
                         } else {
@@ -145,7 +149,7 @@ class MiniPlayer extends ConsumerWidget {
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
-                    HapticFeedback.lightImpact();
+                    HapticFeedback.selectionClick();
                     audioHandler.skipToNext();
                   },
                   child: Padding(

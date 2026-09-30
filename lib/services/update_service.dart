@@ -11,7 +11,7 @@ class UpdateService {
   static const String currentAppVersion = '3.9';
 
   static const String _repoOwner = 'Shashwat-CODING';
-  static const String _repoName = 'Muzo';
+  static const String _repoName = 'Tunefy';
 
   Future<void> checkForUpdates(BuildContext context) async {
     try {
@@ -142,7 +142,7 @@ class UpdateService {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                     child: Text(
-                      'A new version of Muzo is available. Update now for the latest features and improvements.',
+                      'A new version of Tunefy is available. Update now for the latest features and improvements.',
                       style: TextStyle(
                         fontSize: 13,
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
@@ -158,7 +158,7 @@ class UpdateService {
                         child: SizedBox(
                           height: 44,
                           child: TextButton(
-                            onPressed: () => Navigator.pop(context),
+                            onPressed: () { if (context.mounted && Navigator.canPop(context)) Navigator.pop(context); },
                             style: TextButton.styleFrom(
                               padding: EdgeInsets.zero,
                               shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
@@ -180,7 +180,9 @@ class UpdateService {
                           height: 44,
                           child: TextButton(
                             onPressed: () {
-                              Navigator.pop(context);
+                              if (context.mounted && Navigator.canPop(context)) {
+                                Navigator.pop(context);
+                              }
                               _downloadApk(tag, url);
                             },
                             style: TextButton.styleFrom(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
+import 'package:muzo/widgets/brand_badge.dart';
 
 class LibraryTile extends StatelessWidget {
   final String title;
@@ -56,11 +57,25 @@ class LibraryTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(
                   isRound ? 46 : (isLoading ? 2 : 6),
                 ), // Adjust radius if border present
-                child: imageUrl != null && imageUrl!.isNotEmpty
-                    ? CachedNetworkImage(
-                        imageUrl: imageUrl!,
-                        fit: BoxFit.cover,
-                        errorWidget: (context, url, error) => Center(
+                child: BrandBadged(
+                  imageUrl: imageUrl,
+                  badgeSize: 15,
+                  opacity: 0.9,
+                  inset: isRound ? 7 : 3,
+                  child: imageUrl != null && imageUrl!.isNotEmpty
+                      ? CachedNetworkImage(
+                          imageUrl: imageUrl!,
+                          fit: BoxFit.cover,
+                          errorWidget: (context, url, error) => Center(
+                            child: Icon(
+                              placeholderIcon ??
+                                  FluentIcons.music_note_2_24_regular,
+                              color: Colors.grey,
+                              size: 20,
+                            ),
+                          ),
+                        )
+                      : Center(
                           child: Icon(
                             placeholderIcon ??
                                 FluentIcons.music_note_2_24_regular,
@@ -68,15 +83,7 @@ class LibraryTile extends StatelessWidget {
                             size: 20,
                           ),
                         ),
-                      )
-                    : Center(
-                        child: Icon(
-                          placeholderIcon ??
-                              FluentIcons.music_note_2_24_regular,
-                          color: Colors.grey,
-                          size: 20,
-                        ),
-                      ),
+                ),
               ),
             ),
           ],

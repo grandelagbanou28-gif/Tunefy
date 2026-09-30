@@ -7,9 +7,11 @@ list(APPEND FLUTTER_PLUGIN_LIST
   connectivity_plus
   dynamic_color
   file_selector_windows
+  gal
   permission_handler_windows
   screen_retriever_windows
   share_plus
+  speech_to_text_windows
   url_launcher_windows
   window_manager
 )

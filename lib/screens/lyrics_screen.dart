@@ -5,6 +5,7 @@ import 'package:muzo/services/lyrics_service.dart';
 import 'package:muzo/widgets/lyrics_view.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/providers/theme_provider.dart';
+import 'package:muzo/widgets/spotify_spinner.dart';
 import 'dart:ui';
 
 class LyricsScreen extends ConsumerStatefulWidget {
@@ -28,18 +29,38 @@ class LyricsScreen extends ConsumerStatefulWidget {
 class _LyricsScreenState extends ConsumerState<LyricsScreen> {
   Lyrics? _lyrics;
   bool _isLoading = true;
+  String? _lastFetchedTitle;
+  String? _lastFetchedArtist;
 
   @override
   void initState() {
     super.initState();
-    _fetchLyrics();
+    _fetchLyrics(widget.title, widget.artist, widget.durationSeconds);
+    ref.listen(currentMediaItemProvider, (prev, next) {
+      final media = next.value;
+      if (media == null) return;
+      final newTitle = media.title;
+      final newArtist = media.artist ?? '';
+      if (newTitle == _lastFetchedTitle && newArtist == _lastFetchedArtist) return;
+      _lastFetchedTitle = newTitle;
+      _lastFetchedArtist = newArtist;
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _lyrics = null;
+        });
+      }
+      _fetchLyrics(newTitle, newArtist, media.duration?.inSeconds ?? 0);
+    });
   }
 
-  Future<void> _fetchLyrics() async {
+  Future<void> _fetchLyrics(String title, String artist, int duration) async {
+    _lastFetchedTitle = title;
+    _lastFetchedArtist = artist;
     try {
       final lyrics = await ref
           .read(lyricsServiceProvider)
-          .fetchLyrics(widget.title, widget.artist, widget.durationSeconds);
+          .fetchLyrics(title, artist, duration);
       if (mounted) {
         setState(() {
           _lyrics = lyrics;
@@ -55,8 +76,14 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
     }
   }
 
+  @override
   Widget build(BuildContext context) {
     final audioHandler = ref.watch(audioHandlerProvider);
+    final media = ref.watch(currentMediaItemProvider).valueOrNull;
+    final title = media?.title ?? widget.title;
+    final artist = media?.artist ?? widget.artist;
+    final thumbnailUrl = media?.artUri?.toString() ?? widget.thumbnailUrl;
+    final durationSeconds = media?.duration?.inSeconds ?? widget.durationSeconds;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -76,7 +103,7 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
               style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
             ),
             Text(
-              "${widget.title} • ${widget.artist}",
+              "$title • $artist",
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurface,
                 fontSize: 12,
@@ -93,9 +120,9 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
         children: [
           // Background Blur
           Positioned.fill(
-            child: widget.thumbnailUrl != null
+            child: thumbnailUrl != null
                 ? Image.network(
-                    widget.thumbnailUrl!,
+                    thumbnailUrl,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) =>
                         Container(color: Colors.black),
@@ -115,7 +142,7 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
           SafeArea(
             child: _isLoading
                 ? const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
+                    child: SpotifySpinner(color: Colors.white),
                   )
                 : _lyrics == null
                 ? _buildNotFound()
@@ -124,7 +151,7 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
                     onClose: () {},
                     positionStream: audioHandler.player.positionStream,
                     totalDuration:
-                        Duration(seconds: widget.durationSeconds),
+                        Duration(seconds: durationSeconds),
                     isEmbedded: false,
                     accentColor: () {
                       final palette = ref
