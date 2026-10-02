@@ -4,8 +4,15 @@ import 'package:flutter/material.dart';
 class SlidePageRoute<T> extends PageRouteBuilder<T> {
   final Widget page;
 
-  SlidePageRoute({required this.page})
+  /// Optional route arguments. Carried so a route can declare what it is (see
+  /// `SceneArg`): `PlayerSceneObserver` reads them, which is what lets the
+  /// layout know a full-screen player surface is open without any screen having
+  /// to set a flag it might forget to clear.
+  final Object? arguments;
+
+  SlidePageRoute({required this.page, this.arguments})
     : super(
+        settings: RouteSettings(arguments: arguments),
         pageBuilder: (context, animation, secondaryAnimation) => page,
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           const begin = Offset(1.0, 0.0); // Start from right
@@ -36,9 +43,11 @@ class SlidePageRoute<T> extends PageRouteBuilder<T> {
 /// A bottom-to-top slide transition (like a modal)
 class ModalSlidePageRoute<T> extends PageRouteBuilder<T> {
   final Widget page;
+  final Object? arguments;
 
-  ModalSlidePageRoute({required this.page})
+  ModalSlidePageRoute({required this.page, this.arguments})
     : super(
+        settings: RouteSettings(arguments: arguments),
         pageBuilder: (context, animation, secondaryAnimation) => page,
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           const begin = Offset(0.0, 1.0); // Start from bottom

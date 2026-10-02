@@ -17,6 +17,7 @@ import 'package:muzo/services/deep_link_service.dart';
 
 import 'package:muzo/widgets/main_layout.dart';
 import 'package:muzo/providers/theme_provider.dart';
+import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/providers/settings_provider.dart';
 import 'package:muzo/services/auth_service.dart';
 import 'package:muzo/providers/auth_gate_provider.dart';
@@ -164,8 +165,16 @@ class MyApp extends ConsumerWidget {
         final theme = ref.watch(themeProvider);
         final locale = ref.watch(localeProvider);
 
+        // Wired once: the observer needs a container to publish into, and it
+        // must never hold a widget ref.
+        playerSceneObserver.container =
+            ProviderScope.containerOf(context, listen: false);
+
         return MaterialApp(
           navigatorKey: navigatorKey,
+          // The single writer of `overlayScenesProvider`. Screens no longer set
+          // a flag for "a player surface is open"; they just tag their route.
+          navigatorObservers: [playerSceneObserver],
           title: 'Tunefy',
           debugShowCheckedModeBanner: false,
           theme: theme,

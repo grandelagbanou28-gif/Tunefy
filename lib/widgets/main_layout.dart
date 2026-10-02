@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/providers/navigation_provider.dart';
 import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/widgets/hivefy_mini_player.dart';
 import 'package:muzo/services/share_service.dart';
 import 'package:muzo/widgets/global_background.dart';
@@ -107,19 +108,6 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     final audioHandler = ref.read(audioHandlerProvider);
 
     final isDesktop = MediaQuery.of(context).size.width > 600;
-
-    // Safety net for a global flag: `isClipPlaybackProvider` hides the mini
-    // player while a clips feed is open. If it were ever left true — a route
-    // popped without its dispose running, a rebuild out of order — the bar
-    // would stay hidden for the rest of the session and audio would play with
-    // no bar at all. Starting a track proves audio is wanted, so the flag goes
-    // back to false.
-    ref.listen(audioHandlerProvider, (previous, next) {
-      if (next == previous) return;
-      if (next.player.playing && ref.read(isClipPlaybackProvider)) {
-        ref.read(isClipPlaybackProvider.notifier).state = false;
-      }
-    });
 
     // Listen for storage errors
     ref.listen(storageServiceProvider, (previous, next) {
@@ -362,6 +350,10 @@ class _MainLayoutState extends ConsumerState<MainLayout>
         ? 16.0
         : 84.0 + MediaQuery.of(context).padding.bottom;
     final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+    // Derived from the live route stack by `PlayerSceneObserver`, not from a
+    // boolean a screen has to remember to reset.
+    final scenes = ref.watch(overlayScenesProvider);
+    final videoSurfaceOpen = scenes.contains(PlayerScene.clips);
 
     return Positioned(
       left: isDesktop ? 24 : 16,
@@ -370,12 +362,11 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       child: ValueListenableBuilder<bool>(
         valueListenable: ref.read(audioHandlerProvider).isClipPlayback,
         builder: (context, clipMode, _) {
-          final feedOpen = ref.watch(isClipPlaybackProvider);
           final showMiniPlayer = !isPlayerExpandedVal &&
               !isMiniPlayerCollapsed &&
               !keyboardVisible &&
               !clipMode &&
-              !feedOpen;
+              !videoSurfaceOpen;
           return AnimatedOpacity(
             duration: const Duration(milliseconds: 200),
             opacity: showMiniPlayer ? 1.0 : 0.0,

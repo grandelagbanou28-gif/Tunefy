@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/providers/player_provider.dart';
+import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/widgets/spotify_back_button.dart';
@@ -50,28 +51,23 @@ class _ConcertVideoScreenState extends ConsumerState<ConcertVideoScreen> {
   MuzoItem get _current => widget.videos[_index];
 
   @override
-  void initState() {
-    super.initState();
-    _index = widget.initialIndex.clamp(0, widget.videos.length - 1);
-    // Hide the mini player + stop any audio so the video is the only sound.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(isClipPlaybackProvider.notifier).state = true;
-    });
-    unawaited(ref.read(audioHandlerProvider).pause());
-    _load(_index);
-  }
+void initState() {
+      super.initState();
+      _index = widget.initialIndex.clamp(0, widget.videos.length - 1);
+      // The mini player is hidden because this route is tagged as a player
+      // scene (see the push helper at the bottom of this file) — no flag to set
+      // here, and therefore none that can survive a botched teardown.
+      // The video must be the only sound, so any audio is stopped.
+      unawaited(ref.read(audioHandlerProvider).pause());
+      _load(_index);
+    }
 
-  @override
-  void dispose() {
-    _hideTimer?.cancel();
-    _controller?.dispose();
-    // Restore the mini player on the way out.
-    try {
-      ref.read(isClipPlaybackProvider.notifier).state = false;
-    } catch (_) {}
-    super.dispose();
-  }
+    @override
+    void dispose() {
+      _hideTimer?.cancel();
+      _controller?.dispose();
+      super.dispose();
+    }
 
   Future<void> _load(int index) async {
     final old = _controller;
@@ -666,6 +662,7 @@ void openConcertVideo(
         videos: videos,
         initialIndex: index.clamp(0, videos.length - 1),
       ),
+      arguments: const SceneArg(PlayerScene.clips),
     ),
   );
 }

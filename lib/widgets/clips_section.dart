@@ -6,6 +6,7 @@ import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/providers/clips_provider.dart';
 import 'package:muzo/screens/clips_feed_screen.dart';
+import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/widgets/spotify_chips.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
@@ -99,11 +100,12 @@ class ClipsSection extends ConsumerWidget {
                   index: index,
                   onTap: () {
                     HapticFeedback.selectionClick();
-                    Navigator.of(context).push(
-                      SlidePageRoute(
-                        page: ClipsFeedScreen(initialIndex: index),
-                      ),
-                    );
+Navigator.of(context).push(
+                         SlidePageRoute(
+                           page: ClipsFeedScreen(initialIndex: index),
+                           arguments: const SceneArg(PlayerScene.clips),
+                         ),
+                       );
                   },
                 );
               },

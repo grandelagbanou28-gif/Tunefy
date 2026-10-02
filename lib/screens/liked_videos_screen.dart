@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/screens/clips_feed_screen.dart';
+import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/widgets/spotify_back_button.dart';
@@ -99,9 +100,10 @@ class _LikedVideoRow extends StatelessWidget {
       onTap: () {
         HapticFeedback.selectionClick();
         Navigator.of(context).push(
-          SlidePageRoute(
-            page: ClipsFeedScreen(initialIndex: index, externalClips: clips),
-          ),
+SlidePageRoute(
+              page: ClipsFeedScreen(initialIndex: index, externalClips: clips),
+              arguments: const SceneArg(PlayerScene.clips),
+            ),
         );
       },
       child: Row(

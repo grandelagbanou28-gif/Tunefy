@@ -52,10 +52,6 @@ final isPlayingProvider = StreamProvider<bool>((ref) {
   return audioHandler.player.playingStream;
 });
 
-/// True while a video-only surface (the clips feed) is open: the mini player
-/// stays hidden because there is no audio track to control.
-final isClipPlaybackProvider = StateProvider<bool>((ref) => false);
-
 final shuffleModeNotifierProvider = Provider<ValueNotifier<bool>>((ref) {
   return ref.watch(audioHandlerProvider).isShuffleModeNotifier;
 });
