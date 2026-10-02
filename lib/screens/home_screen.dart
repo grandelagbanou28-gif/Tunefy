@@ -167,8 +167,26 @@ final homeSearchProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
   final api = ref.read(muzoApiServiceProvider);
   try {
-    final res = await api.search(query, filter: 'songs');
-    final items = res.results.toList();
+    // One search answers with a handful of songs, so a single call could never
+    // fill a 100-track shelf. Several phrasings of the same intent widen the
+    // net; duplicates are dropped below.
+    const variants = ['', ' 2026', ' hits', ' mix'];
+    final collected = <MuzoItem>[];
+    final seen = <String>{};
+    for (final suffix in variants) {
+      try {
+        final res = await api.search('$query$suffix', filter: 'songs');
+        for (final r in res.results) {
+          final id = r.videoId;
+          if (id == null || id.isEmpty || !seen.add(id)) continue;
+          collected.add(r);
+        }
+        if (collected.length >= 100) break;
+      } catch (_) {
+        // One phrasing failing must not empty the shelf.
+      }
+    }
+    final items = collected;
     // Re-order so fresh tracks (2026 → 2025) surface first in the rap/mix
     // sections, instead of always showing stale 2024/2025 hits. Songs whose
     // recency is unknown stay in place so a section never turns empty.
@@ -181,7 +199,7 @@ final homeSearchProvider =
       if (db >= 9999) return -1;
       return da.compareTo(db);
     });
-    return items.take(10).toList();
+    return items.take(100).toList();
   } catch (_) {
     return <MuzoItem>[];
   }
@@ -201,8 +219,14 @@ final homeSearchProvider =
 final homeCatalogSectionProvider = FutureProvider.family<
     List<MuzoItem>,
     ({String genre, int offset, String? country})>((ref, args) async {
-  // Watching the catalog service re-runs this shelf as soon as the 72h load
-  // completes, so genre rows fill in automatically instead of staying hidden.
+  final key = '${args.genre}|${args.offset}|${args.country}';
+  // The catalog service notifies whenever it (re)loads, which re-ran this whole
+  // shelf and re-searched every artist: the row visibly reshuffled itself while
+  // the user was looking at it. A per-session memo keeps the shelf stable — the
+  // same 100 tracks until the app is restarted or the section is invalidated.
+  final memo = _homeSectionMemo[key];
+  if (memo != null) return memo;
+
   final service = ref.watch(curatedArtistsServiceProvider);
   var artists = service.artistsWhere(args.genre, country: args.country);
   // Country miss (missing country_code) → fall back to the full genre list
@@ -214,7 +238,11 @@ final homeCatalogSectionProvider = FutureProvider.family<
   final api = ref.read(muzoApiServiceProvider);
   final items = <MuzoItem>[];
   final seenIds = <String>{};
-  final want = 10;
+  const want = 100;
+  // Several tracks per artist instead of one. Taking a single track per artist
+  // capped these shelves at ten songs by construction, no matter how many
+  // artists the genre had.
+  const perArtist = 6;
   for (var i = 0; i < artists.length && items.length < want; i++) {
     final artist = artists[(args.offset + i) % artists.length];
     try {
@@ -222,6 +250,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
           .search(artist.name, filter: 'songs')
           .timeout(const Duration(seconds: 12));
       final aLow = artist.name.toLowerCase();
+      var taken = 0;
       for (final r in res.results) {
         if (r.videoId == null) continue;
         // Only accept hits that actually belong to this artist.
@@ -230,16 +259,22 @@ final homeCatalogSectionProvider = FutureProvider.family<
         if (seenIds.contains(id)) continue;
         seenIds.add(id);
         items.add(r);
-        // One track per artist → 10 different people in the shelf.
-        break;
+        taken++;
+        if (taken >= perArtist || items.length >= want) break;
       }
     } catch (_) {
       // Keep going with the next artist; a single failure never kills the row.
     }
   }
   items.sort((a, b) => _songAgeDays(a).compareTo(_songAgeDays(b)));
-  return items.take(want).toList();
+  final result = items.take(want).toList();
+  if (result.isNotEmpty) _homeSectionMemo[key] = result;
+  return result;
 });
+
+/// Session-scoped memo for genre shelves. Not persisted: a fresh launch is
+/// allowed to reshuffle, a rebuild is not.
+final _homeSectionMemo = <String, List<MuzoItem>>{};
 
 final homeSearchArtistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
