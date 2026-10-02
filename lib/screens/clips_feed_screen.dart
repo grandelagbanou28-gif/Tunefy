@@ -50,6 +50,24 @@ class _ClipsFeedScreenState extends ConsumerState<ClipsFeedScreen> {
   ClipPageController? _active;
   int _currentPage = 0;
 
+  // The container is captured while `ref` is still valid. Reading a provider from
+  // dispose() is unsafe: the read can throw once the widget is gone, and because
+  // this flag is what hides the mini player, a failed reset left it hidden for
+  // the rest of the session — audio played but no bar ever came back.
+  ProviderContainer? _container;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _container ??= ProviderScope.containerOf(context, listen: false);
+  }
+
+  void _setClipFlag(bool value) {
+    final container = _container;
+    if (container == null) return;
+    container.read(isClipPlaybackProvider.notifier).state = value;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -57,10 +75,9 @@ class _ClipsFeedScreenState extends ConsumerState<ClipsFeedScreen> {
     _currentPage = widget.initialIndex;
     _controller = PageController(initialPage: widget.initialIndex);
     // Video-only surface: the mini player must not appear behind the feed.
-    // The flag is cleared in dispose, whatever closes the page.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(isClipPlaybackProvider.notifier).state = true;
+      _setClipFlag(true);
       // The clip speaks for itself: audio and video at the same time means two
       // competing soundtracks, and the track that was playing just kept going
       // under the feed. Pausing here (not on every page change) stops the
@@ -74,12 +91,13 @@ class _ClipsFeedScreenState extends ConsumerState<ClipsFeedScreen> {
 
   @override
   void dispose() {
+    // Restore the mini player on the way out, whatever closed the page.
+    _setClipFlag(false);
+    _container = null;
     _active?.dispose();
     _controller.dispose();
     _dotsScrollController.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    // Restore the mini player on the way out, whatever closed the page.
-    ref.read(isClipPlaybackProvider.notifier).state = false;
     super.dispose();
   }
 

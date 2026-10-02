@@ -108,6 +108,19 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
     final isDesktop = MediaQuery.of(context).size.width > 600;
 
+    // Safety net for a global flag: `isClipPlaybackProvider` hides the mini
+    // player while a clips feed is open. If it were ever left true — a route
+    // popped without its dispose running, a rebuild out of order — the bar
+    // would stay hidden for the rest of the session and audio would play with
+    // no bar at all. Starting a track proves audio is wanted, so the flag goes
+    // back to false.
+    ref.listen(audioHandlerProvider, (previous, next) {
+      if (next == previous) return;
+      if (next.player.playing && ref.read(isClipPlaybackProvider)) {
+        ref.read(isClipPlaybackProvider.notifier).state = false;
+      }
+    });
+
     // Listen for storage errors
     ref.listen(storageServiceProvider, (previous, next) {
       if (previous?.errorNotifier.value != next.errorNotifier.value &&
