@@ -8,7 +8,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/providers/clips_provider.dart';
@@ -60,8 +59,15 @@ class _ClipsFeedScreenState extends ConsumerState<ClipsFeedScreen> {
     // Video-only surface: the mini player must not appear behind the feed.
     // The flag is cleared in dispose, whatever closes the page.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        ref.read(isClipPlaybackProvider.notifier).state = true;
+      if (!mounted) return;
+      ref.read(isClipPlaybackProvider.notifier).state = true;
+      // The clip speaks for itself: audio and video at the same time means two
+      // competing soundtracks, and the track that was playing just kept going
+      // under the feed. Pausing here (not on every page change) stops the
+      // audio once, when the feed takes over the screen.
+      final handler = ref.read(audioHandlerProvider);
+      if (handler.player.playing) {
+        handler.pause();
       }
     });
   }
@@ -295,16 +301,10 @@ class ClipPageController {
     // it must start on its own.
     await vc.setVolume(backdrop ? 0 : 100);
     await vc.play();
-    // Mirror the handler's play state: pausing the music elsewhere pauses the
-    // clip, and the clip never starts a track of its own.
-    _playingSub = handlerPlayer.playingStream.listen((playing) {
-      if (disposed) return;
-      if (playing) {
-        _player?.play();
-      } else if (handlerPlayer.player.processingState == ProcessingState.idle) {
-        _player?.pause();
-      }
-    });
+    // No mirroring of the audio handler any more. The feed pauses the music when
+    // it opens, and this subscription treated "handler not playing" as "pause the
+    // clip" — which froze the video the instant the feed appeared. The clip owns
+    // its playback; nothing outside this screen can stop it.
   }
 
   static final YoutubeExplode _yt = YoutubeExplode();
@@ -448,16 +448,17 @@ class _ClipPageState extends ConsumerState<_ClipPage> {
       children: [
         // ─── Visual layer ───
         if (hasVideo)
-          Center(
-            child: AspectRatio(
-              aspectRatio: video.value.aspectRatio,
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width: video.value.size.width,
-                  height: video.value.size.height,
-                  child: VideoPlayer(video),
-                ),
+          // FittedBox(cover) over the full screen, *without* an AspectRatio
+          // parent: AspectRatio sizes to the ratio inside the viewport, which
+          // for a 16:9 clip on a tall phone means a small band with black bars.
+          // Letting cover fill and crop is what a clips feed looks like.
+          Positioned.fill(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: video.value.size.width,
+                height: video.value.size.height,
+                child: VideoPlayer(video),
               ),
             ),
           )
@@ -525,30 +526,34 @@ class _ClipPageState extends ConsumerState<_ClipPage> {
           ),
         ),
 
-        // Tap toggles pause/play — the muted video mirrors the handler.
+        // Tap toggles pause/play on the clip itself. It used to drive the audio
+        // handler, but the clip no longer goes through it — tapping the video
+        // resumed the *track* while the video kept running.
         // Double-tap left/right seeks backward/forward.
         Positioned.fill(
           child: GestureDetector(
             onTap: () {
               HapticFeedback.selectionClick();
-              final handler = ref.read(audioHandlerProvider);
-              if (handler.player.playing) {
-                handler.pause();
+              final vc = widget.activeController?._player;
+              if (vc == null) return;
+              if (vc.value.isPlaying) {
+                vc.pause();
               } else {
-                handler.resume();
+                vc.play();
               }
             },
             onDoubleTapDown: (details) {
               final w = MediaQuery.of(context).size.width;
-              final handler = ref.read(audioHandlerProvider);
-              final pos = handler.player.position;
-              final dur = handler.player.duration ?? Duration.zero;
+              final vc = widget.activeController?._player;
+              if (vc == null) return;
+              final pos = vc.value.position;
+              final dur = vc.value.duration;
               if (details.localPosition.dx < w / 2) {
                 final target = pos - const Duration(seconds: 10);
-                handler.seek(target < Duration.zero ? Duration.zero : target);
+                vc.seekTo(target < Duration.zero ? Duration.zero : target);
               } else {
                 final target = pos + const Duration(seconds: 10);
-                handler.seek(target > dur ? dur : target);
+                vc.seekTo(target > dur ? dur : target);
               }
               HapticFeedback.selectionClick();
             },

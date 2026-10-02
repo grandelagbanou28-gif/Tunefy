@@ -19,7 +19,10 @@
 [CmdletBinding()]
 param(
   # Verifie seulement l'etat, sans demarrer ni modifier quoi que ce soit.
-  [switch]$Check
+  [switch]$Check,
+  # Lance aussi la boucle de surveillance qui relance le serveur s'il meurt.
+  # Actif par defaut : le serveur se fait tuer sans trace en session.
+  [switch]$NoWatchdog
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,10 +47,14 @@ $adbs = @(
 
 function Get-DeviceId {
   if (-not $adbs) { return $null }
-  $devices = & $adbs devices 2>$null |
-    Where-Object { $_ -match '\sdevice$' -and $_ -notmatch 'adb-' } |
+  $all = & $adbs devices 2>$null |
+    Where-Object { $_ -match '\sdevice$' } |
     ForEach-Object { ($_ -split '\s+')[0] }
-  return ($devices | Select-Object -First 1)
+  # Prefer a plain wireless IP:port; fall back to the mDNS/TLS pairing, which is
+  # often the only entry left once the phone changes network or port.
+  $byIp = $all | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+:\d+$' } | Select-Object -First 1
+  if ($byIp) { return $byIp }
+  return ($all | Select-Object -First 1)
 }
 
 $serverUp = Test-LocalHealth
@@ -98,4 +105,28 @@ if ($device -and $adbs) {
   }
 } else {
   Write-Warning "Aucun appareil ADB : le port n'est pas ouvert, rien ne se lira sur le telephone."
+}
+
+# Surveillance : sans elle, une mort silencieuse du serveur coupe la lecture
+# jusqu'a une relance manuelle.
+if (-not $NoWatchdog) {
+  $watchdog = Join-Path $PSScriptRoot 'stream_watchdog.ps1'
+  $stateFile = Join-Path $env:TEMP 'tunefy_stream_watchdog.pid'
+  $running = $false
+  if (Test-Path -LiteralPath $stateFile) {
+    $oldPid = (Get-Content $stateFile -Raw -ErrorAction SilentlyContinue).Trim()
+    if ($oldPid -match '^\d+$') {
+      $running = $null -ne (Get-Process -Id ([int]$oldPid) -ErrorAction SilentlyContinue)
+    }
+  }
+  if ($running) {
+    Write-Host "Surveillance deja active (pid $oldPid)."
+  } else {
+    $w = Start-Process -FilePath 'powershell.exe' `
+      -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', `
+      '-File', "`"$watchdog`"", '-Port', $port `
+      -WindowStyle Hidden -PassThru
+    Set-Content -LiteralPath $stateFile -Value $w.Id
+    Write-Host "Surveillance lancee (pid $($w.Id)) : le serveur relancera tout seul."
+  }
 }
