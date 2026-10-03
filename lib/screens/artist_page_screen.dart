@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +16,7 @@ import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/screens/concert_video_screen.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/providers/concert_provider.dart';
+import 'package:muzo/providers/connectivity_provider.dart';
 import 'package:muzo/services/concert_service.dart';
 import 'package:muzo/models/concert_event.dart';
 import 'package:muzo/screens/album_screen.dart';
@@ -303,7 +306,13 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
 
   /// Counter line right under the tabs: tracks + total time on "Populaires",
   /// concerts + videos + total video time on "Concerts".
-  Widget _tabStats(BuildContext context, WidgetRef ref, List<MuzoItem> playable) {
+  Widget _tabStats(
+    BuildContext context,
+    WidgetRef ref,
+    List<MuzoItem> playable, {
+    required bool showConcerts,
+    required int activeTab,
+  }) {
     final l10n = AppLocalizations.of(context);
     final style = TextStyle(
       color: spotifyLightGrey.withValues(alpha: 0.9),
@@ -311,7 +320,7 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
       fontWeight: FontWeight.w600,
     );
 
-    if (widget.showConcerts && _tab == 1) {
+    if (showConcerts && activeTab == 1) {
       final statsAsync = ref.watch(_concertStatsProvider(artistName));
       return statsAsync.when(
         loading: () => Text('${l10n.artistConcerts}…', style: style),
@@ -337,10 +346,14 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
 
   /// Section tabs with an animated underline, the way the big apps mark the
   /// active shelf without shouting with colour alone.
-  Widget _buildTabBar(AppLocalizations l10n) {
+  Widget _buildTabBar(
+    AppLocalizations l10n, {
+    required bool showConcerts,
+    required int activeTab,
+  }) {
     final tabs = <({String label, int index})>[
       (label: l10n.artistPopular, index: _popularTab),
-      if (widget.showConcerts)
+      if (showConcerts)
         (label: l10n.artistConcerts, index: _concertsTab),
     ];
 
@@ -360,7 +373,7 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                     Text(
                       tab.label,
                       style: TextStyle(
-                        color: _tab == tab.index
+                        color: activeTab == tab.index
                             ? spotifyWhite
                             : spotifyLightGrey.withValues(alpha: 0.9),
                         fontSize: 18,
@@ -372,7 +385,7 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                       duration: const Duration(milliseconds: 220),
                       curve: Curves.easeOut,
                       height: 3,
-                      width: _tab == tab.index ? 26 : 0,
+                      width: activeTab == tab.index ? 26 : 0,
                       decoration: BoxDecoration(
                         color: spotifyGreen,
                         borderRadius: BorderRadius.circular(2),
@@ -907,8 +920,9 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     BuildContext context,
     WidgetRef ref,
     List<MuzoItem> playable,
-    AppLocalizations l10n,
-  ) {
+    AppLocalizations l10n, {
+    required bool offline,
+  }) {
     final playlistsAsync = ref.watch(_artistPlaylistsProvider(artistName));
     final albumsAsync = ref.watch(_artistAlbumsProvider(artistName));
 
@@ -934,26 +948,54 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
             final song = playable[index];
             final img =
                 song.thumbnails.isNotEmpty ? song.thumbnails.last.url : '';
-            return SpotifySongChip(
-              imageUrl: img,
-              songTitle: song.title,
-              singerName: song.displayArtist,
-              size: 47,
-              videoId: song.videoId,
-              isExplicit: song.isExplicit,
-              result: song,
-              onSingerTap: () {
-                HapticFeedback.selectionClick();
-                _openSongArtist(context, song, img);
-              },
-              onTap: () {
-                HapticFeedback.selectionClick();
-                setState(() {
-                  _selectedSongIndex = index;
-                });
-                final handler = ref.read(audioHandlerProvider);
-                handler.isShuffleModeNotifier.value = false;
-                handler.playAll(playable, startIndex: index);
+            // Rebuilt on every downloads-box write, so a finished download
+            // unblurs its row immediately without reopening the page.
+            return ValueListenableBuilder(
+              valueListenable:
+                  ref.read(storageServiceProvider).downloadsListenable,
+              builder: (context, _, __) {
+                final storage = ref.read(storageServiceProvider);
+                final downloaded = song.videoId != null &&
+                    storage.isDownloaded(song.videoId!);
+                final locked = offline && !downloaded;
+                final chip = SpotifySongChip(
+                  imageUrl: img,
+                  songTitle: song.title,
+                  singerName: song.displayArtist,
+                  size: 47,
+                  videoId: song.videoId,
+                  isExplicit: song.isExplicit,
+                  result: song,
+                  onSingerTap: () {
+                    HapticFeedback.selectionClick();
+                    _openSongArtist(context, song, img);
+                  },
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    if (locked) {
+                      showGlassSnackBar(
+                        context,
+                        AppLocalizations.of(context).offlineNotDownloaded,
+                        error: true,
+                      );
+                      return;
+                    }
+                    setState(() {
+                      _selectedSongIndex = index;
+                    });
+                    final handler = ref.read(audioHandlerProvider);
+                    handler.isShuffleModeNotifier.value = false;
+                    handler.playAll(playable, startIndex: index);
+                  },
+                );
+                if (!locked) return chip;
+                return Opacity(
+                  opacity: 0.55,
+                  child: ImageFiltered(
+                    imageFilter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                    child: chip,
+                  ),
+                );
               },
             );
           },
@@ -1143,6 +1185,12 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     final playable = songs
         .map((s) => _enrichedByVideoId[s.videoId] ?? s)
         .toList();
+    // Offline the concerts tab disappears entirely (concerts need the
+    // network) while every title stays visible: downloaded ones play from
+    // the local file, the rest stay blurred until downloaded.
+    final offline = ref.watch(isOfflineProvider);
+    final showConcerts = widget.showConcerts && !offline;
+    final activeTab = showConcerts ? _tab : _popularTab;
     final totalSeconds = playable.fold<int>(
       0,
       (sum, s) => sum + (s.durationSeconds ?? 0),
@@ -1250,18 +1298,20 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
 
             // ─── Tabs: "Populaires" | "Concerts" | "À propos" ───
             SliverToBoxAdapter(
-              child: _buildTabBar(l10n),
+              child: _buildTabBar(l10n,
+                  showConcerts: showConcerts, activeTab: activeTab),
             ),
 
             // ─── Counts: tracks + total duration, or concerts + videos ───
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: _tabStats(context, ref, playable),
+                child: _tabStats(context, ref, playable,
+                    showConcerts: showConcerts, activeTab: activeTab),
               ),
             ),
 
-            if (widget.showConcerts && _tab == _concertsTab)
+            if (showConcerts && activeTab == _concertsTab)
               // ─── Concerts: past dates + watchable videos ───
               ..._concertSlivers(context, ref)
             else if (songsAsync.isLoading)
@@ -1278,7 +1328,8 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                 child: _buildEmptyState(context, ref),
               )
             else
-              ..._popularContentSlivers(context, ref, playable, l10n),
+              ..._popularContentSlivers(context, ref, playable, l10n,
+                  offline: offline),
 
             const SliverPadding(padding: EdgeInsets.only(bottom: 130)),
           ],

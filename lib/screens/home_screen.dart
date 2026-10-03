@@ -216,10 +216,17 @@ final homeSearchProvider =
 ///
 /// At most one track per artist is picked so a shelf never repeats the same
 /// person (the 10 visible cards are 10 different verified artists).
+///
+/// [genres] is a *list* of catalog genre keys, not one key: the catalog ships
+/// broad genres (Afrobeats, Hip-Hop, Pop…) and the shelves used to ask for keys
+/// like `fr-rap` that simply do not exist there. A single exact lookup therefore
+/// returned nothing and the section silently vanished. Candidates are merged in
+/// order, so a shelf keeps working when data is added later without a code
+/// change.
 final homeCatalogSectionProvider = FutureProvider.family<
     List<MuzoItem>,
-    ({String genre, int offset, String? country})>((ref, args) async {
-  final key = '${args.genre}|${args.offset}|${args.country}';
+    ({List<String> genres, int offset, String? country})>((ref, args) async {
+  final key = '${args.genres.join('+')}|${args.offset}|${args.country}';
   // Building this shelf costs ~100 searches (one per artist, to honour "no
   // repeated artist"), and six genre shelves run on the same home page. Paying
   // that on every launch is not acceptable, and an in-memory memo only survives
@@ -241,13 +248,27 @@ final homeCatalogSectionProvider = FutureProvider.family<
   }
 
   final service = ref.watch(curatedArtistsServiceProvider);
-  var artists = service.artistsWhere(args.genre, country: args.country);
-  // Country miss (missing country_code) → fall back to the full genre list
-  // rather than hiding the whole shelf.
-  if (artists.isEmpty && args.country != null) {
-    artists = service.artistsFor(args.genre);
+  // Merge every candidate genre, in order, keeping the popularity-first order of
+  // each and never repeating an artist across genres.
+  final artists = <CuratedArtist>[];
+  final seenArtists = <String>{};
+  for (final genre in args.genres) {
+    for (final a in service.artistsFor(genre)) {
+      if (seenArtists.add(a.name.toLowerCase())) artists.add(a);
+    }
   }
-  if (artists.isEmpty) return const <MuzoItem>[];
+  // A country filter narrows only when the catalog actually carries one:
+  // `country_code` is empty on most rows, and filtering on it would empty the
+  // shelf instead of narrowing it.
+  final scoped = (args.country != null &&
+          artists.any((a) => (a.countryCode ?? '').isNotEmpty))
+      ? artists
+          .where((a) =>
+              (a.countryCode ?? '').toUpperCase() == args.country!.toUpperCase())
+          .toList()
+      : artists;
+  final pool = scoped.isNotEmpty ? scoped : artists;
+  if (pool.isEmpty) return const <MuzoItem>[];
   final api = ref.read(muzoApiServiceProvider);
   final items = <MuzoItem>[];
   final seenIds = <String>{};
@@ -258,8 +279,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
   // in artist order, never in completion order, so the row stays deterministic.
   const chunk = 5;
   final ordered = <CuratedArtist>[
-    for (var i = 0; i < artists.length; i++)
-      artists[(args.offset + i) % artists.length],
+    for (var i = 0; i < pool.length; i++) pool[(args.offset + i) % pool.length],
   ];
   for (var start = 0; start < ordered.length && items.length < want; start += chunk) {
     final batch = ordered.skip(start).take(chunk).toList();
@@ -1483,23 +1503,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   // 9 — Rap FR
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.frRap,
-                          genre: 'fr-rap', country: 'FR')),
+                          genres: const ['fr rap', 'rap francais', 'afrobeats'], country: 'FR')),
                   // 10 — Rap US
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.usRap,
-                          genre: 'us-rap', offset: 6, country: 'US')),
+                          genres: const ['hip-hop'], offset: 6, country: 'US')),
                   // 11 — Rap Afro
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.afroRap,
-                          genre: 'afro-rap', offset: 5)),
+                          genres: const ['afro rap', 'afrobeats'], offset: 5)),
                   // 12 — Afrobeats
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.afrobeats,
-                          genre: 'afrobeats')),
+                          genres: const ['afrobeats'],)),
                   // 13 — Afro Hits
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.afroHits,
-                          genre: 'afro-hits', offset: 6)),
+                          genres: const ['afrobeats', 'r&b'], offset: 6)),
                   // 14 — Gospel (query pipeline — no dedicated curated table)
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.homeGospel,
@@ -2469,14 +2489,17 @@ class _ContinueListeningSection extends ConsumerWidget {
 
 class _SearchSection extends ConsumerWidget {
   final String title;
-  final String? genre;
+
+  /// Catalog genres this shelf draws from, in priority order. A list because
+  /// the catalog ships broad genre keys, not editorial ones like `fr-rap`.
+  final List<String>? genres;
   final int offset;
   final String? country;
   final String? query;
 
   const _SearchSection(
     this.title, {
-    this.genre,
+    this.genres,
     this.offset = 0,
     this.country,
     this.query,
@@ -2486,9 +2509,9 @@ class _SearchSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final data = query != null
         ? ref.watch(homeSearchProvider(query!))
-        : genre != null
+        : genres != null
             ? ref.watch(homeCatalogSectionProvider(
-                (genre: genre!, offset: offset, country: country)))
+                (genres: genres!, offset: offset, country: country)))
             : ref.watch(homeChartsProvider).when(
                 data: (charts) => AsyncData<List<MuzoItem>>(charts.tracks),
                 loading: () => const AsyncLoading<List<MuzoItem>>(),
