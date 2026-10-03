@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class NotificationService {
@@ -54,6 +55,11 @@ class NotificationService {
           maxProgress: maxProgress,
           progress: progress,
           onlyAlertOnce: true,
+          // White silhouette for the status bar + the color app logo in the
+          // shade: without these the notification shows no app icon at all.
+          icon: 'ic_notification',
+          largeIcon: const DrawableResourceAndroidBitmap('ic_launcher_large'),
+          color: const Color(0xFFFFFFFF),
         );
     final NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,
@@ -75,6 +81,9 @@ class NotificationService {
           importance: Importance.defaultImportance,
           priority: Priority.defaultPriority,
           onlyAlertOnce: false,
+          icon: 'ic_notification',
+          largeIcon: const DrawableResourceAndroidBitmap('ic_launcher_large'),
+          color: const Color(0xFFFFFFFF),
         );
     final NotificationDetails platformChannelSpecifics = NotificationDetails(
       android: androidPlatformChannelSpecifics,

@@ -2,14 +2,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/deezer_api_service.dart';
+import 'package:muzo/providers/content_identity.dart';
 import 'package:muzo/services/multi_api_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/services/storage_service.dart';
 
 /// Days elapsed since the Unix epoch — the seed behind every daily rotation.
 /// Same day → same mix for every launch, next day → a genuinely new one.
-int _daySeed([DateTime? now]) =>
-    (now ?? DateTime.now()).difference(DateTime.utc(2020, 1, 1)).inDays;
 
 /// Top artists the listener actually spends time on, most frequent first.
 /// Favourites count double: liking a track is a stronger signal than playing
@@ -109,7 +108,12 @@ final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
 final dailyMixProvider = FutureProvider<List<MuzoItem>>((ref) async {
   final storage = ref.read(storageServiceProvider);
   final artists = _tasteArtists(storage, limit: 12);
-  final seed = _daySeed();
+  // Per-user daily seed: identical for a given user on a given day, different
+  // for every user. A calendar-only seed gave the whole planet the same mix on
+  // the same day, which is not a "Daily Mix" so much as a "Daily Mix for
+  // everyone".
+  final seed = await ref.watch(userDailySeedProvider.future);
+
 
   try {
     List<MuzoItem> seeds;

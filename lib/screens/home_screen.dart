@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
 import 'package:muzo/providers/navigation_provider.dart';
+import 'package:muzo/providers/content_identity.dart';
 import 'package:muzo/screens/spotify_library_screen.dart';
 import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/album_screen.dart';
@@ -226,7 +227,12 @@ final homeSearchProvider =
 final homeCatalogSectionProvider = FutureProvider.family<
     List<MuzoItem>,
     ({List<String> genres, int offset, String? country})>((ref, args) async {
+  // Namespaced per user: two accounts on one device must not read each other's
+  // shelf, and the rotation offset must differ per person.
+  final namespace = await ref.watch(userContentNamespaceProvider.future);
+  final userSeed = await ref.watch(userDailySeedProvider.future);
   final key = '${args.genres.join('+')}|${args.offset}|${args.country}';
+  final namespacedKey = '$namespace|$key';
   // Building this shelf costs ~100 searches (one per artist, to honour "no
   // repeated artist"), and six genre shelves run on the same home page. Paying
   // that on every launch is not acceptable, and an in-memory memo only survives
@@ -235,15 +241,15 @@ final homeCatalogSectionProvider = FutureProvider.family<
   // It is also what stops the shelf from reshuffling under the user: the
   // catalog service notifies on every reload, which used to re-run this whole
   // loop and re-search every artist.
-  final cacheKey = 'genre_shelf_$key';
-  final memo = _homeSectionMemo[key];
+  final cacheKey = 'genre_shelf_$namespacedKey';
+  final memo = _homeSectionMemo[namespacedKey];
   if (memo != null) return memo;
   final cached = await ContentCacheService.instance.readIfFresh(
     cacheKey,
     maxAge: ContentCacheService.dailyTtl,
   );
   if (cached != null && cached.isNotEmpty) {
-    _homeSectionMemo[key] = cached;
+    _homeSectionMemo[namespacedKey] = cached;
     return cached;
   }
 
@@ -279,7 +285,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
   // in artist order, never in completion order, so the row stays deterministic.
   const chunk = 5;
   final ordered = <CuratedArtist>[
-    for (var i = 0; i < pool.length; i++) pool[(args.offset + i) % pool.length],
+    for (var i = 0; i < pool.length; i++) pool[(args.offset + i + userSeed) % pool.length],
   ];
   for (var start = 0; start < ordered.length && items.length < want; start += chunk) {
     final batch = ordered.skip(start).take(chunk).toList();
@@ -312,7 +318,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
   items.sort((a, b) => _songAgeDays(a).compareTo(_songAgeDays(b)));
   final result = items.take(want).toList();
   if (result.isNotEmpty) {
-    _homeSectionMemo[key] = result;
+    _homeSectionMemo[namespacedKey] = result;
     unawaited(ContentCacheService.instance.write(cacheKey, result));
   }
   return result;
