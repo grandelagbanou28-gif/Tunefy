@@ -285,9 +285,14 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
                                     .withValues(alpha: 0.4),
                             height: 1.4,
                           ),
-                          child: Text(
+                          child: _plainLine(
+                            context,
                             rawLines[i],
-                            textAlign: TextAlign.center,
+                            i == active
+                                ? trByIndex[i]?.trim().isNotEmpty == true
+                                    ? trByIndex[i]
+                                    : null
+                                : null,
                           ),
                         ),
                       ),
@@ -302,9 +307,46 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
     );
   }
 
+  /// A plain line, with the green translation underneath when this is the
+  /// active line and a translation exists for it.
+  Widget _plainLine(BuildContext context, String text, String? translation) {
+    if (translation == null) {
+      return Text(
+        text,
+        textAlign: TextAlign.center,
+      );
+    }
+    return Column(
+      children: [
+        Text(
+          text,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          translation,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: widget.isEmbedded ? 14 : 16,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF1DDA63),
+            height: 1.2,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final fontFamily = Theme.of(context).textTheme.bodyMedium?.fontFamily;
+
+    // Green translation lines for the current song (null = none available).
+    // Watching here also rebuilds this view the moment they arrive.
+    final List<TranslatedLyricLine>? tr = widget.videoId == null
+        ? null
+        : ref.watch(translatedLyricsProvider(widget.videoId!)).valueOrNull;
+    _syncControllerWithTranslation(tr);
 
     final customLyricStyle = LyricStyles.default1.copyWith(
       disableTouchEvent: !widget.scrollable,
@@ -362,11 +404,12 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
                   positionStream: widget.positionStream,
                   isEmbedded: widget.isEmbedded,
                   scrollable: widget.scrollable,
+                  translatedLines: tr,
                 )
               : (widget.lyrics.instrumental || !_hasPlainLyrics
                   ? _buildFallbackView(context, fontFamily, isInstrumental: widget.lyrics.instrumental)
                   : (!_isSynced
-                      ? _buildPlainLyricsView(context, fontFamily)
+                      ? _buildPlainLyricsView(context, fontFamily, tr)
                       : Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 14.0),
                           child: LyricView(

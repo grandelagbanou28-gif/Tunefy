@@ -1168,6 +1168,13 @@ class StorageService {
   Future<void> setDynamicColorEnabled(bool value) =>
       _settingsBox.put('dynamicColorEnabled', value);
 
+  /// Looping video visuals (Canvas) over the player cover art. Muted and
+  /// looped; turning it off shows the static artwork instead.
+  bool get canvasEnabled =>
+      _settingsBox.get('canvasEnabled', defaultValue: true);
+  Future<void> setCanvasEnabled(bool value) =>
+      _settingsBox.put('canvasEnabled', value);
+
   // Downloads preferences
   bool get wifiOnlyDownloads =>
       _settingsBox.get('wifiOnlyDownloads', defaultValue: true);

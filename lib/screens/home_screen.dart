@@ -1,4 +1,4 @@
-import 'package:muzo/screens/spotify_search_screen.dart';
+﻿import 'package:muzo/screens/spotify_search_screen.dart';
 import 'package:muzo/widgets/fade_indexed_stack.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1529,7 +1529,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   // 9 — Rap FR
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.frRap,
-                          genres: const ['fr rap', 'rap francais', 'afrobeats'], country: 'FR')),
+                        genres: const ['fr rap'])),
+
                   // 10 — Rap US
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.usRap,
@@ -2662,3 +2663,4 @@ class _ClaimedArtistRowState extends ConsumerState<_ClaimedArtistRow> {
 }
 
 // ── 18. Vos chansons préférées ──────────────────────────────────────────────
+

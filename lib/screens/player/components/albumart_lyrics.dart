@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:video_player/video_player.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'dart:ui';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/services/lyrics_service.dart';
+import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/widgets/lyrics_view.dart';
 import 'package:muzo/providers/theme_provider.dart';
 import 'package:audio_service/audio_service.dart';
@@ -26,6 +29,11 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
   bool _isLoadingLyrics = false;
   Lyrics? _lyrics;
   String? _lastFetchedTitle;
+
+  /// Canvas (looping muted video over the cover). Loaded per track, disposed
+  /// on track change / unmount. Null = static artwork.
+  VideoPlayerController? _canvasController;
+  String? _canvasKey;
   @override
   void initState() {
     super.initState();
@@ -33,7 +41,57 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
 
   @override
   void dispose() {
+    _canvasController?.dispose();
     super.dispose();
+  }
+
+  /// Starts (or restarts) the Canvas loop for [mediaItem]. The caller owns
+  /// [_canvasKey]: it disposes the previous controller and stamps the new key
+  /// before calling, so stale completions can never play the wrong video.
+  Future<void> _loadCanvas(MediaItem mediaItem) async {
+    final videoId = mediaItem.id;
+    if (videoId.isEmpty) return;
+    final storage = ref.read(storageServiceProvider);
+    if (!storage.canvasEnabled) return;
+    try {
+      final url = await StreamExtractionService.getVideoStreamUrl(videoId)
+          .timeout(const Duration(seconds: 45));
+      if (!mounted || _canvasKey != videoId) return;
+      if (url == null || url.isEmpty) return;
+      final vc = VideoPlayerController.networkUrl(Uri.parse(url));
+      _canvasController = vc;
+      await vc.initialize();
+      if (!mounted || _canvasKey != videoId) {
+        await vc.dispose();
+        if (identical(_canvasController, vc)) _canvasController = null;
+        return;
+      }
+      await vc.setVolume(0);
+      await vc.setLooping(true);
+      if (!_showLyrics) await vc.play();
+      if (mounted) setState(() {});
+    } catch (_) {
+      // No canvas for this track: the static cover stays. Silent by design.
+    }
+  }
+
+  void _disposeCanvas() {
+    final vc = _canvasController;
+    _canvasController = null;
+    unawaited(vc?.dispose());
+  }
+
+  void _setLyricsVisible(bool visible) {
+    if (_showLyrics == visible) return;
+    setState(() => _showLyrics = visible);
+    // Don't burn battery decoding video behind the lyrics sheet.
+    final vc = _canvasController;
+    if (vc == null || !vc.value.isInitialized) return;
+    if (visible) {
+      unawaited(vc.pause());
+    } else if (ref.read(storageServiceProvider).canvasEnabled) {
+      unawaited(vc.play());
+    }
   }
 
   Future<void> _fetchLyrics(MediaItem mediaItem) async {
@@ -88,6 +146,15 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
     final mediaItemAsync = ref.watch(currentMediaItemProvider);
     final audioHandler = ref.watch(audioHandlerProvider);
 
+    // Canvas follows the track: a new id disposes the old loop and starts a
+    // fresh resolve. Disposal during build is safe (no setState involved).
+    final currentMedia = mediaItemAsync.valueOrNull;
+    if (currentMedia != null && currentMedia.id != _canvasKey) {
+      _disposeCanvas();
+      _canvasKey = currentMedia.id;
+      unawaited(_loadCanvas(currentMedia));
+    }
+
     final safeSize = widget.playerArtImageSize.clamp(10.0, double.infinity);
 
     return SizedBox(
@@ -116,6 +183,21 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                 data: (mediaItem) {
                   if (mediaItem?.artUri == null) {
                     return Container(color: Colors.grey[900]);
+                  }
+                  final canvas = _canvasController;
+                  if (canvas != null && canvas.value.isInitialized) {
+                    return SizedBox(
+                      width: widget.playerArtImageSize,
+                      height: widget.playerArtImageSize,
+                      child: FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(
+                          width: canvas.value.size.width,
+                          height: canvas.value.size.height,
+                          child: VideoPlayer(canvas),
+                        ),
+                      ),
+                    );
                   }
                   return CachedNetworkImage(
                     imageUrl: mediaItem!.artUri.toString().replaceAll(
@@ -173,14 +255,15 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                               )
                             : LyricsView(
                                 lyrics: _lyrics!,
-                                onClose: () =>
-                                    setState(() => _showLyrics = false),
+                                onClose: () => _setLyricsVisible(false),
                                 positionStream:
                                     audioHandler.player.positionStream,
                                 totalDuration:
                                     audioHandler.player.duration ??
                                     Duration.zero,
                                 isEmbedded: true,
+                                videoId:
+                                    mediaItemAsync.valueOrNull?.id,
                                 accentColor:
                                     ref
                                         .watch(currentPaletteProvider)
@@ -219,9 +302,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                             onTap: () {
                               final mediaItem = mediaItemAsync.value;
                               if (mediaItem != null) {
-                                setState(() {
-                                  _showLyrics = true;
-                                });
+                                _setLyricsVisible(true);
                                 _fetchLyrics(mediaItem);
                               }
                             },
@@ -258,6 +339,70 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                     ),
                   ),
                 ),
+              // Canvas toggle (bottom-left): looping video visuals on/off.
+              // The cover underneath keeps showing when Canvas is off or has
+              // no video for this track.
+              Positioned(
+                bottom: 12,
+                left: 12,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: () async {
+                            final storage =
+                                ref.read(storageServiceProvider);
+                            final next = !storage.canvasEnabled;
+                            await storage.setCanvasEnabled(next);
+                            if (!mounted) return;
+                            if (!next) {
+                              _disposeCanvas();
+                              setState(() {});
+                            } else {
+                              final media =
+                                  mediaItemAsync.valueOrNull;
+                              _canvasKey = null;
+                              if (media != null) {
+                                _disposeCanvas();
+                                _canvasKey = media.id;
+                                unawaited(_loadCanvas(media));
+                              }
+                              setState(() {});
+                            }
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Builder(builder: (context) {
+                              final on = ref
+                                  .read(storageServiceProvider)
+                                  .canvasEnabled;
+                              return Icon(
+                                Icons.movie_outlined,
+                                color: on
+                                    ? const Color(0xFF1DDA63)
+                                    : Colors.white70,
+                                size: 18,
+                              );
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
