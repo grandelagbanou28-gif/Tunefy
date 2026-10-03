@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:muzo/services/lyrics_service.dart';
+import 'package:muzo/services/lyrics_translation_service.dart'
+    show TranslatedLyricLine;
 
 /// Karaoke-style lyrics view.
 /// Shows the full line; only the *current* word is bright white.
@@ -11,12 +13,16 @@ class KaraokeView extends StatefulWidget {
   final bool isEmbedded;
   final bool scrollable;
 
+  /// Green translation shown under the active line only (null = no translation).
+  final List<TranslatedLyricLine>? translatedLines;
+
   const KaraokeView({
     super.key,
     required this.lines,
     required this.positionStream,
     this.isEmbedded = true,
     this.scrollable = true,
+    this.translatedLines,
   });
 
   @override
@@ -103,7 +109,8 @@ class _KaraokeViewState extends State<KaraokeView> {
             key: _lineKeys[index],
             padding: const EdgeInsets.only(bottom: 20),
             child: isActive
-                ? _buildActiveLine(line, fontSize)
+                ? _buildActiveLine(line, fontSize,
+                    translation: _translationFor(index))
                 : _buildInactiveLine(line, fontSize, isPast),
           );
         }),
@@ -111,8 +118,21 @@ class _KaraokeViewState extends State<KaraokeView> {
     );
   }
 
+  /// Translation text for [index], or null when there is none.
+  String? _translationFor(int index) {
+    final tr = widget.translatedLines;
+    if (tr == null) return null;
+    for (final t in tr) {
+      if (t.index == index) {
+        return t.text.isEmpty ? null : t.text;
+      }
+    }
+    return null;
+  }
+
   /// Active line: only the current syllable is bright white; all others liquid-glass.
-  Widget _buildActiveLine(KaraokeLine line, double fontSize) {
+  Widget _buildActiveLine(KaraokeLine line, double fontSize,
+      {String? translation}) {
     // Find which syllable is currently being sung
     int activeIdx = -1;
     for (int i = line.syllables.length - 1; i >= 0; i--) {
@@ -151,7 +171,24 @@ class _KaraokeViewState extends State<KaraokeView> {
         ),
       ));
     }
-    return Text.rich(TextSpan(children: spans));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(TextSpan(children: spans)),
+        if (translation != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            translation,
+            style: TextStyle(
+              fontSize: fontSize * 0.68,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF1DDA63),
+              height: 1.2,
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   /// Inactive lines: uniformly liquid-glass

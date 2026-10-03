@@ -202,7 +202,7 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
             }
           },
           child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 6),
+            margin: const EdgeInsets.symmetric(horizontal: 8),
             padding: const EdgeInsets.only(top: 2),
             decoration: BoxDecoration(
               color: ref.watch(playerColourProvider),
@@ -212,7 +212,7 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.all(8),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -221,15 +221,15 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
                         onTap: _handleSingleTap,
                         onDoubleTap: _togglePlayback,
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(4),
                           child: CachedNetworkImage(
                             imageUrl: mediaItem.artUri?.toString() ?? '',
-                            width: 34,
-                            height: 34,
+                            width: 40,
+                            height: 40,
                             fit: BoxFit.cover,
                             errorWidget: (_, __, ___) => Container(
-                              width: 34,
-                              height: 34,
+                              width: 40,
+                              height: 40,
                               color: Colors.grey[800],
                               child: const Icon(Icons.music_note, color: Colors.white70, size: 20),
                             ),

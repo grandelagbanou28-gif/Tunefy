@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/providers/content_identity.dart';
 import 'package:muzo/services/multi_api_service.dart';
@@ -63,6 +64,7 @@ Future<List<MuzoItem>> _tracksForArtist(
 /// stays empty rather than pretending: an empty shelf is honest, a shelf of
 /// random hits is not.
 final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|releaseRadar', () async {
   final storage = ref.read(storageServiceProvider);
   final artists = _tasteArtists(storage, limit: 8);
   if (artists.isEmpty) return const [];
@@ -97,6 +99,7 @@ final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
   } catch (_) {
     return const [];
   }
+  });
 });
 
 /// **Daily Mix** — a long personalised queue built from the listener's taste,
@@ -106,6 +109,7 @@ final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
 /// listener has no history yet: a brand-new user still gets a playable shelf,
 /// because a mix is an onboarding surface, not a personalised report.
 final dailyMixProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|dailyMix', () async {
   final storage = ref.read(storageServiceProvider);
   final artists = _tasteArtists(storage, limit: 12);
   // Per-user daily seed: identical for a given user on a given day, different
@@ -150,4 +154,5 @@ final dailyMixProvider = FutureProvider<List<MuzoItem>>((ref) async {
   } catch (_) {
     return const [];
   }
+  });
 });

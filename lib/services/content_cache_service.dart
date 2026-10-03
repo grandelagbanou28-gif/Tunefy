@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:muzo/models/muzo_item.dart';
@@ -12,6 +13,28 @@ class ContentCacheService {
   ContentCacheService._();
 
   static final ContentCacheService instance = ContentCacheService._();
+
+  /// Shelf disk fallback: runs [fetch], persists non-empty wins, and replays
+  /// the last-known snapshot (up to [staleCeiling]) when the network fails or
+  /// comes back empty — so home shelves keep showing their last content
+  /// offline instead of vanishing.
+  ///
+  /// Bodies wrapped in this must not call `ref.watch` after their first
+  /// await (the watch would fire after init and throw); use `ref.read`
+  /// inside.
+  static Future<List<MuzoItem>> shelfCached(
+    String key,
+    Future<List<MuzoItem>> Function() fetch,
+  ) async {
+    try {
+      final fresh = await fetch();
+      if (fresh.isNotEmpty) {
+        unawaited(instance.write(key, fresh));
+        return fresh;
+      }
+    } catch (_) {}
+    return await instance.readStale(key) ?? <MuzoItem>[];
+  }
 
   /// How long a cached sub-section stays valid. Browsing shelves ("Tendance
   /// du moment", "Hits Bénin", every Rap/Afro row) used to hold a 3-day

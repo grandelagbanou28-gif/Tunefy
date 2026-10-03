@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_lyric/flutter_lyric.dart';
 import 'package:muzo/services/lyrics_service.dart';
+import 'package:muzo/services/lyrics_translation_service.dart';
 import 'package:muzo/widgets/karaoke_view.dart';
 
 class LyricsView extends ConsumerStatefulWidget {
@@ -14,6 +15,9 @@ class LyricsView extends ConsumerStatefulWidget {
   final bool scrollable;
   final Color? accentColor;
 
+  /// Media id used to fetch the green translation lines. Null = no translation.
+  final String? videoId;
+
   const LyricsView({
     super.key,
     required this.lyrics,
@@ -23,6 +27,7 @@ class LyricsView extends ConsumerStatefulWidget {
     this.isEmbedded = true,
     this.scrollable = true,
     this.accentColor,
+    this.videoId,
   });
 
   @override
@@ -36,6 +41,10 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
   final List<GlobalKey> _plainLineKeys = [];
   int _plainActiveLine = -1;
 
+  /// Signature of the controller content currently loaded (lyrics +
+  /// translation): reloading only happens when it changes.
+  String _loadedSig = '';
+
   bool get _isKaraoke => widget.lyrics.karaokeLines != null;
   bool get _isSynced => widget.lyrics.syncedLyrics.trim().isNotEmpty;
   bool get _hasPlainLyrics => widget.lyrics.plainLyrics.trim().isNotEmpty;
@@ -47,6 +56,7 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
     if (!_isKaraoke && _isSynced) {
       _lyricController = LyricController();
       _lyricController.loadLyric(widget.lyrics.syncedLyrics);
+      _loadedSig = '${widget.lyrics.syncedLyrics.hashCode}|-1';
       _positionSubscription = widget.positionStream.listen((duration) {
         _lyricController.setProgress(duration);
       });
@@ -70,6 +80,7 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
         _lyricController.dispose();
         _lyricController = LyricController();
         _lyricController.loadLyric(widget.lyrics.syncedLyrics);
+        _loadedSig = '${widget.lyrics.syncedLyrics.hashCode}|-1';
         _positionSubscription = widget.positionStream.listen((duration) {
           _lyricController.setProgress(duration);
         });
@@ -80,6 +91,49 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
         _plainScrollController.jumpTo(0);
       }
     }
+  }
+
+  /// Builds a translation LRC (`[mm:ss.xx] text` per line) aligned on the
+  /// same timestamps as the source, for the package's native translation
+  /// rendering. Null when there is nothing to show.
+  String? _translationLrc(List<TranslatedLyricLine>? tr) {
+    if (tr == null || tr.isEmpty) return null;
+    final timed = parseTimedLyrics(widget.lyrics, widget.totalDuration);
+    if (timed.isEmpty) return null;
+    final byIndex = <int, String>{for (final t in tr) t.index: t.text};
+    final buf = StringBuffer();
+    for (var i = 0; i < timed.length; i++) {
+      final text = byIndex[i];
+      if (text == null || text.trim().isEmpty) continue;
+      final ms = timed[i].time.inMilliseconds;
+      final mm = (ms ~/ 60000).toString().padLeft(2, '0');
+      final ss = ((ms ~/ 1000) % 60).toString().padLeft(2, '0');
+      final hh = ((ms % 1000) ~/ 10).toString().padLeft(2, '0');
+      buf.writeln('[$mm:$ss.$hh] $text');
+    }
+    final out = buf.toString();
+    return out.isEmpty ? null : out;
+  }
+
+  /// (Re)loads the synced controller with the current translation when it
+  /// changed. Called from build: it only notifies the package's own
+  /// controller, never this widget's setState, so it cannot loop.
+  void _syncControllerWithTranslation(List<TranslatedLyricLine>? tr) {
+    if (_isKaraoke || !_isSynced) return;
+    final sig =
+        '${widget.lyrics.syncedLyrics.hashCode}|${tr == null ? -1 : tr.length}';
+    if (sig == _loadedSig) return;
+    _loadedSig = sig;
+    _positionSubscription?.cancel();
+    _lyricController.dispose();
+    _lyricController = LyricController();
+    _lyricController.loadLyric(
+      widget.lyrics.syncedLyrics,
+      translationLyric: _translationLrc(tr),
+    );
+    _positionSubscription = widget.positionStream.listen((duration) {
+      _lyricController.setProgress(duration);
+    });
   }
 
   @override
@@ -117,7 +171,11 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
     );
   }
 
-  Widget _buildPlainLyricsView(BuildContext context, String? fontFamily) {
+  Widget _buildPlainLyricsView(
+    BuildContext context,
+    String? fontFamily,
+    List<TranslatedLyricLine>? tr,
+  ) {
     final List<String> rawLines = widget.lyrics.plainLyrics
         .split('\n')
         .map((l) => l.trim())
@@ -128,6 +186,10 @@ class _LyricsViewState extends ConsumerState<LyricsView> {
     }
 
     final double fontSize = widget.isEmbedded ? 18.0 : 22.0;
+
+    final trByIndex = <int, String>{
+      for (final t in (tr ?? const <TranslatedLyricLine>[])) t.index: t.text,
+    };
 
     // Estimate timestamps: evenly spread the plain lines across the song
     // duration so we can highlight and auto-scroll the current line even

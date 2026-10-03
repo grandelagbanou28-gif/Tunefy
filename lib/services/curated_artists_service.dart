@@ -72,6 +72,9 @@ class CuratedArtistsService extends ChangeNotifier {
   /// for three days straight, so those shelves never appeared to change.
   static const Duration _refreshInterval = Duration(hours: 12);
 
+  /// Hive key holding the per-install content id this refresh belongs to.
+  static const String _userRefreshKey = 'content_id';
+
   static final CuratedArtistsService instance = CuratedArtistsService();
 
   Map<String, List<CuratedArtist>> _byGenre = const {};
@@ -133,8 +136,14 @@ class CuratedArtistsService extends ChangeNotifier {
   }
 
   Future<void> _load() async {
-    // Respect the 72h cadence: if we already refreshed recently, reuse cache.
-    if (!_shouldRefreshFromNetwork(DateTime.now(), _lastChecked())) {
+    // Freshness is judged against *this user's* own last refresh when that is
+    // available. A single global clock meant whoever opened the app first decided
+    // what everyone else saw for the next twelve hours; and a user coming back
+    // minute ago. Falls back to the shared local timestamp when the user has no
+    // stamp of their own yet.
+    final lastRefresh =
+        _lastRefreshForCurrentUser() ?? _lastChecked();
+    if (!_shouldRefreshFromNetwork(DateTime.now(), lastRefresh)) {
       if (_byGenre.isNotEmpty) {
         _catalogRevision++;
         notifyListeners();
@@ -272,6 +281,13 @@ class CuratedArtistsService extends ChangeNotifier {
         _byGenre = Map.unmodifiable(byGenre);
         _cache(_byGenre);
         _markChecked();
+        // Stamped against the user who actually paid for this download, so the
+        // next freshness check is made against their clock rather than the
+        // global one.
+        final contentId = Hive.box('settings').get(_userRefreshKey) as String?;
+        if (contentId != null && contentId.isNotEmpty) {
+          _markRefreshedForCurrentUser(contentId);
+        }
       }
       debugPrint('Curated artists loaded: ${_countArtists()} across '
           '${_byGenre.length} genres');
@@ -307,6 +323,35 @@ class CuratedArtistsService extends ChangeNotifier {
       merged.sort((a, b) => b.followers.compareTo(a.followers));
       byGenre[alias] = merged;
     });
+  }
+
+  /// This user's own catalogue freshness, or null when unknown.
+  ///
+  /// Keyed by the per-install content id, so switching accounts on one device
+  /// does not inherit the previous user's freshness. Deliberately local: the
+  /// shared table in migration 0015 would make freshness follow the account
+  /// across devices, but writing under RLS needs the session token, and a
+  /// device-local clock is what actually decides whether *this* user waits.
+  DateTime? _lastRefreshForCurrentUser() {
+    try {
+      final id = Hive.box('settings').get(_userRefreshKey) as String?;
+      if (id == null || id.isEmpty) return null;
+      final raw = Hive.box('settings').get('catalog_refreshed_$id');
+      if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);
+      if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+    } catch (_) {}
+    return null;
+  }
+
+  /// Records that *this user* just refreshed.
+  void _markRefreshedForCurrentUser(String contentId) {
+    try {
+      Hive.box('settings')
+        ..put(_userRefreshKey, contentId)
+        ..put('catalog_refreshed_$contentId', DateTime.now().millisecondsSinceEpoch);
+    } catch (_) {
+      // Non fatal: the shared local timestamp still keeps the cadence sane.
+    }
   }
 
   DateTime? _lastChecked() {

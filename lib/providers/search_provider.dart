@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
@@ -1526,12 +1527,54 @@ audit.onAccepted();
 /// budget is spent).
 const int kMinArtistTracks = 100;
 
+/// Merges downloaded tracks matching [artistQuery] into [songs] (deduped by
+/// videoId, same artist-token matching as the network top-up). Offline
+/// backbone of the artist page: downloads always show, with or without
+/// network or cache.
+void _mergeDownloadedSongs(List<MuzoItem> songs, String artistQuery) {
+  final seen = <String>{
+    for (final s in songs) (s.videoId ?? '').toLowerCase(),
+  }..remove('');
+  final tokens = _artistTokens(primaryArtistName(artistQuery));
+  try {
+    final box = Hive.box('downloads');
+    for (final raw in box.values) {
+      try {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final r = m['result'];
+        if (r is! Map) continue;
+        final item = MuzoItem.fromJson(Map<String, dynamic>.from(r));
+        final vid = item.videoId;
+        if (vid == null || vid.isEmpty) continue;
+        final names = (item.artists ?? const <MuzoArtist>[])
+            .map((a) => a.name)
+            .join(' ');
+        final haystack = '${item.displayArtist} $names'.toLowerCase();
+        if (!tokens.any(haystack.contains)) continue;
+        final key = vid.toLowerCase();
+        if (seen.contains(key)) continue;
+        seen.add(key);
+        songs.add(item);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 final artistSongsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artist) async {
   if (artist.trim().isEmpty) return <MuzoItem>[];
 
   // ─── 72h Hive cache ───
   final cacheKey = 'artist_songs_${artist.trim().toLowerCase()}';
+  // Offline the network cannot refill anything, so an expired snapshot is
+  // still served (up to a year) instead of an empty page.
+  var offline = false;
+  try {
+    final conn = await Connectivity().checkConnectivity();
+    offline = !conn.contains(ConnectivityResult.mobile) &&
+        !conn.contains(ConnectivityResult.wifi) &&
+        !conn.contains(ConnectivityResult.ethernet);
+  } catch (_) {}
   try {
     final box = Hive.box('artist_songs_cache');
     final cached = box.get(cacheKey) as Map?;
@@ -1541,12 +1584,19 @@ final artistSongsProvider =
       // A cache that missed the 100-track goal is not worth keeping for 3
       // days: it would freeze a thin page. Those expire in 3 hours instead.
       final thin = jsonList.length < kMinArtistTracks;
-      final maxAge = thin
-          ? const Duration(hours: 3)
-          : const Duration(hours: 72);
+      final maxAge = offline
+          ? const Duration(days: 365)
+          : thin
+              ? const Duration(hours: 3)
+              : const Duration(hours: 72);
       if (DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) <
           maxAge) {
-        return jsonList.map((j) => MuzoItem.fromJson(Map<String, dynamic>.from(j))).toList();
+        final cachedSongs =
+            jsonList.map((j) => MuzoItem.fromJson(Map<String, dynamic>.from(j))).toList();
+        // Downloads merged here too: a track downloaded after this snapshot
+        // was saved must still show (and play) offline.
+        _mergeDownloadedSongs(cachedSongs, artist);
+        return cachedSongs;
       }
     }
   } catch (_) {}
@@ -1578,6 +1628,9 @@ final artistSongsProvider =
   /// Warms the 72h cache as soon as the page already has a usable track list,
   /// so a slow top-up that gets abandoned still leaves the next visit fast.
   Future<void> cacheNow() async {
+    // Never poison the cache with an empty list (e.g. an offline visit):
+    // an empty write would destroy the last good snapshot.
+    if (songs.isEmpty) return;
     try {
       final box = Hive.box('artist_songs_cache');
       await box.put(cacheKey, {
@@ -1717,14 +1770,21 @@ final artistSongsProvider =
     }
   }
 
+  // ─── Offline backbone: downloaded tracks by this artist are always
+  // merged in, so the page lists (and plays) them with or without network
+  // or cache.
+  _mergeDownloadedSongs(songs, artist);
+
   // ─── Save to 72h cache ───
-  try {
-    final box = Hive.box('artist_songs_cache');
-    await box.put(cacheKey, {
-      'ts': DateTime.now().millisecondsSinceEpoch,
-      'songs': songs.map((s) => s.toJson()).toList(),
-    });
-  } catch (_) {}
+  if (songs.isNotEmpty) {
+    try {
+      final box = Hive.box('artist_songs_cache');
+      await box.put(cacheKey, {
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'songs': songs.map((s) => s.toJson()).toList(),
+      });
+    } catch (_) {}
+  }
 
   return songs;
   } catch (e) {

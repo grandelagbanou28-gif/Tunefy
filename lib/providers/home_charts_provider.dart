@@ -54,6 +54,28 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
     } catch (_) {}
   }
 
+  /// Offline fallback: replays the newest snapshot found in the previous
+  /// buckets. Only consulted when today's bucket AND the network both came
+  /// back empty, so online freshness is untouched.
+  Future<List<MuzoItem>> fromRecentBuckets(String name) async {
+    for (var d = day - 1; d > day - 7; d--) {
+      try {
+        final raw = await ContentCacheService.instance.readJsonIfFresh(
+          'homecharts|$name|d$d',
+          maxAge: ContentCacheService.staleCeiling,
+        );
+        if (raw != null && raw.isNotEmpty) {
+          final items = raw
+              .whereType<Map>()
+              .map((m) => MuzoItem.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+          if (items.isNotEmpty) return items;
+        }
+      } catch (_) {}
+    }
+    return const [];
+  }
+
   Future<List<MuzoItem>> resolveInBatches(
     List<String> queries,
     String filter, {
@@ -109,6 +131,8 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
     tracks = await resolveInBatches(queries, 'songs', song: true);
     if (tracks.isNotEmpty) {
       await persist('tracks', tracks);
+    } else {
+      tracks = await fromRecentBuckets('tracks');
     }
   }
 
@@ -131,6 +155,8 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
     albums = await resolveInBatches(queries, 'albums');
     if (albums.isNotEmpty) {
       await persist('albums', albums);
+    } else {
+      albums = await fromRecentBuckets('albums');
     }
   }
 
@@ -155,6 +181,8 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
     playlists = await resolveInBatches(queries, 'playlists');
     if (playlists.isNotEmpty) {
       await persist('playlists', playlists);
+    } else {
+      playlists = await fromRecentBuckets('playlists');
     }
   }
 

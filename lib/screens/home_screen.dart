@@ -166,6 +166,7 @@ int _songAgeDays(MuzoItem item) {
 
 final homeSearchProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
+  return ContentCacheService.shelfCached('shelf|search|$query', () async {
   final api = ref.read(muzoApiServiceProvider);
   try {
     // One search answers with a handful of songs, so a single call could never
@@ -204,6 +205,7 @@ final homeSearchProvider =
   } catch (_) {
     return <MuzoItem>[];
   }
+  });
 });
 
 /// Real songs of the catalog's real artists for a genre.
@@ -227,6 +229,7 @@ final homeSearchProvider =
 final homeCatalogSectionProvider = FutureProvider.family<
     List<MuzoItem>,
     ({List<String> genres, int offset, String? country})>((ref, args) async {
+  return ContentCacheService.shelfCached('shelf|catalog|${args.genres.join('+')}|${args.offset}|${args.country}', () async {
   // Namespaced per user: two accounts on one device must not read each other's
   // shelf, and the rotation offset must differ per person.
   final namespace = await ref.watch(userContentNamespaceProvider.future);
@@ -253,7 +256,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
     return cached;
   }
 
-  final service = ref.watch(curatedArtistsServiceProvider);
+  final service = ref.read(curatedArtistsServiceProvider);
   // Merge every candidate genre, in order, keeping the popularity-first order of
   // each and never repeating an artist across genres.
   final artists = <CuratedArtist>[];
@@ -322,6 +325,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
     unawaited(ContentCacheService.instance.write(cacheKey, result));
   }
   return result;
+  });
 });
 
 /// Session-scoped memo in front of the disk cache: a rebuild must never cost a
@@ -330,6 +334,7 @@ final _homeSectionMemo = <String, List<MuzoItem>>{};
 
 final homeSearchArtistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
+  return ContentCacheService.shelfCached('shelf|searchArtists|$query', () async {
   final api = ref.read(muzoApiServiceProvider);
   try {
     final res = await api.search(query, filter: 'all');
@@ -357,10 +362,12 @@ final homeSearchArtistsProvider =
   } catch (_) {
     return <MuzoItem>[];
   }
+  });
 });
 
 final homeSearchAlbumsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
+  return ContentCacheService.shelfCached('shelf|searchAlbums|$query', () async {
   final api = ref.read(muzoApiServiceProvider);
   try {
     final res = await api.search(query, filter: 'all');
@@ -371,6 +378,7 @@ final homeSearchAlbumsProvider =
   } catch (_) {
     return <MuzoItem>[];
   }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -387,6 +395,7 @@ final homeSearchAlbumsProvider =
 /// leads with different artists and a different order — without making the
 /// same "fresh releases" reappear day after day.
 final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|recommended', () async {
   final dailySeed = _dailySeed();
   try {
     final storage = ref.read(storageServiceProvider);
@@ -433,7 +442,7 @@ final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
   // Fallback fiable : charts FR+US (Apple RSS → YouTube) avec de vrais
   // titres/artistes. topOnMuzo (/api/trending) renvoie surtout des playlists
   // sans videoId ni artiste, inutilisables ici.
-  final charts = await ref.watch(homeChartsProvider.future);
+  final charts = await ref.read(homeChartsProvider.future);
   final fallback =
       _seededShuffle<MuzoItem>(dedupeMuzoSongs(charts.tracks), dailySeed);
   if (fallback.isEmpty) return <MuzoItem>[];
@@ -453,6 +462,7 @@ final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
     for (final i in fallback) byVideo[i.videoId ?? i.title] ?? i,
   ];
   return merged.take(10).toList();
+  });
 });
 
 /// Stable integer that changes once per day (device clock), used to rotate and
@@ -486,6 +496,7 @@ List<T> _seededShuffle<T>(List<T> items, int seed) {
 /// real release dates (FR/US/NG/BJ), and albums from the priority curated
 /// catalogs — so "Nouveaux albums" always has a full, real shelf.
 final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|recentAlbums', () async {
   final deezer = ref.read(deezerApiServiceProvider);
   final api = ref.read(muzoApiServiceProvider);
   final catalog = ref.watch(curatedArtistsServiceProvider);
@@ -823,12 +834,14 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     }
   }
   return merged;
+  });
 });
 
 /// Vraies nouvelles sorties — sons des 7 derniers jours (Deezer dates +
 /// albums prioritaires curated + iTunes current tops résolus YouTube).
 /// Priorité rap FR/US/afro, hits Bénin, afrobeats, régions AF.
 final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|newSongs', () async {
   final deezer = ref.read(deezerApiServiceProvider);
   final multi = ref.read(multiApiServiceProvider);
   final api = ref.read(muzoApiServiceProvider);
@@ -1094,6 +1107,7 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     return dedupeMuzoSongs(direct).take(20).toList();
   }
   return dedupeMuzoSongs(playable).take(24).toList();
+  });
 });
 
 /// Boost score for "Nouvelles sorties": rap FR/US/afro, hits Bénin,
@@ -1199,6 +1213,7 @@ int _headArtistBonus(MuzoItem item) {
 /// Filtered to the last 7 days (incl. today), priority-scored, newest first.
 final homeNewReleasesMergedProvider =
     FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|mergedReleases', () async {
   // 14-day window: last-Friday drops + timezone-skewed midnight stamps still
   // count as "new" without emptying the shelf when Deezer is thin.
   final cutoff = DateTime.now().subtract(const Duration(days: 14));
@@ -1263,11 +1278,13 @@ final homeNewReleasesMergedProvider =
     return 0;
   });
   return merged.take(24).toList();
+  });
 });
 
 /// Découverte de la semaine — de vrais sons du chart mondial Deezer
 /// (`/chart/0/tracks`) résolus en YouTube jouable. Rien d'inventé.
 final deezerWeeklyTracksProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|weekly', () async {
   try {
     final seeds =
         await ref.read(deezerApiServiceProvider).topTracks(limit: 40);
@@ -1279,12 +1296,14 @@ final deezerWeeklyTracksProvider = FutureProvider<List<MuzoItem>>((ref) async {
   } catch (_) {
     return const [];
   }
+  });
 });
 
 /// Artistes populaires du mois — de vrais artistes du chart mondial Deezer
 /// (`/chart/0/artists`), rotation mensuelle déterministe pour que le rayon
 /// change de visage chaque mois.
 final deezerTopArtistsProvider = FutureProvider<List<MuzoItem>>((ref) async {
+  return ContentCacheService.shelfCached('shelf|topArtists', () async {
   try {
     final artists =
         await ref.read(deezerApiServiceProvider).topArtists(limit: 60);
@@ -1295,6 +1314,7 @@ final deezerTopArtistsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   } catch (_) {
     return const [];
   }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

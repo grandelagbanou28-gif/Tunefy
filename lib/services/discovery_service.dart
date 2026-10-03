@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/discovery_models.dart';
@@ -127,11 +129,17 @@ class DiscoveryService {
     } catch (e) {
       debugPrint('DiscoveryService newReleases error: $e');
       final stale = await _restoreMuzo(
-        key,
-        p,
-        'Nouvelles sorties',
-        maxAge: ContentCacheService.dailyTtl,
-      );
+            key,
+            p,
+            'Nouvelles sorties',
+            maxAge: ContentCacheService.dailyTtl,
+          ) ??
+          await _restoreRecentSection(
+            'discovery|newReleases',
+            suffix: '|${p.id}',
+            period: p,
+            title: 'Nouvelles sorties',
+          );
       if (stale != null) return stale;
       return DiscoverySection<MuzoItem>(
         title: 'Nouvelles sorties',
@@ -167,11 +175,17 @@ class DiscoveryService {
     } catch (e) {
       debugPrint('DiscoveryService newAlbums error: $e');
       final stale = await _restoreMuzo(
-        key,
-        p,
-        'Nouveaux albums',
-        maxAge: ContentCacheService.dailyTtl,
-      );
+            key,
+            p,
+            'Nouveaux albums',
+            maxAge: ContentCacheService.dailyTtl,
+          ) ??
+          await _restoreRecentSection(
+            'discovery|newAlbums',
+            suffix: '|${p.id}',
+            period: p,
+            title: 'Nouveaux albums',
+          );
       if (stale != null) return stale;
       return DiscoverySection<MuzoItem>(
         title: 'Nouveaux albums',
@@ -314,9 +328,23 @@ class DiscoveryService {
         items: items,
       );
       _writeCache(key, section);
+      if (items.isNotEmpty) {
+        unawaited(cache.writeJson(key, items.map((i) => i.toJson()).toList()));
+      }
       return section;
     } catch (e) {
       debugPrint('DiscoveryService popularArtists error: $e');
+      final maps = await _restoreRecentBucket('discovery|popularArtists');
+      if (maps != null) {
+        final items = maps.map((m) => PopularArtist.fromJson(m)).toList();
+        if (items.isNotEmpty) {
+          return DiscoverySection<PopularArtist>(
+            title: 'Artistes populaires',
+            period: p,
+            items: items,
+          );
+        }
+      }
       return DiscoverySection<PopularArtist>(
         title: 'Artistes populaires',
         period: p,
@@ -375,9 +403,23 @@ class DiscoveryService {
         items: items,
       );
       _writeCache(key, section);
+      if (items.isNotEmpty) {
+        unawaited(cache.writeJson(key, items.map((i) => i.toJson()).toList()));
+      }
       return section;
     } catch (e) {
       debugPrint('DiscoveryService popularAlbums error: $e');
+      final maps = await _restoreRecentBucket('discovery|popularAlbums');
+      if (maps != null) {
+        final items = maps.map((m) => PopularAlbum.fromJson(m)).toList();
+        if (items.isNotEmpty) {
+          return DiscoverySection<PopularAlbum>(
+            title: 'Albums populaires',
+            period: p,
+            items: items,
+          );
+        }
+      }
       return DiscoverySection<PopularAlbum>(
         title: 'Albums populaires',
         period: p,
@@ -461,5 +503,53 @@ class DiscoveryService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Offline fallback for every disk-persisted shelf: replays the newest
+  /// snapshot found in this bucket or the previous [days] ones. Day buckets
+  /// roll every midnight even with no network to refill them, so restoring
+  /// only the current bucket would still leave shelves empty offline.
+  Future<List<Map<String, dynamic>>?> _restoreRecentBucket(
+    String base, {
+    String suffix = '',
+    int days = 7,
+  }) async {
+    final bucket = ContentCacheService.dayBucket;
+    for (var d = bucket; d > bucket - days; d--) {
+      try {
+        final raw = await cache.readJsonIfFresh(
+          '$base|d$d$suffix',
+          maxAge: ContentCacheService.staleCeiling,
+        );
+        if (raw != null && raw.isNotEmpty) {
+          return raw
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList();
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Offline fallback for the release shelves: same-bucket snapshot first,
+  /// then previous days, so the shelf survives a dead network.
+  Future<DiscoverySection<MuzoItem>?> _restoreRecentSection(
+    String base, {
+    String suffix = '',
+    required DiscoveryPeriod period,
+    required String title,
+    int days = 7,
+  }) async {
+    final maps =
+        await _restoreRecentBucket(base, suffix: suffix, days: days);
+    if (maps == null) return null;
+    final items = maps.map((m) => MuzoItem.fromJson(m)).toList();
+    if (items.isEmpty) return null;
+    return DiscoverySection<MuzoItem>(
+      title: title,
+      period: period,
+      items: items,
+    );
   }
 }
