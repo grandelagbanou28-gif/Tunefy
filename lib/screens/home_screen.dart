@@ -220,12 +220,25 @@ final homeCatalogSectionProvider = FutureProvider.family<
     List<MuzoItem>,
     ({String genre, int offset, String? country})>((ref, args) async {
   final key = '${args.genre}|${args.offset}|${args.country}';
-  // The catalog service notifies whenever it (re)loads, which re-ran this whole
-  // shelf and re-searched every artist: the row visibly reshuffled itself while
-  // the user was looking at it. A per-session memo keeps the shelf stable — the
-  // same 100 tracks until the app is restarted or the section is invalidated.
+  // Building this shelf costs ~100 searches (one per artist, to honour "no
+  // repeated artist"), and six genre shelves run on the same home page. Paying
+  // that on every launch is not acceptable, and an in-memory memo only survives
+  // the session — so the result is cached on disk for a day.
+  //
+  // It is also what stops the shelf from reshuffling under the user: the
+  // catalog service notifies on every reload, which used to re-run this whole
+  // loop and re-search every artist.
+  final cacheKey = 'genre_shelf_$key';
   final memo = _homeSectionMemo[key];
   if (memo != null) return memo;
+  final cached = await ContentCacheService.instance.readIfFresh(
+    cacheKey,
+    maxAge: ContentCacheService.dailyTtl,
+  );
+  if (cached != null && cached.isNotEmpty) {
+    _homeSectionMemo[key] = cached;
+    return cached;
+  }
 
   final service = ref.watch(curatedArtistsServiceProvider);
   var artists = service.artistsWhere(args.genre, country: args.country);
@@ -239,41 +252,54 @@ final homeCatalogSectionProvider = FutureProvider.family<
   final items = <MuzoItem>[];
   final seenIds = <String>{};
   const want = 100;
-  // Several tracks per artist instead of one. Taking a single track per artist
-  // capped these shelves at ten songs by construction, no matter how many
-  // artists the genre had.
-  const perArtist = 6;
-  for (var i = 0; i < artists.length && items.length < want; i++) {
-    final artist = artists[(args.offset + i) % artists.length];
-    try {
-      final res = await api
-          .search(artist.name, filter: 'songs')
-          .timeout(const Duration(seconds: 12));
-      final aLow = artist.name.toLowerCase();
-      var taken = 0;
-      for (final r in res.results) {
-        if (r.videoId == null) continue;
-        // Only accept hits that actually belong to this artist.
-        if (!r.displayArtist.toLowerCase().contains(aLow)) continue;
-        final id = r.videoId!;
-        if (seenIds.contains(id)) continue;
-        seenIds.add(id);
-        items.add(r);
-        taken++;
-        if (taken >= perArtist || items.length >= want) break;
-      }
-    } catch (_) {
-      // Keep going with the next artist; a single failure never kills the row.
+  // One track per artist: a shelf of 100 songs must be 100 different people.
+  // Reaching 100 therefore costs ~100 searches, done in bounded parallel chunks
+  // so the shelf fills in seconds instead of half a minute. Results are appended
+  // in artist order, never in completion order, so the row stays deterministic.
+  const chunk = 5;
+  final ordered = <CuratedArtist>[
+    for (var i = 0; i < artists.length; i++)
+      artists[(args.offset + i) % artists.length],
+  ];
+  for (var start = 0; start < ordered.length && items.length < want; start += chunk) {
+    final batch = ordered.skip(start).take(chunk).toList();
+    final found = await Future.wait(
+      batch.map((artist) async {
+        try {
+          final res = await api
+              .search(artist.name, filter: 'songs')
+              .timeout(const Duration(seconds: 8));
+          final aLow = artist.name.toLowerCase();
+          for (final r in res.results) {
+            if (r.videoId == null) continue;
+            // Only accept hits that actually belong to this artist.
+            if (!r.displayArtist.toLowerCase().contains(aLow)) continue;
+            return r;
+          }
+        } catch (_) {
+          // A single dead artist must never empty the shelf.
+        }
+        return null;
+      }),
+    );
+    for (final r in found) {
+      final id = r?.videoId;
+      if (r == null || id == null || !seenIds.add(id)) continue;
+      items.add(r);
+      if (items.length >= want) break;
     }
   }
   items.sort((a, b) => _songAgeDays(a).compareTo(_songAgeDays(b)));
   final result = items.take(want).toList();
-  if (result.isNotEmpty) _homeSectionMemo[key] = result;
+  if (result.isNotEmpty) {
+    _homeSectionMemo[key] = result;
+    unawaited(ContentCacheService.instance.write(cacheKey, result));
+  }
   return result;
 });
 
-/// Session-scoped memo for genre shelves. Not persisted: a fresh launch is
-/// allowed to reshuffle, a rebuild is not.
+/// Session-scoped memo in front of the disk cache: a rebuild must never cost a
+/// Hive read, and within one session the shelf is immutable anyway.
 final _homeSectionMemo = <String, List<MuzoItem>>{};
 
 final homeSearchArtistsProvider =

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:muzo/providers/overlay_scenes.dart';
@@ -27,7 +27,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Route<void> _sceneRoute(PlayerScene scene) =>
+  Route<void> sceneRoute(PlayerScene scene) =>
       MaterialPageRoute<void>(
         settings: RouteSettings(arguments: SceneArg(scene)),
         builder: (_) => const Scaffold(body: Text('scene')),
@@ -41,7 +41,7 @@ void main() {
   testWidgets('pushing a tagged route publishes the scene', (tester) async {
     await pumpApp(tester);
     final nav = tester.state<NavigatorState>(find.byType(Navigator));
-    nav.push(_sceneRoute(PlayerScene.clips));
+    nav.push(sceneRoute(PlayerScene.clips));
     await tester.pumpAndSettle();
 
     expect(container.read(overlayScenesProvider), contains(PlayerScene.clips));
@@ -52,7 +52,7 @@ void main() {
       (tester) async {
     await pumpApp(tester);
     final nav = tester.state<NavigatorState>(find.byType(Navigator));
-    nav.push(_sceneRoute(PlayerScene.clips));
+    nav.push(sceneRoute(PlayerScene.clips));
     await tester.pumpAndSettle();
     expect(container.read(overlayScenesProvider), isNotEmpty);
 
@@ -68,9 +68,9 @@ void main() {
       (tester) async {
     await pumpApp(tester);
     final nav = tester.state<NavigatorState>(find.byType(Navigator));
-    nav.push(_sceneRoute(PlayerScene.clips));
+    nav.push(sceneRoute(PlayerScene.clips));
     await tester.pumpAndSettle();
-    nav.push(_sceneRoute(PlayerScene.nowPlaying));
+    nav.push(sceneRoute(PlayerScene.nowPlaying));
     await tester.pumpAndSettle();
 
     final scenes = container.read(overlayScenesProvider);
