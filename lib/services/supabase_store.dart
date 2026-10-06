@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:muzo/models/blend.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/models/user_data.dart';
 
@@ -264,6 +265,41 @@ if (resp.statusCode != 200) return false;
       } catch (_) {}
     }
     return items;
+  }
+
+  // ──────────────────────────────── Blends ────────────────────────────────
+  // Shared playlists keyed by join code. The code is the invite: whoever
+  // knows it may read and contribute (see 0016_blends.sql).
+
+  /// Fetches one blend by its join code (case-insensitive), or null when the
+  /// code does not exist or the network is down.
+  Future<Blend?> fetchBlend(String code) async {
+    final normalized = code.trim().toUpperCase();
+    if (normalized.isEmpty) return null;
+    try {
+      final rows = await _get('blends', params: {
+        'code': 'eq.${_q(normalized)}',
+        'limit': '1',
+      });
+      if (rows.isEmpty) return null;
+      return Blend.fromRow(normalized, rows.first);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Creates or overwrites a blend document (upsert on the join code).
+  Future<void> saveBlend(Blend blend) async {
+    await _ensureProfile();
+    await _post(
+      'blends',
+      {
+        'code': blend.code.trim().toUpperCase(),
+        'name': blend.name,
+        'data': blend.toJson(),
+      },
+      onConflict: 'code',
+    );
   }
 
   // ────────────────────────── Settings snapshot ───────────────────────────

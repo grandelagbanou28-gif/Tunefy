@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/discovery_models.dart';
+import 'package:hive/hive.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/category_curator.dart';
 import 'package:muzo/services/content_cache_service.dart';
@@ -85,6 +86,72 @@ class DiscoveryService {
   void invalidate(String key) {
     _memory.remove(key);
     _fetchedAt.remove(key);
+  }
+
+  // ─── Real monthly history ────────────────────────────────────────────────
+  //
+  // There is no free API that serves last month's artist chart. Deezer's
+  // `/chart/0` is the chart of the moment, Apple RSS has no history, and
+  // Spotify's editorial charts need an authenticated session. So the only way
+  // to end up with a *real* "artists of the past month" is to start recording:
+  // each fetch appends today's chart to a 35-day history, and the monthly view
+  // is then computed from what this device actually observed. It is empty until
+  // enough days have passed — and that is honest, where a fabricated ranking
+  // would not be.
+
+  static const String _chartHistoryBox = 'chart_history';
+  static const int _chartHistoryDays = 35;
+
+  Future<void> _appendChartHistory(List<String> names) async {
+    if (names.isEmpty) return;
+    try {
+      final box = Hive.isBoxOpen(_chartHistoryBox)
+          ? Hive.box(_chartHistoryBox)
+          : await Hive.openBox(_chartHistoryBox);
+      final day = ContentCacheService.dayBucket;
+      await box.put(day, names.take(60).toList());
+      // Keep the window bounded: one key per day, 35 days.
+      final cutoff = day - _chartHistoryDays;
+      for (final k in box.keys.cast<String>().toList()) {
+        final parsed = int.tryParse(k.replaceAll('d', ''));
+        if (parsed != null && parsed < cutoff) await box.delete(k);
+      }
+    } catch (_) {
+      // History is an enrichment; never let it break the current chart.
+    }
+  }
+
+  /// Names ranked by how often they showed up over the recorded window, most
+  /// frequent first. Returns an empty list until the history is long enough to
+  /// mean anything.
+  Future<List<String>> recordedMonthlyRanking({int minDays = 7}) async {
+    try {
+      final box = Hive.isBoxOpen(_chartHistoryBox)
+          ? Hive.box(_chartHistoryBox)
+          : await Hive.openBox(_chartHistoryBox);
+      final days = box.keys
+          .cast<String>()
+          .where((k) => box.get(k) is List)
+          .toList();
+      if (days.length < minDays) return const [];
+      final score = <String, int>{};
+      for (final k in days) {
+        final positions = (box.get(k) as List).cast<String>();
+        for (var rank = 0; rank < positions.length; rank++) {
+          // A top-10 appearance is worth more than a top-50 one.
+          final name = positions[rank];
+          score[name] = (score[name] ?? 0) + (positions.length - rank);
+        }
+      }
+      final ranked = score.entries.toList()
+        ..sort((a, b) {
+          final byScore = b.value.compareTo(a.value);
+          return byScore != 0 ? byScore : a.key.compareTo(b.key);
+        });
+      return ranked.take(30).map((e) => e.key).toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   void invalidateNewContent() {
@@ -330,6 +397,10 @@ class DiscoveryService {
       _writeCache(key, section);
       if (items.isNotEmpty) {
         unawaited(cache.writeJson(key, items.map((i) => i.toJson()).toList()));
+        // Record today's chart so a real past-month ranking can be built from
+        // what this device actually saw, instead of pretending Deezer serves
+        // history (it does not).
+        unawaited(_appendChartHistory(items.map((i) => i.name).toList()));
       }
       return section;
     } catch (e) {

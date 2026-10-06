@@ -10,6 +10,7 @@ import 'package:muzo/providers/download_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/download_service.dart';
 import 'package:muzo/widgets/playlist_selection_dialog.dart';
+import 'package:muzo/widgets/blend_selection_dialog.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/services/navigator_key.dart';
 import 'dart:async';
@@ -252,6 +253,22 @@ class SongOptionsMenu extends ConsumerWidget {
                   context: ctx,
                   barrierDismissible: true,
                   builder: (context) => PlaylistSelectionDialog(song: result),
+                );
+              }
+            },
+          ),
+          _buildMenuOption(
+            context,
+            icon: FluentIcons.people_24_regular,
+            label: l10n.addToBlend,
+            onTap: () {
+              onClose?.call();
+              final ctx = navigatorKey.currentContext;
+              if (ctx != null) {
+                showCupertinoDialog(
+                  context: ctx,
+                  barrierDismissible: true,
+                  builder: (context) => BlendSelectionDialog(song: result),
                 );
               }
             },

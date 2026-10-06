@@ -992,6 +992,29 @@ class StorageService {
   Future<void> setChosenCategories(List<String> value) =>
       _settingsBox.put('chosenCategories', value);
 
+  // Blend join codes this device created or joined (uppercase).
+  List<String> get blendCodes =>
+      ((_settingsBox.get('blendCodes', defaultValue: <String>[]) as List)
+              .map((e) => e.toString().trim().toUpperCase()))
+          .where((e) => e.isNotEmpty)
+          .toList();
+
+  Future<void> setBlendCodes(List<String> value) => _settingsBox.put(
+      'blendCodes',
+      value.map((e) => e.trim().toUpperCase()).where((e) => e.isNotEmpty).toList());
+
+  Future<void> addBlendCode(String code) async {
+    final codes = blendCodes;
+    final normalized = code.trim().toUpperCase();
+    if (normalized.isEmpty || codes.contains(normalized)) return;
+    await setBlendCodes([...codes, normalized]);
+  }
+
+  Future<void> removeBlendCode(String code) async {
+    final normalized = code.trim().toUpperCase();
+    await setBlendCodes(blendCodes.where((c) => c != normalized).toList());
+  }
+
   // User Info
   String? get username => _settingsBox.get('username');
   String? get email => _settingsBox.get('email');

@@ -223,6 +223,25 @@ class AppLocalizations {
   String get createPlaylist => _t('createPlaylist');
   String get playlistNameHint => _t('playlistNameHint');
   String get createBtn => _t('createBtn');
+  String get blendTitle => _t('blendTitle');
+  String get blendMine => _t('blendMine');
+  String get blendCreate => _t('blendCreate');
+  String get blendJoin => _t('blendJoin');
+  String get blendNameLabel => _t('blendNameLabel');
+  String get blendCodeLabel => _t('blendCodeLabel');
+  String get blendJoinBtn => _t('blendJoinBtn');
+  String get blendEmpty => _t('blendEmpty');
+  String get blendNotFound => _t('blendNotFound');
+  String get blendLeave => _t('blendLeave');
+  String get blendAddSongs => _t('blendAddSongs');
+  String get blendSearchHint => _t('blendSearchHint');
+  String get addToBlend => _t('addToBlend');
+  String get blendAdded => _t('blendAdded');
+  String blendShareText(String name, String code) =>
+      _t('blendShareText', {'name': name, 'code': code});
+  String blendAddedBy(String name) => _t('blendAddedBy', {'name': name});
+  String blendStats(String members, String tracks) =>
+      _t('blendStats', {'members': members, 'tracks': tracks});
   String songDotArtist(String artist) => _t('songDotArtist', {'artist': artist});
   String get artistType => _t('artistType');
   String albumDotArtist(String artist) =>
@@ -1342,6 +1361,23 @@ const Map<String, String> _en = {
   'createPlaylist': 'Create Playlist',
   'playlistNameHint': 'Playlist Name',
   'createBtn': 'Create',
+  'blendTitle': 'Blend',
+  'blendMine': 'My Blends',
+  'blendCreate': 'New Blend',
+  'blendJoin': 'Join with a code',
+  'blendNameLabel': 'Name',
+  'blendCodeLabel': 'Invite code',
+  'blendJoinBtn': 'Join',
+  'blendEmpty': 'No Blends yet — create one or join with a code.',
+  'blendNotFound': 'Blend not found. Check the code.',
+  'blendLeave': 'Leave',
+  'blendAddSongs': 'Add songs',
+  'blendSearchHint': 'Search a song...',
+  'addToBlend': 'Add to Blend',
+  'blendAdded': 'Added to Blend',
+  'blendShareText': 'Join my Blend "{name}" in Tunefy with the code: {code}',
+  'blendAddedBy': 'by {name}',
+  'blendStats': '{members} members · {tracks} tracks',
   'songDotArtist': 'Song . {artist}',
   'artistType': 'Artist',
   'albumDotArtist': 'Album . {artist}',
@@ -2831,6 +2867,23 @@ const Map<String, String> _fr = {
   'createPlaylist': 'Créer une liste de lecture',
   'playlistNameHint': 'Nom de la playlist',
   'createBtn': 'Créer',
+  'blendTitle': 'Blend',
+  'blendMine': 'Mes Blends',
+  'blendCreate': 'Nouveau Blend',
+  'blendJoin': 'Rejoindre avec un code',
+  'blendNameLabel': 'Nom',
+  'blendCodeLabel': "Code d'invitation",
+  'blendJoinBtn': 'Rejoindre',
+  'blendEmpty': 'Aucun Blend — crée-en un ou rejoins-en un avec un code.',
+  'blendNotFound': 'Blend introuvable. Vérifie le code.',
+  'blendLeave': 'Quitter',
+  'blendAddSongs': 'Ajouter des sons',
+  'blendSearchHint': 'Chercher un son...',
+  'addToBlend': 'Ajouter au Blend',
+  'blendAdded': 'Ajouté au Blend',
+  'blendShareText': 'Rejoins mon Blend « {name} » dans Tunefy avec le code : {code}',
+  'blendAddedBy': 'par {name}',
+  'blendStats': '{members} membres · {tracks} titres',
   'songDotArtist': 'Morceau . {artist}',
   'artistType': 'Artiste',
   'albumDotArtist': 'Album . {artist}',

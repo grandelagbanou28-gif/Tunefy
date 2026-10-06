@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/screens/blend_list_screen.dart';
 import 'package:muzo/screens/playlist_details_screen.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/l10n/app_localizations.dart';
@@ -101,6 +103,90 @@ class _LibraryPlaylistsScreenState
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: _buildSearchBar(l10n),
+                  ),
+                ),
+                // Shared Blend playlists (multi-device, via invite code).
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.of(context).push(
+                          SlidePageRoute(
+                            page: const BlendListScreen(),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              const Color(0xFF1DDA63)
+                                  .withValues(alpha: 0.30),
+                              Colors.black.withValues(alpha: 0.35),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: const Color(0xFF1DDA63)
+                                .withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1DDA63)
+                                    .withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(
+                                Icons.group_outlined,
+                                color: spotifyWhite,
+                                size: 26,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    l10n.blendTitle,
+                                    style: const TextStyle(
+                                      color: spotifyWhite,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  Text(
+                                    l10n.blendJoin,
+                                    style: TextStyle(
+                                      color: spotifyLightGrey.withValues(
+                                          alpha: 0.9),
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(
+                              Icons.chevron_right_rounded,
+                              color: spotifyLightGrey,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 if (filtered.isEmpty)
