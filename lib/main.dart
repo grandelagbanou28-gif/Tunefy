@@ -21,6 +21,7 @@ import 'package:muzo/providers/overlay_scenes.dart';
 import 'package:muzo/providers/settings_provider.dart';
 import 'package:muzo/services/auth_service.dart';
 import 'package:muzo/providers/auth_gate_provider.dart';
+import 'package:muzo/providers/player_provider.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:muzo/services/artist_database_service.dart';
 import 'package:muzo/services/strict_category_filter.dart';
@@ -81,13 +82,18 @@ Future<void> main() async {
 
   final container = ProviderContainer();
 
-  // Parallelize initialization. Skipping web-incompatible plugins on the web
+  // Hive first, then the boxes. Opening a box in parallel with
+  // StorageService.init() races Hive.initFlutter(): the box request can win and
+  // fail with "You need to initialize Hive or provide a path to store the box",
+  // which surfaces on every cold start and is reported as a data failure when it
+  // is really an ordering one.
+  await _safeInitializer(container.read(storageServiceProvider).init());
+  await _safeInitializer(Hive.openBox('artist_songs_cache'));
+
+  // The rest stays parallelised; skipping web-incompatible plugins on the web
   // (just_audio_background / flutter_local_notifications have no web support);
   // each future is guarded so one failure never blocks the app from starting.
-  final initFutures = <Future<void>>[
-    _safeInitializer(container.read(storageServiceProvider).init()),
-    _safeInitializer(Hive.openBox('artist_songs_cache')),
-  ];
+  final initFutures = <Future<void>>[];
   if (!kIsWeb) {
     initFutures.addAll([
       _safeInitializer(JustAudioBackground.init(
@@ -114,6 +120,11 @@ Future<void> main() async {
   try {
     final storageSvc = container.read(storageServiceProvider);
     container.read(isGuestModeProvider.notifier).state = storageSvc.isGuestMode;
+    // Restore the UI state that survived the previous session. The mini player
+    // must start folded exactly as it was left, or closing the app silently
+    // unfolded it while the scroll position and the tab were restored.
+    container.read(isMiniPlayerCollapsedProvider.notifier).state =
+        storageSvc.miniPlayerCollapsed;
   } catch (e) {
     debugPrint('Guest mode restore failed (non-fatal): $e');
   }

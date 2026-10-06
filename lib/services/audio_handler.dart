@@ -1269,6 +1269,20 @@ class AudioHandler {
       },
     );
 
+    // Downloaded file first: play it directly as a file URI (ExoPlayer picks
+    // the right extractor from the .m4a extension) instead of routing through
+    // ResolvingAudioSource, which served local bytes with a wrong MIME type
+    // and made every downloaded track skip silently.
+    try {
+      final downloadPath = _storage.getDownloadPath(videoId);
+      if (downloadPath != null && File(downloadPath).existsSync()) {
+        return AudioSource.uri(
+          Uri.file(downloadPath),
+          tag: mediaItem,
+        );
+      }
+    } catch (_) {}
+
       // A pre-resolved stream URL (e.g. artist-page enrichment) is played
       // DIRECTLY instead of being thrown away: the old path rebuilt a
       // ResolvingAudioSource that ignored audioUrl and re-downloaded the whole
@@ -1781,7 +1795,7 @@ class ResolvingAudioSource extends StreamAudioSource {
           sourceLength: length,
           contentLength: e - s,
           offset: s,
-          contentType: 'audio/mpeg',
+          contentType: _contentTypeFor(downloadPath),
           stream: file.openRead(s, e),
         );
       }

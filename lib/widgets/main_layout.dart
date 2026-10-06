@@ -109,6 +109,14 @@ class _MainLayoutState extends ConsumerState<MainLayout>
 
     final isDesktop = MediaQuery.of(context).size.width > 600;
 
+    // Single writer for the folded state: both gestures that change it go
+    // through the provider, and listening here keeps the persistence in one
+    // place instead of sprinkling writes at each call site.
+    ref.listen(isMiniPlayerCollapsedProvider, (prev, next) {
+      if (prev == next) return;
+      ref.read(storageServiceProvider).setMiniPlayerCollapsed(next);
+    });
+
     // Listen for storage errors
     ref.listen(storageServiceProvider, (previous, next) {
       if (previous?.errorNotifier.value != next.errorNotifier.value &&

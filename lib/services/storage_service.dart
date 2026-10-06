@@ -1328,6 +1328,17 @@ class StorageService {
   /// Restored on launch so quitting the app brings you back to the same tab.
   int get lastTabIndex => _settingsBox.get('lastTabIndex', defaultValue: 0);
 
+  /// Whether the mini player is folded away.
+  ///
+  /// Persisted for the same reason the scroll offset and the tab index are: the
+  /// app already restores the exact place you left off, so letting this one reset
+  /// on every launch was an inconsistency, not a design choice.
+  bool get miniPlayerCollapsed =>
+      _settingsBox.get('miniPlayerCollapsed', defaultValue: false);
+
+  Future<void> setMiniPlayerCollapsed(bool value) =>
+      _settingsBox.put('miniPlayerCollapsed', value);
+
   Future<void> setLastTabIndex(int value) =>
       _settingsBox.put('lastTabIndex', value);
 

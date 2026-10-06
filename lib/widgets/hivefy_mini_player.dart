@@ -193,6 +193,9 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
             if (v > 300) {
               HapticFeedback.selectionClick();
               ref.read(isMiniPlayerCollapsedProvider.notifier).state = true;
+              // Persisted: the home scroll offset survives a restart, so the mini
+              // player's folded state must too — otherwise closing the app silently
+              // unfolded it.
               return;
             }
             if (draggedUp && v < -300) {
