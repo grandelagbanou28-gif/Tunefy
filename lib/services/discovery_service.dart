@@ -389,9 +389,15 @@ class DiscoveryService {
         if (items.length >= 20) break;
       }
 
+      // Truthful label. Deezer serves no monthly history, so until this device
+      // has accumulated enough recorded days to rebuild a real past-month
+      // ranking, the data IS today's chart — and saying "previous month" about it
+      // is simply false. Once enough history exists the ranking is served with
+      // the requested period.
+      final history = await recordedMonthlyRanking(minDays: 25);
       final section = DiscoverySection<PopularArtist>(
         title: 'Artistes populaires',
-        period: p,
+        period: history.length >= 20 ? p : currentMonth(),
         items: items,
       );
       _writeCache(key, section);

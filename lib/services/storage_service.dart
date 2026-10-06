@@ -519,20 +519,22 @@ class StorageService {
   }
 
   Future<void> deletePlaylist(String name) async {
-    isLoadingNotifier.value = true;
+    // Optimistic local delete first: the list updates instantly even if the
+    // network hangs — the remote sync catches up in the background. The old
+    // order (network first, local last, no timeouts) left the playlist
+    // visible for many seconds on a slow connection, looking like the delete
+    // had failed.
+    final current = List<Playlist>.from(_playlistsNotifier.value);
+    current.removeWhere((p) => p.name == name);
+    _playlistsNotifier.value = current;
+    await _savePlaylistsToCache(current);
     try {
       await _dbSync(
-        (s) => s.deletePlaylist(name),
-        () => _api.deletePlaylist(name),
-      );
-      final current = List<Playlist>.from(_playlistsNotifier.value);
-      current.removeWhere((p) => p.name == name);
-      _playlistsNotifier.value = current;
-      _savePlaylistsToCache(current);
+        (s) => s.deletePlaylist(name).timeout(const Duration(seconds: 15)),
+        () => _api.deletePlaylist(name).timeout(const Duration(seconds: 15)),
+      ).timeout(const Duration(seconds: 40));
     } catch (e) {
-      errorNotifier.value = 'Failed to delete playlist: $e';
-    } finally {
-      isLoadingNotifier.value = false;
+      debugPrint('Background playlist delete sync failed: $e');
     }
   }
 
