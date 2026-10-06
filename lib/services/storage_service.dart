@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/models/user_data.dart';
 import 'package:muzo/services/category_artists_service.dart';
@@ -171,6 +172,11 @@ class StorageService {
         debugPrint('Error loading played playlists: $e');
       }
     }
+
+    // Repair orphan downloads: files on disk whose registry entries were
+    // lost (e.g. corrupt box recovery) are re-registered so they show and
+    // play again. No-op when the registry already has entries.
+    await repairDownloads();
 
     // API is now lazily initialized
     // Supabase seed + merge happens in the background (await-free so the app
@@ -837,13 +843,20 @@ class StorageService {
   ValueListenable<Box> get downloadsListenable => _downloadsBox.listenable();
 
   List<Map<String, dynamic>> getDownloads() {
-    final dynamic data = _downloadsBox.get('list');
-    if (data == null) return [];
-
+    // Element-wise parsing: one malformed entry (e.g. written by an older
+    // build) must never nuke the whole list into [].
     try {
-      final List<dynamic> jsonList = data;
-      return jsonList.map((json) => Map<String, dynamic>.from(json)).toList();
-    } catch (e) {
+      final dynamic data = _downloadsBox.get('list');
+      if (data is! List) return [];
+      final out = <Map<String, dynamic>>[];
+      for (final e in data) {
+        try {
+          final m = Map<String, dynamic>.from(e as Map);
+          if (m.containsKey('videoId')) out.add(m);
+        } catch (_) {}
+      }
+      return out;
+    } catch (_) {
       return [];
     }
   }
@@ -879,6 +892,72 @@ class StorageService {
     final downloads = getDownloads();
     downloads.removeWhere((d) => d['videoId'] == videoId);
     await _downloadsBox.put('list', downloads);
+  }
+
+  /// Re-registers orphan .m4a files (registry empty/lost but files on disk).
+  /// Titles and covers are recovered from the artist-songs cache when the
+  /// videoId matches a known track, so repaired rows look like real entries.
+  Future<void> repairDownloads() async {
+    try {
+      if (kIsWeb || getDownloads().isNotEmpty) return;
+      final dir = await getApplicationDocumentsDirectory();
+      final files = Directory(dir.path)
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.toLowerCase().endsWith('.m4a'))
+          .toList();
+      if (files.isEmpty) return;
+      // videoId -> full track for real titles/covers.
+      final known = <String, MuzoItem>{};
+      try {
+        final box = Hive.box('artist_songs_cache');
+        for (final k in box.keys) {
+          try {
+            final m = box.get(k) as Map?;
+            final list = (m?['songs'] as List?) ?? [];
+            for (final e in list) {
+              try {
+                final item =
+                    MuzoItem.fromJson(Map<String, dynamic>.from(e as Map));
+                final vid = item.videoId;
+                if (vid != null && vid.isNotEmpty) {
+                  known.putIfAbsent(vid, () => item);
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+      final entries = <Map<String, dynamic>>[];
+      for (final f in files) {
+        try {
+          if (await f.length() == 0) continue;
+          final name = f.uri.pathSegments.last;
+          if (!name.toLowerCase().endsWith('.m4a')) continue;
+          final vid = name.substring(0, name.length - 4);
+          if (vid.isEmpty) continue;
+          final item = known[vid] ??
+              MuzoItem(
+                title: vid,
+                thumbnails: const [],
+                resultType: 'song',
+                isExplicit: false,
+              );
+          entries.add({
+            'videoId': vid,
+            'result': item.toJson(),
+            'path': f.path,
+            'timestamp': DateTime.now().toIso8601String(),
+          });
+        } catch (_) {}
+      }
+      if (entries.isNotEmpty) {
+        await _downloadsBox.put('list', entries);
+        debugPrint('Repaired ${entries.length} orphan downloads');
+      }
+    } catch (e) {
+      debugPrint('repairDownloads failed: $e');
+    }
   }
 
   /// Strict offline mode: when enabled, only downloaded tracks are playable

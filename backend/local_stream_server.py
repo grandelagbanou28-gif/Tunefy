@@ -19,15 +19,63 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
+import faulthandler
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
+
+# Enable faulthandler to get tracebacks on crashes
+faulthandler.enable()
+
+# Global executor for yt-dlp/ffmpeg work - limits concurrent jobs
+_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="yt-dlp-")
+# Track active subprocesses for cleanup
+_ACTIVE_PROCESSES: list[subprocess.Popen] = []
+_ACTIVE_LOCK = threading.Lock()
+
+# Track server start time for health checks
+_SERVER_START_TIME = time.time()
+
+def _cleanup_processes() -> None:
+    """Terminate all tracked subprocesses on exit."""
+    with _ACTIVE_LOCK:
+        for proc in _ACTIVE_PROCESSES:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        # Give processes a moment to terminate gracefully
+        time.sleep(0.5)
+        for proc in _ACTIVE_PROCESSES:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
+
+atexit.register(_cleanup_processes)
+
+# Track active subprocesses
+def _track_process(proc: subprocess.Popen) -> None:
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCESSES.append(proc)
+
+def _untrack_process(proc: subprocess.Popen) -> None:
+    with _ACTIVE_LOCK:
+        if proc in _ACTIVE_PROCESSES:
+            _ACTIVE_PROCESSES.remove(proc)
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 YT_DLP_BIN = os.environ.get("YT_DLP_BIN", "yt-dlp")
@@ -81,10 +129,26 @@ def resolve_audio(video_id: str) -> str:
         "--",
         f"https://www.youtube.com/watch?v={video_id}",
     ]
-    proc = subprocess.run(
-        cmd, capture_output=True, timeout=RUN_TIMEOUT, text=True, encoding="utf-8", errors="replace"
-    )
-    url = _first_url(proc)
+    
+    def _run_audio():
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=RUN_TIMEOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return _first_url(proc)
+
+    try:
+        future = _EXECUTOR.submit(_run_audio)
+        url = future.result(timeout=RUN_TIMEOUT + 5)
+    except TimeoutError:
+        raise RuntimeError("yt-dlp audio resolution timed out")
+    except Exception as exc:
+        raise RuntimeError(f"yt-dlp audio failed: {exc}") from exc
+
     with _cache_lock:
         _cache[cache_key(video_id, "audio")] = url
     return url
@@ -102,46 +166,57 @@ def resolve_video(video_id: str) -> str:
     target = os.path.join(MEDIA_DIR, f"{video_id}.mp4")
     if not (os.path.exists(target) and os.path.getsize(target) > 0):
         with _merge_lock:
-            # Re-checked under the lock: a queue of clips would otherwise all
-            # download the same file at once.
-            if not (os.path.exists(target) and os.path.getsize(target) > 0):
-                tmp_dir = os.path.join(MEDIA_DIR, "parts")
-                # A stale .part left by an interrupted run makes yt-dlp resume at
-                # a byte the CDN no longer serves, which fails with HTTP 416.
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                os.makedirs(tmp_dir, exist_ok=True)
-                cmd = [
-                    YT_DLP_BIN,
-                    "--no-playlist",
-                    "-f",
-                    VIDEO_FORMAT,
-                    "--merge-output-format",
-                    "mp4",
-                    "--no-part",
-                    "--no-continue",
-                    "--no-warnings",
-                    "--socket-timeout",
-                    "15",
-                    "-o",
-                    os.path.join(tmp_dir, "%(id)s.%(ext)s"),
-                    "--",
-                    f"https://www.youtube.com/watch?v={video_id}",
-                ]
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=MERGE_TIMEOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                produced = os.path.join(tmp_dir, f"{video_id}.mp4")
-                if not (os.path.exists(produced) and os.path.getsize(produced) > 0):
-                    raise RuntimeError(_describe_failure(proc))
-                os.replace(produced, target)
-    with _cache_lock:
-        _cache[cache_key(video_id, "video")] = f"http://127.0.0.1:9877/file/{video_id}.mp4"
-    return f"http://127.0.0.1:9877/file/{video_id}.mp4"
+                # Re-checked under the lock: a queue of clips would otherwise all
+                # download the same file at once.
+                if not (os.path.exists(target) and os.path.getsize(target) > 0):
+                    tmp_dir = os.path.join(MEDIA_DIR, "parts")
+                    # A stale .part left by an interrupted run makes yt-dlp resume at
+                    # a byte the CDN no longer serves, which fails with HTTP 416.
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    cmd = [
+                        YT_DLP_BIN,
+                        "--no-playlist",
+                        "-f",
+                        VIDEO_FORMAT,
+                        "--merge-output-format",
+                        "mp4",
+                        "--no-part",
+                        "--no-continue",
+                        "--no-warnings",
+                        "--socket-timeout",
+                        "15",
+                        "-o",
+                        os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+                        "--",
+                        f"https://www.youtube.com/watch?v={video_id}",
+                    ]
+                    
+                    def _run_merge():
+                        proc = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            timeout=MERGE_TIMEOUT,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+                        return proc
+
+                    # Run the merge in the executor with tracking
+                    future = _EXECUTOR.submit(_run_merge)
+                    proc = future.result(timeout=MERGE_TIMEOUT + 30)
+                    _track_process(proc)
+                    try:
+                        produced = os.path.join(tmp_dir, f"{video_id}.mp4")
+                        if not (os.path.exists(produced) and os.path.getsize(produced) > 0):
+                            raise RuntimeError(_describe_failure(proc))
+                        os.replace(produced, target)
+                    finally:
+                        _untrack_process(proc)
+                with _cache_lock:
+                    _cache[cache_key(video_id, "video")] = f"http://127.0.0.1:9877/file/{video_id}.mp4"
+                return f"http://127.0.0.1:9877/file/{video_id}.mp4"
 
 
 def _first_url(proc) -> str:
@@ -184,32 +259,43 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_media(head_only=True)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
-        parsed = urlparse(self.path)
-        if parsed.path == "/health":
-            self._json(200, {"ok": True, "cached": len(_cache)})
-            return
-        if parsed.path == "/stream":
-            video_id = (parse_qs(parsed.query).get("videoId") or [""])[0]
-            kind = (parse_qs(parsed.query).get("kind") or ["audio"])[0]
-            if not VIDEO_ID_RE.match(video_id):
-                self._json(400, {"error": "invalid videoId"})
+        try:
+            parsed = urlparse(self.path)
+            if parsed.path == "/health":
+                self._json(200, {"ok": True, "cached": len(_cache), "uptime": time.time() - _SERVER_START_TIME})
                 return
+            if parsed.path == "/stream":
+                video_id = (parse_qs(parsed.query).get("videoId") or [""])[0]
+                kind = (parse_qs(parsed.query).get("kind") or ["audio"])[0]
+                if not VIDEO_ID_RE.match(video_id):
+                    self._json(400, {"error": "invalid videoId"})
+                    return
+                try:
+                    url = (
+                        resolve_video(video_id)
+                        if kind == "video"
+                        else resolve_audio(video_id)
+                    )
+                    self._json(200, {"url": url})
+                except subprocess.TimeoutExpired:
+                    self._json(504, {"error": "yt-dlp timeout"})
+                except Exception as exc:  # noqa: BLE001 - reported to the caller
+                    # Log the full traceback for debugging
+                    traceback.print_exc()
+                    self._json(502, {"error": str(exc)[:200]})
+                return
+            if parsed.path.startswith("/file/"):
+                self._serve_media(head_only=False)
+                return
+            self._json(404, {"error": "not found"})
+        except Exception as exc:  # noqa: BLE001
+            # Catch-all for any unexpected exception in the handler
+            traceback.print_exc()
             try:
-                url = (
-                    resolve_video(video_id)
-                    if kind == "video"
-                    else resolve_audio(video_id)
-                )
-                self._json(200, {"url": url})
-            except subprocess.TimeoutExpired:
-                self._json(504, {"error": "yt-dlp timeout"})
-            except Exception as exc:  # noqa: BLE001 - reported to the caller
-                self._json(502, {"error": str(exc)[:200]})
+                self._json(500, {"error": "internal server error"})
+            except Exception:
+                pass
             return
-        if parsed.path.startswith("/file/"):
-            self._serve_media(head_only=False)
-            return
-        self._json(404, {"error": "not found"})
 
     def _serve_media(self, head_only: bool) -> None:
         """Serves a cached MP4 with Range support.
@@ -292,13 +378,41 @@ def _ensure_ffmpeg() -> None:
     os.environ["PATH"] = local_bin + os.pathsep + os.environ.get("PATH", "")
 
 
+def _cleanup_processes() -> None:
+    """Terminate all tracked subprocesses on exit."""
+    with _ACTIVE_LOCK:
+        for proc in _ACTIVE_PROCESSES:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        # Give processes a moment to terminate gracefully
+        time.sleep(0.5)
+        for proc in _ACTIVE_PROCESSES:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except Exception:
+                pass
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=9877)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+    
     _ensure_ffmpeg()
     os.makedirs(MEDIA_DIR, exist_ok=True)
+    
+    def _shutdown(signum, frame):
+        print(f"Received signal {signum}, shutting down...", flush=True)
+        _cleanup_processes()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+    
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"listening on http://{args.host}:{args.port}", flush=True)
     print(f"media cache: {MEDIA_DIR}", flush=True)
