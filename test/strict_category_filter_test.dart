@@ -53,6 +53,38 @@ void main() {
     });
   });
 
+  group('a genre name is not a country', () {
+    // Mesuré le 2026-10-11 sur l'appareil : la carte Amapiano rendait 8 rayons
+    // vides, Reggae 11/12 et Dancehall 7/8, parce que le mot de genre figurait
+    // dans la liste de marqueurs d'un pays et géo-scopait donc la section.
+    test('scene words do not geo-scope their own card', () {
+      expect(detectGeo('Amapiano', 'Amapiano Hits'), isNull);
+      expect(detectGeo('Reggae', 'Roots Reggae'), isNull);
+      expect(detectGeo('Dancehall', 'Bashment'), isNull);
+      expect(detectGeo('House', 'Amapiano'), isNull);
+      expect(detectGeo('Desi', 'Bollywood Classics'), isNull);
+      expect(categoryConstraintFor('Amapiano', 'Log Drums').isGeoScoped, isFalse);
+    });
+
+    test('the genre word still scopes the search term, without a country', () {
+      expect(buildScopedSearchTerm('Amapiano', 'Amapiano Hits', 'amapiano hits'),
+          'amapiano');
+    });
+
+    test('an explicit country still geo-scopes', () {
+      expect(detectGeo('Rap Français', 'Trap FR'), 'france');
+      expect(detectGeo('Gospel', 'Benin Gospel'), 'benin');
+      expect(detectGeo('Afrobeats', 'Nigerian Afrobeats'), 'nigeria');
+      expect(detectGeo('Reggae', 'African Reggae'), 'africa');
+      expect(detectGeo('Caribbean', 'Dancehall'), 'caribbean');
+    });
+
+    test('a country marker still vetoes a foreign track in a geo section', () {
+      final c = categoryConstraintFor('Gospel', 'Benin Gospel');
+      expect(acceptsForCategory(song('Hosanna', 'Sinach Lagos'), c), isFalse);
+    });
+  });
+
   group('gospel artist database', () {
     test('Fanicko is NOT gospel (R&B/afrobeat)', () {
       expect(gospelArtistGeo('Fanicko'), isNull);
@@ -155,16 +187,24 @@ void main() {
   });
 
   group('pure genre section (non-geo)', () {
-    test('genre word or confirmed gospel artist required', () {
+    // Such a section is fetched under its own name ("gospel", "latin",
+    // "drill"), so the query does the selecting: the gate only ranks, it never
+    // deletes. Country strictness lives entirely in the geo-scoped groups.
+    test('candidates are kept and ranked, never vetoed on the word', () {
       final c = categoryConstraintFor('Gospel', 'Gospel');
       expect(c.geo, isEmpty);
       expect(acceptsForCategory(song('Gospel Sunday Service', 'Kirk Franklin'), c),
           isTrue);
       // Confirmed gospel artist without "gospel" in the title.
       expect(acceptsForCategory(song('Way Maker', 'Sinach'), c), isTrue);
-      // R&B artist, no genre word -> out.
+      // Plain song the same query returned: kept.
       expect(acceptsForCategory(song('Party All Night', 'DJ Random'), c),
-          isFalse);
+          isTrue);
+      // …but ranked below the genre-confirmed one.
+      expect(
+          categoryMatchScore(song('Gospel Sunday Service', 'Kirk Franklin'), c),
+          greaterThan(
+              categoryMatchScore(song('Party All Night', 'DJ Random'), c)));
     });
   });
 

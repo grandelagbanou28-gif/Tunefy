@@ -65,7 +65,11 @@ void main() {
       );
       expect(
         SearchRelevance.matchesFilter(
-          item(title: 'x', resultType: '', browseId: 'b', videoId: null),
+          item(
+              title: 'x',
+              resultType: '',
+              browseId: 'MPREb_abc123',
+              videoId: null),
           'albums',
         ),
         isTrue,
