@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:hive/hive.dart';
+import 'package:muzo/services/stream_extraction_service.dart';
 
 class YouTubeMusicAuth {
   static const _boxName = 'yt_music_auth';
@@ -288,6 +289,10 @@ class YouTubeMusicAuth {
       final reason = data['playabilityStatus']?['reason'] as String?;
       debugPrint('YouTubeMusicAuth: player status=$status reason=$reason');
 
+      if (status == 'UNPLAYABLE' && (reason ?? '').contains('not available')) {
+        StreamExtractionService.reportVideoGone(videoId, 'innertube');
+      }
+
       if (status != 'OK') return null;
 
       final streamingData = data['streamingData'] as Map<String, dynamic>?;
@@ -552,6 +557,10 @@ class YouTubeMusicAuth {
       final status = data['playabilityStatus']?['status'] as String?;
       final reason = data['playabilityStatus']?['reason'] as String?;
       debugPrint('YouTubeMusicAuth: player status=$status reason=$reason');
+
+      if (status == 'UNPLAYABLE' && (reason ?? '').contains('not available')) {
+        StreamExtractionService.reportVideoGone(videoId, 'innertube');
+      }
 
       if (status != 'OK') return null;
 

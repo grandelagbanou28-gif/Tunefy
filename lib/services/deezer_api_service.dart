@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/album_details.dart';
+import 'package:muzo/models/artist_details.dart';
 import 'package:muzo/models/muzo_item.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final deezerApiServiceProvider = Provider<DeezerApiService>((ref) {
   return DeezerApiService();
@@ -366,6 +369,197 @@ class DeezerApiService {
     }
   }
 
+  // ── Genre charts (the only in-genre keyless feed) ─────────────────────────
+
+  /// Deezer genre ids verified to answer with genuinely in-genre content:
+  /// Rap/Hip-Hop, African Music (afrobeats / afro rap / amapiano), R&B.
+  /// Deezer's `/genre/{id}/artists` and `/genre/{id}/albums` paths are either
+  /// invalid or ignore the id entirely, so categories and the home shelves
+  /// read the per-genre CHARTS instead.
+  static const int genreRapHipHop = 116;
+  static const int genreAfricanMusic = 2;
+  static const int genreRnbSoul = 165;
+
+  /// Map a category / sub-category label onto a Deezer chart genre id, or null
+  /// when Deezer has no chart for it (gospel, ASMR, podcasts, ambient…).
+  /// Afro runs BEFORE rap so "afro rap" lands on African Music, and pop/rock
+  /// are checked last so "afropop" cannot fall through to the pop chart.
+  static int? chartGenreFor(String label) {
+    final t = label.toLowerCase();
+    bool has(String k) => t.contains(k);
+    if (has('afro') ||
+        has('amapiano') ||
+        has('african') ||
+        has('west africa') ||
+        has('east africa') ||
+        has('highlife') ||
+        has('nigerian') ||
+        has('ghana')) {
+      return genreAfricanMusic;
+    }
+    if (has('rap') ||
+        has('hip hop') ||
+        has('hip-hop') ||
+        has('hiphop') ||
+        has('drill') ||
+        has('trap') ||
+        has('boom bap') ||
+        has('grime') ||
+        has('conscious')) {
+      return genreRapHipHop;
+    }
+    if (has('r&b') || has('rnb') || has('soul') || has('funk')) {
+      return genreRnbSoul;
+    }
+    if (has('reggaeton') || has('salsa') || has('latin') || has('bachata')) {
+      return 197;
+    }
+    if (has('edm') ||
+        has('electro') ||
+        has('techno') ||
+        has('house') ||
+        has('dance')) {
+      return 113;
+    }
+    if (has('jazz')) return 129;
+    if (has('rock')) return 152;
+    if (has('metal')) return 464;
+    if (has('blues')) return 153;
+    if (has('reggae') || has('dancehall')) return 144;
+    if (has('classical')) return 98;
+    if (has('brazil')) return 75;
+    if (has('india')) return 81;
+    if (has('k-pop') || has('kpop') || has('asian')) return 16;
+    if (has('pop')) return 132;
+    return null;
+  }
+
+  /// Raw rows of one genre chart — kept as JSON because the track→MuzoItem
+  /// mapper drops the nested album id (album seeds need it).
+  Future<List<Map<String, dynamic>>> _chartTrackRows(int genreId,
+      {int limit = 25}) async {
+    try {
+      final uri = Uri.parse('$_base/chart/$genreId/tracks?limit=$limit');
+      // This rescue call is what fills a thin section, and on the phone's
+      // network it was the one that kept hitting the 10s ceiling and returned
+      // nothing (the same URL answers in ~1s from a healthy connection).
+      final resp = await http.get(uri).timeout(const Duration(seconds: 14));
+      if (resp.statusCode != 200) return const [];
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      return (body['data'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (e) {
+      debugPrint('Deezer genre chart error ($genreId): $e');
+      return const [];
+    }
+  }
+
+  /// Current hits of ONE genre (`/chart/{genreId}/tracks`) as metadata seeds.
+  /// Never throws.
+  Future<List<MuzoItem>> chartTracksInGenre(int genreId,
+      {int limit = 25}) async {
+    return (await _chartTrackRows(genreId, limit: limit))
+        .map((e) => _trackToMuzo(e))
+        .toList();
+  }
+
+  /// The albums behind one genre chart, hydrated from `/album/{id}` so each
+  /// card carries a real `release_date` and a real Deezer album id (which is
+  /// what makes AlbumScreen open with a full tracklist). Never throws.
+  Future<List<MuzoItem>> albumsInGenre(int genreId, {int limit = 20}) async {
+    final tracks = await _chartTrackRows(genreId, limit: 25);
+    final albumIds = <String>[];
+    for (final t in tracks) {
+      final id = (t['album'] as Map?)?['id']?.toString() ?? '';
+      if (id.isNotEmpty && !albumIds.contains(id)) albumIds.add(id);
+      if (albumIds.length >= limit) break;
+    }
+    return _albumsByIds(albumIds);
+  }
+
+  /// Dated albums released within the last [days] days that are charting in
+  /// [genreIds] — "new albums" restricted to the genres the app serves,
+  /// instead of the worldwide pool that leaks pop and rock into it.
+  Future<List<MuzoItem>> newAlbumsInGenres(List<int> genreIds,
+      {int days = 30, int limit = 24}) async {
+    final batches = await Future.wait(
+        genreIds.map((id) => albumsInGenre(id, limit: 20)));
+    final cutoff = DateTime.now().subtract(Duration(days: days));
+    // Pre-releases and date-only timezone skew: allow a 7-day future horizon.
+    final horizon = DateTime.now().add(const Duration(days: 7));
+    final merged = <String, MuzoItem>{};
+    for (final list in batches) {
+      for (final a in list) {
+        final rel = a.releaseDate;
+        if (rel == null || rel.isBefore(cutoff) || rel.isAfter(horizon)) {
+          continue;
+        }
+        final key = a.sourceId ?? a.title.toLowerCase();
+        final existing = merged[key];
+        if (existing == null ||
+            (existing.releaseDate != null &&
+                rel.isAfter(existing.releaseDate!))) {
+          merged[key] = a;
+        }
+      }
+    }
+    final out = merged.values.toList()
+      ..sort((a, b) => (b.releaseDate ?? DateTime(1970))
+          .compareTo(a.releaseDate ?? DateTime(1970)));
+    return out.take(limit).toList();
+  }
+
+  /// New SONGS inside [genreIds]: lead tracks of the albums that just came out
+  /// in those genres, each stamped with its album's real `release_date`.
+  Future<List<MuzoItem>> newTracksInGenres(List<int> genreIds,
+      {int days = 14, int limit = 24}) async {
+    final albums =
+        await newAlbumsInGenres(genreIds, days: days, limit: limit);
+    final out = <MuzoItem>[];
+    final seen = <String>{};
+    for (final batch in _chunks(albums.take(12).toList(), 4)) {
+      final details = await Future.wait(batch.map((a) async {
+        try {
+          return await albumDetails(a.sourceId ?? a.browseId ?? '');
+        } catch (_) {
+          return null;
+        }
+      }));
+      for (var i = 0; i < details.length; i++) {
+        final d = details[i];
+        if (d == null || d.tracks.isEmpty) continue;
+        for (final t in d.tracks.take(2)) {
+          final key = t.title.toLowerCase().trim();
+          if (key.isEmpty || !seen.add(key)) continue;
+          out.add(t.copyWith(releaseDate: batch[i].releaseDate));
+          if (out.length >= limit) return out;
+        }
+      }
+    }
+    return out;
+  }
+
+  Future<List<MuzoItem>> _albumsByIds(List<String> ids) async {
+    final out = <MuzoItem>[];
+    for (final batch in _chunks(ids, 4)) {
+      final rows = await Future.wait(batch.map((id) async {
+        try {
+          final resp =
+              await http.get(Uri.parse('$_base/album/$id')).timeout(_timeout);
+          if (resp.statusCode != 200) return null;
+          return _albumToMuzo(
+              jsonDecode(resp.body) as Map<String, dynamic>);
+        } catch (_) {
+          return null;
+        }
+      }));
+      out.addAll(rows.whereType<MuzoItem>());
+    }
+    return out;
+  }
+
   /// Real worldwide top Artists of the moment (Deezer `/chart/0/artists`).
   /// Name + official cover; Deezer freshens this chart continuously, so the
   /// home row always reflects who is actually popular right now. Never throws.
@@ -489,6 +683,415 @@ class DeezerApiService {
     }
   }
 
+  // ── Playlists ──────────────────────────────────────────────────────────────
+
+  /// Real Deezer playlists matching [query] (fan "best of", label and radio
+  /// selections). The YouTube worker is the only other playlist source and it
+  /// timed out on every call measured on the handset, so the artist-page shelf
+  /// needs a catalog that actually answers. Ids carry a `dzpl:` prefix so
+  /// [playlistDetails] can be reached without asking YouTube for a playlist
+  /// that does not exist there. Never throws.
+  Future<List<MuzoItem>> searchPlaylists(String query, {int limit = 12}) async {
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+    try {
+      final uri = Uri.parse(
+          '$_base/search/playlist?q=${Uri.encodeComponent(q)}&limit=$limit');
+      final resp = await http.get(uri).timeout(_timeout);
+      if (resp.statusCode != 200) return const [];
+      final rows =
+          ((jsonDecode(resp.body) as Map<String, dynamic>)['data'] as List?) ??
+              const <dynamic>[];
+      final out = <MuzoItem>[];
+      for (final e in rows.whereType<Map>()) {
+        final m = Map<String, dynamic>.from(e);
+        final id = m['id']?.toString() ?? '';
+        final title = m['title']?.toString() ?? '';
+        if (id.isEmpty || title.isEmpty) continue;
+        final cover = m['picture_big']?.toString() ??
+            m['picture_medium']?.toString() ??
+            '';
+        final creator = m['creator'] is Map
+            ? (m['creator'] as Map)['name']?.toString() ?? ''
+            : '';
+        out.add(MuzoItem(
+          title: title,
+          thumbnails: cover.isNotEmpty
+              ? [MuzoThumbnail(url: cover, width: 250, height: 250)]
+              : const [],
+          resultType: 'playlist',
+          isExplicit: false,
+          browseId: 'dzpl:$id',
+          videoId: null,
+          artists: creator.isNotEmpty ? [MuzoArtist(name: creator)] : null,
+          source: 'deezer',
+          sourceId: id,
+          sourceUrl: m['link']?.toString() ?? '',
+          fetchedAt: DateTime.now(),
+          metadata: {
+            if (m['nb_tracks'] is int) 'nb_tracks': m['nb_tracks'],
+          },
+        ));
+      }
+      return out;
+    } catch (e) {
+      debugPrint('Deezer searchPlaylists error: $e');
+      return const [];
+    }
+  }
+
+  /// Full playlist + its tracklist. Tracks are `dz_` metadata seeds, exactly
+  /// like [albumDetails]: callers resolve them to full-length songs before
+  /// playback, the 30 s Deezer preview being the last resort. Never throws.
+  Future<PlaylistDetails?> playlistDetails(
+    String deezerId, {
+    String? fallbackTitle,
+    String? fallbackThumb,
+  }) async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$_base/playlist/$deezerId'))
+          .timeout(_timeout);
+      if (resp.statusCode != 200) return null;
+      final pl = jsonDecode(resp.body) as Map<String, dynamic>;
+
+      final creator = pl['creator'] is Map
+          ? (pl['creator'] as Map<String, dynamic>)['name']?.toString() ?? ''
+          : '';
+      final cover = pl['picture_big']?.toString() ??
+          pl['picture_medium']?.toString() ??
+          fallbackThumb ??
+          '';
+      final title = pl['title']?.toString() ?? fallbackTitle ?? '';
+
+      final embedded = pl['tracks'] is Map
+          ? ((pl['tracks'] as Map<String, dynamic>)['data'] as List?) ??
+              const <dynamic>[]
+          : const <dynamic>[];
+      final tracks = <MuzoItem>[];
+      for (final t in embedded.whereType<Map>()) {
+        var base = _trackToMuzo(Map<String, dynamic>.from(t));
+        if (base.title.isEmpty) continue;
+        if (base.thumbnails.isEmpty && cover.isNotEmpty) {
+          base = base.copyWith(
+            thumbnails: [MuzoThumbnail(url: cover, width: 250, height: 250)],
+          );
+        }
+        tracks.add(base);
+      }
+
+      // A playlist over 50 tracks only carries a `tracklist` href — one extra
+      // call, still bounded, so the shelf never opens on a half-empty page.
+      if (tracks.isEmpty && pl['tracklist'] is Map) {
+        final href = (pl['tracklist'] as Map)['href']?.toString() ?? '';
+        if (href.isNotEmpty) {
+          final trResp = await http
+              .get(Uri.parse('$href${href.contains('?') ? '&' : '?'}limit=100'))
+              .timeout(_timeout);
+          if (trResp.statusCode == 200) {
+            final rows =
+                ((jsonDecode(trResp.body) as Map<String, dynamic>)['data']
+                        as List?) ??
+                    const <dynamic>[];
+            for (final t in rows.whereType<Map>()) {
+              final base = _trackToMuzo(Map<String, dynamic>.from(t));
+              if (base.title.isEmpty) continue;
+              tracks.add(base);
+            }
+          }
+        }
+      }
+
+      return PlaylistDetails(
+        id: 'dzpl:$deezerId',
+        title: title,
+        author: creator,
+        thumbnail: cover,
+        tracks: tracks,
+      );
+    } catch (e) {
+      debugPrint('Deezer playlistDetails error: $e');
+      return null;
+    }
+  }
+
+  // ── Classement national / de scène ────────────────────────────────────────
+
+  /// Les mots qui nomment un magasin (le code Apple de deux lettres de
+  /// `GenreChartSpec.countries`) dans un titre de radio Deezer. C'est une
+  /// table de découverte de SOURCE, pas de contenu : aucun artiste n'y figure.
+  static const Map<String, List<String>> _storefrontWords =
+      <String, List<String>>{
+    'fr': <String>['french', 'france', 'fr', 'français', 'française'],
+    'us': <String>['us', 'usa', 'united states', 'american', 'america'],
+    'ca': <String>['canada', 'canadian'],
+    'gb': <String>['uk', 'united kingdom', 'british', 'grime'],
+    'ng': <String>['nigeria', 'naija', 'nigerian'],
+    'gh': <String>['ghana', 'ghanaian'],
+    'ci': <String>['ivoire', 'ivoirien', 'ivorian'],
+    'cm': <String>['cameroun', 'cameroon', 'camerounaise'],
+    'bj': <String>['benin', 'bénin', 'beninese'],
+    'za': <String>['south africa', 'za'],
+    'ke': <String>['kenya', 'kenyan'],
+    'tz': <String>['tanzania', 'tanzanian'],
+  };
+
+  static String _words(String s) {
+    // Les titres Deezer sont souvent français : sans cette étape, « Rap
+    // Français » devient « rap fr ais » et le mot « fr » ne se reconnaît plus.
+    final folded = s.toLowerCase().replaceAllMapped(
+        RegExp('[àâäéèêëîïôöùûüçñ]'), (m) => _accents[m.group(0)] ?? m.group(0)!);
+    return folded.replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+  }
+
+  static const Map<String, String> _accents = <String, String>{
+    'à': 'a', 'â': 'a', 'ä': 'a', 'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+    'î': 'i', 'ï': 'i', 'ô': 'o', 'ö': 'o', 'ù': 'u', 'û': 'u', 'ü': 'u',
+    'ç': 'c', 'ñ': 'n',
+  };
+
+  /// Comparaison par MOTS ENTERS : « us » doit répondre dans « Rap US » et
+  /// jamais dans « Future » ou « Gust ».
+  static String _padded(String s) => ' ${_words(s)} ';
+
+  /// Une radio ne couvre une ligne que si son titre cite À LA FOIS le pays de
+  /// la ligne et un mot de sa scène. « Hip-hop » (sans pays) ne peut donc pas
+  /// remplir « Rap FR », et « Rap US » ne remplit pas « Rap FR ».
+  @visibleForTesting
+  static bool sceneRadioMatch(
+      String title, List<String> countries, List<String> tokens) {
+    final hay = _padded(title);
+    final words = <String>{
+      for (final c in countries) ...(_storefrontWords[_words(c)] ?? const <String>[]),
+    };
+    if (words.isEmpty) return false;
+    final countryHit = words.any((w) => hay.contains(_padded(w)));
+    final sceneHit = tokens.any((t) => hay.contains(_padded(t)));
+    return countryHit && sceneHit;
+  }
+
+  /// Index de la playlist qui porte le nom de la scène (à défaut la première
+  /// assez fournie) ; -1 quand aucune ne convient.
+  @visibleForTesting
+  static int pickScenePlaylist(List<({String title, int nbTracks})> rows,
+      List<String> tokens) {
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].nbTracks < 10) continue;
+      if (tokens.any((t) => _padded(rows[i].title).contains(_padded(t)))) return i;
+    }
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].nbTracks >= 10) return i;
+    }
+    return rows.isEmpty ? -1 : 0;
+  }
+
+  static Future<List<Map<String, String>>>? _radiosFlight;
+
+  /// La liste des radios Deezer (103 entrées, 71 ko).
+  ///
+  /// Single-flight : les cinq rayons de genre du Home partent en même temps et
+  /// partagent cet unique appel au lieu de retélécharger chacun les 71 ko sur
+  /// un uplink déjà saturé. Mesuré le 2026-10-16 sur l'appareil : les cinq
+  /// lignes appelaient `/radio` en parallèle avec la page artiste ouverte,
+  /// chaque requête sautait au plafond de 10 s et `sceneChart` rentrait vide.
+  Future<List<Map<String, String>>> _radios() {
+    return _radiosFlight ??= _loadRadios().then((rows) {
+      // Une liste vide n'est pas un résultat : ne pas la mémoriser pour la
+      // session entière, sinon une coupure réseau condamne le cran pour toute
+      // la durée de vie du process.
+      if (rows.isEmpty) _radiosFlight = null;
+      return rows;
+    });
+  }
+
+  Future<List<Map<String, String>>> _loadRadios() async {
+    // La table est stockée sur l'appareil : elle change rarement, et c'est elle
+    // qui sautait en premier sous la charge (71 ko au moment où l'uplink portait
+    // déjà les cinq rayons du Home et une page artiste).
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_radiosPrefsKey);
+      if (raw != null) {
+        final stored = jsonDecode(raw) as Map<String, dynamic>;
+        final ts = (stored['ts'] as num?)?.toInt() ?? 0;
+        final cached = <Map<String, String>>[];
+        for (final e in ((stored['rows'] as List?) ?? const <dynamic>[])
+            .whereType<Map>()) {
+          final id = e['id']?.toString() ?? '';
+          final title = e['title']?.toString() ?? '';
+          if (id.isNotEmpty && title.isNotEmpty) {
+            cached.add({'id': id, 'title': title});
+          }
+        }
+        final age =
+            DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts));
+        if (cached.isNotEmpty && age < _radiosTableTtl) return cached;
+      }
+    } catch (_) {}
+    final out = <Map<String, String>>[];
+    try {
+      final resp =
+          await http.get(Uri.parse('$_base/radio?limit=200')).timeout(_timeout);
+      if (resp.statusCode == 200) {
+        final rows =
+            ((jsonDecode(resp.body) as Map<String, dynamic>)['data'] as List?) ??
+                const <dynamic>[];
+        for (final e in rows.whereType<Map>()) {
+          final id = e['id']?.toString() ?? '';
+          final title = e['title']?.toString() ?? '';
+          if (id.isNotEmpty && title.isNotEmpty) {
+            out.add({'id': id, 'title': title});
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Deezer radios error: $e');
+    }
+    if (out.isNotEmpty) unawaited(_storeRadios(out));
+    return out;
+  }
+
+  static const String _radiosPrefsKey = 'dz.radios.v1';
+  static const Duration _radiosTableTtl = Duration(days: 7);
+
+  Future<void> _storeRadios(List<Map<String, String>> rows) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          _radiosPrefsKey,
+          jsonEncode({
+            'ts': DateTime.now().millisecondsSinceEpoch,
+            'rows': rows,
+          }));
+    } catch (_) {}
+  }
+
+  /// Une étape ne doit jamais vider le rayon : ce qui a répondu dans le budget
+  /// est rendu, le reste est abandonné. `null` = l'étape a dépassé son budget.
+  static Future<T?> _within<T>(Future<T> fut, Duration budget) async {
+    try {
+      return await fut.timeout(budget);
+    } on TimeoutException {
+      return null;
+    }
+  }
+
+  /// Les pistes d'une ressource `{id}/tracks` du catalogue Deezer.
+  Future<List<MuzoItem>> _tracksOf(String path, {int limit = 30}) async {
+    try {
+      final sep = path.contains('?') ? '&' : '?';
+      final resp = await http
+          .get(Uri.parse('$_base$path$sep' 'limit=$limit'))
+          .timeout(_timeout);
+      if (resp.statusCode != 200) return const [];
+      final rows =
+          ((jsonDecode(resp.body) as Map<String, dynamic>)['data'] as List?) ??
+              const <dynamic>[];
+      return rows
+          .whereType<Map>()
+          .map((e) => _trackToMuzo(Map<String, dynamic>.from(e)))
+          .where((t) => t.title.isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('Deezer tracks of $path error: $e');
+      return const [];
+    }
+  }
+
+  /// Le classement Deezer d'UNE scène DANS UN PAYS : la radio nationale dont le
+  /// titre cite le pays et la scène (« French Rap », « Rap US »), puis, quand
+  /// aucune radio ne couvre la scène (afrobeats, amapiano, afro trap…), la
+  /// sélection Deezer trouvée avec le nom de la scène elle-même.
+  ///
+  /// Ces deux flux répondent en 2-4 s sans clé, ne listent QUE des sorties
+  /// label, et — contrairement au top de ventes du magasin — tiennent compte du
+  /// pays. Mesuré le 2026-10-16 depuis le réseau de l'utilisateur : le chart
+  /// le plus étiqueté du Home (`rss.marketingtools.apple.com`) est injoignable
+  /// (000 après 20 s) et `topSongs()` retombe sur le RSS legacy, d'où DaBaby
+  /// 2020 et Diddy 2010 dans « Afro Rap » et un « Hip-hop » US rempli de rap
+  /// français par le chart Deezer MONDIAL.
+  ///
+  /// La radio passe d'abord et n'est jamais mélangée à une radio sans pays ; le
+  /// résultat est fusionné dans l'ordre, l'appelant déduplique et décide s'il
+  /// suffit. Ne lève jamais.
+  Future<List<MuzoItem>> sceneChart(List<String> countries, List<String> tokens,
+      String sceneName,
+      {int limit = 30}) async {
+    // Les deux flux partent EN PARALLÈLE : chaînés l'un après l'autre, ils
+    // mesuraient ~20 s pour les 14 s accordées par le provider, qui abandonnait
+    // donc la ligne entière (scene=0 sur les cinq rayons, log 12:42).
+    final playlistFut = _scenePlaylist(sceneName, limit);
+    final merged = <MuzoItem>[
+      ...await _sceneRadios(countries, tokens, limit),
+    ];
+    if (merged.length < limit) merged.addAll(await playlistFut);
+    if (merged.isEmpty) {
+      debugPrint('Deezer sceneChart: rien pour ${countries.join("+")} '
+          'x « $sceneName »');
+    }
+    return merged.take(limit).toList();
+  }
+
+  /// Les radios qui citent À LA FOIS le pays de la ligne et un mot de sa scène.
+  Future<List<MuzoItem>> _sceneRadios(
+      List<String> countries, List<String> tokens, int limit) async {
+    final rows = await _within(_radios(), const Duration(seconds: 6)) ??
+        const <Map<String, String>>[];
+    final titles = <String>[];
+    final calls = <Future<List<MuzoItem>>>[];
+    for (final r in rows) {
+      if (!sceneRadioMatch(r['title'] ?? '', countries, tokens)) continue;
+      titles.add(r['title'] ?? '');
+      calls.add(_tracksOf('/radio/${r['id']}/tracks', limit: limit));
+      // Trois radios au plus : l'uplink porte déjà les cinq rayons du Home.
+      if (calls.length == 3) break;
+    }
+    if (calls.isEmpty) return const [];
+    final lists = await _within(Future.wait(calls), const Duration(seconds: 6)) ??
+        const <List<MuzoItem>>[];
+    final merged = <MuzoItem>[];
+    for (var i = 0; i < lists.length; i++) {
+      if (lists[i].isEmpty) continue;
+      debugPrint('Deezer sceneChart: radio « ${titles[i]} » -> '
+          '${lists[i].length} pistes');
+      merged.addAll(lists[i]);
+    }
+    return merged;
+  }
+
+  /// À défaut de radio nationale (afrobeats, amapiano, afro trap… n'en ont
+  /// pas) : la sélection Deezer trouvée avec le nom de la scène elle-même.
+  Future<List<MuzoItem>> _scenePlaylist(String sceneName, int limit) async {
+    final found = await _within(searchPlaylists(sceneName, limit: 8),
+            const Duration(seconds: 5)) ??
+        const <MuzoItem>[];
+    // Ce sont les MOTS DE LA SCÈNE demandée qui arbitrent (« afrobeats » doit
+    // gagner sur « Best Of 2020 »), pas les étiquettes du magasin : « afro » ne
+    // se lit pas comme « afrobeats » en comparaison par mot entier.
+    final picked = pickScenePlaylist([
+      for (final p in found)
+        (
+          title: p.title,
+          nbTracks: p.metadata?['nb_tracks'] is int
+              ? p.metadata!['nb_tracks'] as int
+              : 0
+        ),
+    ], _words(sceneName).split(' '));
+    if (picked < 0 || picked >= found.length) return const [];
+    final pl = found[picked];
+    final details = await _within(
+        playlistDetails(pl.sourceId ?? '', fallbackTitle: pl.title),
+        const Duration(seconds: 5));
+    final tracks = (details?.tracks ?? const <MuzoItem>[])
+        .where((t) => t.title.isNotEmpty)
+        .toList();
+    if (tracks.isNotEmpty) {
+      debugPrint('Deezer sceneChart: playlist « ${pl.title} » -> '
+          '${tracks.length} pistes');
+    }
+    return tracks;
+  }
+
   // ── Mapping ───────────────────────────────────────────────────────────────
 
   MuzoItem _albumToMuzo(Map<String, dynamic> a) {
@@ -575,6 +1178,92 @@ class DeezerApiService {
     }
   }
 
+  /// The artist's own catalogue as TITLE SEEDS: `/artist/{id}/albums`
+  /// (albums + singles, newest first) then each release's tracklist, deduped
+  /// by title. The artist page needs 100+ tracks but the YouTube backend
+  /// search answers ~40 per query, so the discography is where the extra
+  /// titles come from — Deezer returns a real one per release instead of
+  /// guessing from a keyword search.
+  ///
+  /// Seeds carry a `dz_` id (Deezer previews are 30 s clips), so callers must
+  /// resolve them to full tracks before playback. Never throws.
+  Future<List<MuzoItem>> tracksForArtist(String artistName,
+      {int maxTitles = 200}) async {
+    final q = artistName.trim();
+    if (q.isEmpty) return const [];
+    try {
+      final searchUri = Uri.parse(
+          '$_base/search/artist?q=${Uri.encodeComponent(q)}&limit=1');
+      final searchResp = await http.get(searchUri).timeout(_timeout);
+      if (searchResp.statusCode != 200) return const [];
+      final artists =
+          (jsonDecode(searchResp.body) as Map)['data'] as List? ?? [];
+      if (artists.isEmpty) return const [];
+      final first = Map<String, dynamic>.from(artists.first as Map);
+      final artistId = first['id']?.toString();
+      final artistLabel = first['name']?.toString() ?? q;
+      if (artistId == null || artistId.isEmpty) return const [];
+
+      final releasesUri = Uri.parse(
+          '$_base/artist/$artistId/albums'
+          '?filter=albums%2Csingles&order=release_date%20DESC&limit=50');
+      final releasesResp = await http.get(releasesUri).timeout(_timeout);
+      if (releasesResp.statusCode != 200) return const [];
+      final releases =
+          ((jsonDecode(releasesResp.body) as Map)['data'] as List? ?? [])
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+      if (releases.isEmpty) return const [];
+
+      final out = <MuzoItem>[];
+      final seenTitles = <String>{};
+      // 4 releases in flight: a 50-wide burst trips Deezer's rate limit and
+      // the whole call answers empty. 30 releases ≈ 250 distinct titles.
+      for (final batch in _chunks(releases.take(30).toList(), 4)) {
+        final trackLists = await Future.wait(batch.map((rel) async {
+          final relId = rel['id']?.toString() ?? '';
+          if (relId.isEmpty) return const <MuzoItem>[];
+          try {
+            final r = await http
+                .get(Uri.parse('$_base/album/$relId/tracks?limit=40'))
+                .timeout(_timeout);
+            if (r.statusCode != 200) return const <MuzoItem>[];
+            final rows =
+                (jsonDecode(r.body) as Map)['data'] as List? ?? [];
+            return rows.whereType<Map>().map((e) {
+              final t = Map<String, dynamic>.from(e);
+              // Backfill what a per-album row may omit, so every seed shows
+              // the artist and cover the page's rows are built from.
+              t['artist'] ??= {'id': artistId, 'name': artistLabel};
+              t['album'] ??= {
+                'id': rel['id'],
+                'title': rel['title'],
+                'cover_medium': rel['cover_medium'],
+              };
+              return _trackToMuzo(t);
+            }).toList();
+          } catch (_) {
+            return const <MuzoItem>[];
+          }
+        }));
+        for (final list in trackLists) {
+          for (final t in list) {
+            final key = t.title.toLowerCase().trim();
+            if (key.isEmpty || !seenTitles.add(key)) continue;
+            out.add(t);
+            if (out.length >= maxTitles) return out;
+          }
+        }
+      }
+      debugPrint('Deezer tracksForArtist: "$q" -> ${out.length} titles');
+      return out;
+    } catch (e) {
+      debugPrint('Deezer tracksForArtist error: $e');
+      return const [];
+    }
+  }
+
   /// Fill missing `releaseDate` on search hits via `/album/{id}` (batched).
   /// Genre/artist search never returns dates; without this, undated catalog
   /// (e.g. Gims 2013) would pass every "recent" window filter.
@@ -655,6 +1344,13 @@ class DeezerApiService {
     final artistName = artist?['name']?.toString() ?? '';
     final albumName = album?['title']?.toString() ?? '';
     final artistId = artist?['id']?.toString();
+    // Deezer's public API only ever carries a 30s clip, never the full file.
+    // It travels in `metadata.dzPreview` rather than in `audioUrl`, so the
+    // track keeps looking like the metadata seed it is (YouTube resolution
+    // stays the preferred path) while `MultiApiService` can still fall back to
+    // it: a Deezer title YouTube cannot match used to be dropped and the shelf
+    // lost it. With the clip it stays listed AND audible.
+    final preview = t['preview']?.toString() ?? '';
     return MuzoItem(
       title: t['title']?.toString() ?? '',
       thumbnails: cover.isNotEmpty
@@ -674,6 +1370,9 @@ class DeezerApiService {
           : null,
       album: albumName.isNotEmpty ? MuzoAlbum(name: albumName, id: '') : null,
       audioUrl: null,
+      metadata: preview.isEmpty
+          ? null
+          : {'dzPreview': preview},
       source: 'deezer',
       sourceId: id,
       sourceUrl: t['link']?.toString() ?? '',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,27 +45,38 @@ class MuzoApiService {
       ..['fetched_at'] = DateTime.now().toIso8601String();
   }
 
+  /// Le worker Vercel répond HTTP 500 (« upstream 400/405 ») dès qu'un seul
+  /// caractère non-ASCII est présent dans `q` — mesuré le 2026-10-11 : `q=é`
+  /// suffit, et la casse n'y change rien. Les titres viennent parfois déjà
+  /// **décomposés** de l'amont (`a` + U+0300 dans « Fille à Papa »), que la
+  /// table ci-dessous ne voit pas → les diacritiques combinants sont retirés
+  /// d'abord. Une requête réduite à rien par la pliage (arabe, hangul…) est
+  /// envoyée telle quelle : un 500 honnête vaut mieux qu'un `q` vide.
   static String _stripAccents(String s) {
+    var result =
+        s.replaceAllMapped(RegExp(r'\p{M}', unicode: true), (_) => '');
     const map = {
       'à': 'a', 'á': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'æ': 'ae',
       'ç': 'c', 'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
       'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
       'ð': 'd', 'ñ': 'n', 'ò': 'o', 'ó': 'o', 'ô': 'o', 'ö': 'o', 'õ': 'o',
-      'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
-      'ý': 'y', 'þ': 'th', 'ÿ': 'y',
+      'ø': 'o', 'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+      'ý': 'y', 'þ': 'th', 'ÿ': 'y', 'œ': 'oe',
       'À': 'A', 'Á': 'A', 'Â': 'A', 'Ä': 'A', 'Ã': 'A', 'Å': 'A', 'Æ': 'AE',
       'Ç': 'C', 'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E',
       'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I',
       'Ð': 'D', 'Ñ': 'N', 'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Ö': 'O', 'Õ': 'O',
-      'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U',
-      'Ý': 'Y', 'Þ': 'TH', 'Ÿ': 'Y',
+      'Ø': 'O', 'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U',
+      'Ý': 'Y', 'Þ': 'TH', 'Ÿ': 'Y', 'Œ': 'OE',
     };
-    var result = s;
     for (final e in map.entries) {
       result = result.replaceAll(e.key, e.value);
     }
-    return result;
+    return result.trim().isEmpty ? s.trim() : result;
   }
+
+  @visibleForTesting
+  static String workerQueryFor(String s) => _stripAccents(s);
 
   static const String _baseUrl = ApiConstants.mainApiBaseUrl;
 
@@ -399,7 +411,7 @@ class MuzoApiService {
     if (videoIds.isEmpty) return [];
     try {
       final ids = videoIds.join(',');
-      final uri = Uri.parse('https://nodejs-2588-3000.prg1.zerops.app/api/feed?ids=$ids&minScore=3');
+      final uri = Uri.parse('$_baseUrl/feed?ids=$ids&minScore=3');
       debugPrint('QUICK PICKS API Request: $uri');
       final response = await _client.get(
         uri,
@@ -468,7 +480,106 @@ class MuzoApiService {
   
   // --- Search & Related (from YouTubeApiService) ---
 
+  /// Requêtes identiques en vol : au démarrage, dix cartes du même genre
+  /// réclament le même `q=rap` dans la même milliseconde. Chacune envoyait
+  /// son propre GET, le worker saturait, tout partait en timeout de 15 s et
+  /// l'app donnait l'impression de planter. Elles se partagent désormais une
+  /// réponse, recopiée pour que personne ne trie la liste d'un voisin.
+  final Map<String, Future<MuzoSearchResponse>> _searchInFlight = {};
+
+  /// Réponses en mémoire, 10 minutes. Le dédupliquage « en vol » ci-dessus ne
+  /// couvre que les requêtes SIMULTANÉES : mesuré sur l'appareil au démarrage
+  /// froid, 70 GET en 159 s dont une douzaine de doublons stricts revenus trop
+  /// tard l'un pour l'autre (« Cameleon Tiakola », « awade FOLA », « Quebec
+  /// Drake »…). Chaque recherche rejouée occupe un des 4 créneaux, donc les
+  /// rayons passent leur budget de 20 s à attendre la file et Home s'affiche
+  /// vide. Deuxième effet : le pull-to-refresh répond instantanément.
+  /// Une réponse vide n'est jamais mémorisée (un 400/405 passager ne doit pas
+  /// se figer 10 minutes), et les listes sont recopiées à la sortie comme pour
+  /// l'in-flight — `MuzoItem` est immuable, personne ne trie le voisin.
+  final Map<String, ({MuzoSearchResponse value, DateTime at})> _searchCache = {};
+  static const Duration _searchCacheTtl = Duration(minutes: 10);
+  static const int _searchCacheMax = 240;
+
+  void _rememberSearch(String key, MuzoSearchResponse value) {
+    if (value.results.isEmpty) return;
+    if (_searchCache.length >= _searchCacheMax) {
+      _searchCache.remove(_searchCache.keys.first);
+    }
+    _searchCache[key] = (value: value, at: DateTime.now());
+  }
+
+  /// File d'attente globale des recherches. Une page « Pays » lance dix
+  /// sous-rayons, chacun ses 6-12 recherches : sans plafond le worker Vercel
+  /// reçoit 60 GET simultanés, l'amont YouTube le lui rend en 400/405, et la
+  /// moitié des appels repartent vides — sections affichées « rien à charger ».
+  /// Un appel qui attend depuis 4 s passe quand même : une recherche tapée par
+  /// l'utilisateur ne doit jamais être otage des rayons d'une page.
+  ///
+  /// 4 → 6 : à 4, le démarrage froid mesuré sur l'appareil faisait 70 recherches
+  /// en 159 s (le worker coûte 8-15 s quand il relance un scrape, voir
+  /// [_search]), soit plus que les 20 s de budget de chaque rayon → listes vides
+  /// mémorisées et accueil entièrement nu. Repoussé à 8 en parallèle depuis un
+  /// seul client, le worker a répondu 200 sur les 8 en 0,97-3,19 s (mesuré
+  /// 2026-10-11) — on reste 10 fois sous les 60 simultaines qui le faisaient
+  /// casser, tout en coupant la file d'un tiers.
+  static const int _searchMaxParallel = 6;
+  static int _searchInQueue = 0;
+  static final List<void Function()> _searchWaiters = [];
+
+  static Future<T> _searchSlot<T>(Future<T> Function() run) async {
+    if (_searchInQueue >= _searchMaxParallel) {
+      final releaser = Completer<void>();
+      void release() => releaser.complete();
+      _searchWaiters.add(release);
+      try {
+        await releaser.future.timeout(const Duration(seconds: 4));
+      } on TimeoutException {
+        _searchWaiters.remove(release);
+      }
+    }
+    _searchInQueue++;
+    try {
+      return await run();
+    } finally {
+      _searchInQueue--;
+      if (_searchWaiters.isNotEmpty) _searchWaiters.removeAt(0)();
+    }
+  }
+
   Future<MuzoSearchResponse> search(
+    String query, {
+    String filter = 'songs',
+    String? continuationToken,
+    bool shortOnly = false,
+  }) {
+    final key =
+        '$filter|$shortOnly|${continuationToken ?? ''}|${_stripAccents(query)}';
+    final hit = _searchCache[key];
+    if (hit != null && DateTime.now().difference(hit.at) < _searchCacheTtl) {
+      return Future.value(MuzoSearchResponse(
+        results: List<MuzoItem>.of(hit.value.results),
+        continuationToken: hit.value.continuationToken,
+      ));
+    }
+    final shared = _searchInFlight[key] ??= _searchSlot(
+      () => _search(
+        query,
+        filter: filter,
+        continuationToken: continuationToken,
+        shortOnly: shortOnly,
+      ),
+    ).then((value) {
+      _rememberSearch(key, value);
+      return value;
+    }).whenComplete(() => _searchInFlight.remove(key));
+    return shared.then((value) => MuzoSearchResponse(
+          results: List<MuzoItem>.of(value.results),
+          continuationToken: value.continuationToken,
+        ));
+  }
+
+  Future<MuzoSearchResponse> _search(
     String query, {
     String filter = 'songs',
     String? continuationToken,
@@ -496,30 +607,31 @@ class MuzoApiService {
 
       debugPrint('YOUTUBE_API SEARCH Request: $uri');
       http.Response? response;
-      for (var attempt = 1; attempt <= 3; attempt++) {
+      // Mesuré sur l'appareil : ce worker répond en 1-3 s quand il a chaud,
+      // 8-15 s quand il doit relancer un scrape YouTube. Couper à 8 s faisait
+      // échouer TOUTES les recherches (« attempt 1 error: TimeoutException »)
+      // et vidait les sections. 12 s par essai, deux essais maximum.
+      for (var attempt = 1; attempt <= 2; attempt++) {
         try {
           response = await _client
               .get(
                 uri,
                 headers: _ytHeaders,
               )
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 12));
         } catch (e) {
           debugPrint('YOUTUBE_API SEARCH attempt $attempt error: $e');
-          if (attempt < 3) {
-            await Future<void>.delayed(const Duration(milliseconds: 400));
+          if (attempt < 2) {
+            await Future<void>.delayed(const Duration(milliseconds: 300));
             continue;
           }
           return MuzoSearchResponse(results: []);
         }
         if (response.statusCode == 200) break;
-        // The main worker occasionally 500s under transient load. Retrying a
-        // couple of times keeps category sections and seeds reliably filled
-        // before falling back to Piped, which is frequently out of service.
-        if (attempt < 3) {
+        if (attempt < 2) {
           debugPrint(
-              'YOUTUBE_API SEARCH ${response.statusCode}, retry $attempt/3...');
-          await Future<void>.delayed(const Duration(milliseconds: 400));
+              'YOUTUBE_API SEARCH ${response.statusCode}, retry $attempt/2...');
+          await Future<void>.delayed(const Duration(milliseconds: 300));
         }
       }
       if (response == null) {
@@ -531,20 +643,23 @@ class MuzoApiService {
         'YOUTUBE_API SEARCH RAW: ${response.body.substring(0, (response.body.length > 300) ? 300 : response.body.length)}',
       );
       if (response.statusCode != 200) {
-        // Fallback to Piped API
-        debugPrint('MuzoApi: Main API failed, trying Piped fallback...');
-        try {
-          final pipedSongs = filterIndianContent(
-            await PipedApiService()
-                .search(query, filter: filter, shortOnly: shortOnly)
-                .timeout(const Duration(seconds: 12)),
-            contextQuery: query,
-          );
-          if (pipedSongs.isNotEmpty) {
-            return MuzoSearchResponse(results: pipedSongs);
+        // Fallback to Piped API — un relais mort qui coûte 12 s de plus à
+        // chaque échec ; réservé au réglage « serveurs historiques ».
+        if (_storage.enableLegacyYtDlpServers) {
+          debugPrint('MuzoApi: Main API failed, trying Piped fallback...');
+          try {
+            final pipedSongs = filterIndianContent(
+              await PipedApiService()
+                  .search(query, filter: filter, shortOnly: shortOnly)
+                  .timeout(const Duration(seconds: 12)),
+              contextQuery: query,
+            );
+            if (pipedSongs.isNotEmpty) {
+              return MuzoSearchResponse(results: pipedSongs);
+            }
+          } catch (e) {
+            debugPrint('MuzoApi: Piped fallback error: $e');
           }
-        } catch (e) {
-          debugPrint('MuzoApi: Piped fallback error: $e');
         }
         return MuzoSearchResponse(results: []);
       }
@@ -631,12 +746,12 @@ class MuzoApiService {
     try {
       final uri = Uri.parse(
         '${ApiConstants.extendedWorkerBaseUrl}/api/search/suggestions',
-      ).replace(queryParameters: {'q': query, 'music': '1'});
+      ).replace(queryParameters: {'q': _stripAccents(query), 'music': '1'});
       debugPrint('YOUTUBE_API SUGGESTIONS Request: $uri');
       final response = await _client.get(
         uri,
         headers: _ytHeaders,
-      );
+      ).timeout(const Duration(seconds: 8));
       if (response.statusCode != 200) return [];
       final data = jsonDecode(response.body);
       final suggestions = data['suggestions'] as List?;
@@ -653,26 +768,27 @@ class MuzoApiService {
         '${ApiConstants.extendedWorkerBaseUrl}/api/trending',
       );
       debugPrint('YOUTUBE_API TRENDING Request: $uri');
-      final response = await _client.get(
-        uri,
-        headers: _ytHeaders,
-      );
+      final response = await _client
+          .get(uri, headers: _ytHeaders)
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) {
         // Fallback to Piped search (trending endpoint est peu fiable)
-        debugPrint('MuzoApi: Trending failed, trying Piped fallback...');
-        try {
-          final pipedSongs = await PipedApiService()
-              .search('top hits', filter: 'songs')
-              .timeout(const Duration(seconds: 12));
-          if (pipedSongs.isNotEmpty) {
-            return {
-              'songs': filterIndianContent(pipedSongs),
-              'videos': <MuzoItem>[],
-              'playlists': <MuzoItem>[],
-            };
+        if (_storage.enableLegacyYtDlpServers) {
+          debugPrint('MuzoApi: Trending failed, trying Piped fallback...');
+          try {
+            final pipedSongs = await PipedApiService()
+                .search('top hits', filter: 'songs')
+                .timeout(const Duration(seconds: 12));
+            if (pipedSongs.isNotEmpty) {
+              return {
+                'songs': filterIndianContent(pipedSongs),
+                'videos': <MuzoItem>[],
+                'playlists': <MuzoItem>[],
+              };
+            }
+          } catch (e) {
+            debugPrint('MuzoApi: Piped trending fallback error: $e');
           }
-        } catch (e) {
-          debugPrint('MuzoApi: Piped trending fallback error: $e');
         }
         return {'songs': [], 'videos': [], 'playlists': []};
       }
@@ -708,7 +824,9 @@ class MuzoApiService {
     try {
       final uri = Uri.parse('${ApiConstants.extendedWorkerBaseUrl}/api/album/$albumId');
       debugPrint('YTIFY ALBUM API Request: $uri');
-      final response = await http.get(uri, headers: _ytHeaders);
+      final response = await http
+          .get(uri, headers: _ytHeaders)
+          .timeout(const Duration(seconds: 12));
       debugPrint('YTIFY ALBUM API Response [${response.statusCode}]');
 
       if (response.statusCode == 200) {
@@ -752,20 +870,56 @@ class MuzoApiService {
     return null;
   }
 
+  /// Mesuré le 2026-10-11 : `/api/artist/<id>` répond 200 avec
+  /// `{"error":"Artist data unavailable: getaddrinfo ENOTFOUND …workers.dev"}`
+  /// — l'amont Cloudflare du worker n'existe plus. La page artiste payait cet
+  /// appel mort SANS AUCUN timeout, puis un second appel vide. On mémorise la
+  /// panne 30 min et on saute l'appel ; le drapeau s'efface seule si le worker
+  /// repart. `/api/playlist` (testé le même jour : 200, 15 Ko, 4 s) est sain —
+  /// seul l'endpoint artiste est marqué.
+  static DateTime? _artistEndpointDownAt;
+  static bool get artistBrowseEndpointDown {
+    final down = _artistEndpointDownAt;
+    return down != null &&
+        DateTime.now().difference(down) < const Duration(minutes: 30);
+  }
+
   Future<ArtistDetails?> getArtistDetails(String browseId) async {
+    // An empty id would hit `/api/artist/` and 404 on every call; there is
+    // nothing to fetch, so skip the request entirely.
+    if (browseId.trim().isEmpty || artistBrowseEndpointDown) return null;
     try {
       final uri = Uri.parse('${ApiConstants.extendedWorkerBaseUrl}/api/artist/$browseId');
       debugPrint('YTIFY ARTIST API Request: $uri');
-      final response = await http.get(uri, headers: _ytHeaders);
+      final response = await http
+          .get(uri, headers: _ytHeaders)
+          .timeout(const Duration(seconds: 12));
       debugPrint('YTIFY ARTIST API Response [${response.statusCode}]');
 
       if (response.statusCode == 200) {
+        if (response.body.contains('Artist data unavailable') ||
+            response.body.contains('ENOTFOUND')) {
+          _artistEndpointDownAt = DateTime.now();
+          debugPrint('YTIFY ARTIST API: amont mort, endpoint ignoré 30 min');
+          return null;
+        }
         final data = jsonDecode(response.body);
         return ArtistDetails.fromJson(data);
       } else {
         debugPrint(
           'Muzo Artist API Error: ${response.statusCode} - ${response.body}',
         );
+        // Same dead upstream, different answer: the worker now replies 500 with
+        // the very same `ENOTFOUND …workers.dev` body it used to hide inside a
+        // 200. Marking the endpoint down on a 5xx is what stops every artist
+        // page re-paying a call that cannot ever succeed for 30 minutes.
+        if (response.statusCode >= 500 ||
+            response.body.contains('ENOTFOUND') ||
+            response.body.contains('Artist data unavailable')) {
+          _artistEndpointDownAt = DateTime.now();
+          debugPrint('YTIFY ARTIST API: amont mort (${response.statusCode}),'
+              ' endpoint ignoré 30 min');
+        }
       }
     } catch (e) {
       debugPrint('Error fetching artist details: $e');
@@ -774,10 +928,13 @@ class MuzoApiService {
   }
 
   Future<PlaylistDetails?> getPlaylistDetails(String playlistId) async {
+    if (playlistId.trim().isEmpty) return null;
     try {
       final uri = Uri.parse('${ApiConstants.extendedWorkerBaseUrl}/api/playlist/$playlistId');
       debugPrint('YTIFY PLAYLIST API Request: $uri');
-      final response = await http.get(uri, headers: _ytHeaders);
+      final response = await http
+          .get(uri, headers: _ytHeaders)
+          .timeout(const Duration(seconds: 12));
       debugPrint('YTIFY PLAYLIST API Response [${response.statusCode}]');
 
       if (response.statusCode == 200) {

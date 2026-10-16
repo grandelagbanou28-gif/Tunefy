@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/data/curated_new_releases_2026.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/deezer_api_service.dart';
-import 'package:muzo/services/musicbrainz_service.dart';
 import 'package:muzo/services/trending_service.dart';
 
 class ReleaseItem {
@@ -119,13 +118,20 @@ class ReleaseResponse {
   }
 }
 
-/// Builds release lists from real in-app sources (Deezer / MusicBrainz /
+/// Builds release lists from real in-app sources (Deezer genre charts +
 /// Apple RSS). Replaces the old localhost:8091 backend that never ran on
 /// the device, which left every New Releases / New Albums shelf empty.
 class ReleasesService {
   ReleasesService._();
 
   static const _timeout = Duration(seconds: 14);
+
+  /// Rap FR / rap US / afro (plus R&B, which those shelves always blended in).
+  static const List<int> _urbanGenres = <int>[
+    DeezerApiService.genreRapHipHop,
+    DeezerApiService.genreRnbSoul,
+    DeezerApiService.genreAfricanMusic,
+  ];
 
   static Future<List<MuzoItem>> _safe(Future<List<MuzoItem>> f) async {
     try {
@@ -161,27 +167,20 @@ class ReleasesService {
     final scale = page + 1;
 
     final deezer = DeezerApiService();
-    final mb = MusicBrainzService();
 
     final futures = <Future<List<MuzoItem>>>[
+      // Urban-only catalogue windows. Deezer's worldwide release pool and
+      // MusicBrainz's open first-release calendar are genre-agnostic, which is
+      // what used to leak pop, rock and gospel reissues into these feeds.
       if (wantAlbums || wantTracks)
         _safe(wantAlbums
-            ? deezer.recentAlbums(days: 30, limit: 50 * scale)
-            : deezer.newTracks(days: 7, limit: 40 * scale)),
+            ? deezer.newAlbumsInGenres(
+                _urbanGenres, days: 30, limit: 50 * scale)
+            : deezer.newTracksInGenres(
+                _urbanGenres, days: 7, limit: 40 * scale)),
       if (wantTracks)
-        _safe(deezer.newTracks(days: 7, limit: 40 * scale)),
-      if (wantTracks)
-        _safe(mb.recentRecordings(
-          now.subtract(const Duration(days: 14)),
-          horizon,
-          limit: 40 * scale,
-        )),
-      if (wantAlbums)
-        _safe(mb.releasesBetween(
-          now.subtract(const Duration(days: 30)),
-          horizon,
-          limit: 50 * scale,
-        )),
+        _safe(deezer.newTracksInGenres(
+            _urbanGenres, days: 7, limit: 40 * scale)),
       if (wantAlbums)
         _safe(_rssAlbums(cutoff.subtract(const Duration(days: 7)), horizon)),
       if (wantArtists)
@@ -196,6 +195,7 @@ class ReleasesService {
     if (wantAlbums || wantTracks) {
       for (final c in curatedNewReleases2026) {
         if (!curatedIsFresh(c, window: const Duration(days: 14))) continue;
+        if (!isUrbanOrAfroRelease(c)) continue;
         if (c.title.trim().isEmpty || c.title.trim() == c.artist.trim()) continue;
         final isAlbum = c.event == 'album';
         if (isAlbum && !wantAlbums) continue;
@@ -278,6 +278,9 @@ class ReleasesService {
       final batch = await TrendingService.topAlbums(cc);
       for (final a in batch) {
         if (out.length >= 60) break;
+        // New Releases is a rap / R&B / afro shelf: the storefront feeds mix
+        // in pop, rock and soundtrack reissues that have nothing to do with it.
+        if (!TrendingService.isUrbanGenre(a.genre)) continue;
         final rel = a.releaseDate;
         if (rel == null || rel.isBefore(cutoff) || rel.isAfter(horizon)) {
           continue;

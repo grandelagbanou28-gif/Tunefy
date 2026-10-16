@@ -13,6 +13,7 @@ import 'package:just_audio_background/just_audio_background.dart'
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/models/ytify_result.dart';
+import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/navigator_key.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/youtube_api_service.dart';
@@ -41,6 +42,12 @@ class AudioHandler {
 
   String? _lastHistoryId;
   bool _isInitialLoading = false;
+
+  /// Titre refusé faute d'être téléchargé alors que l'appareil est hors
+  /// ligne. Posé par `_createAudioSource`, lu par `playVideo` pour adapter le
+  /// message et SURTOUT ne pas passer au suivant (hors ligne, toute la file
+  /// échouerait de la même façon).
+  String? _offlineBlockedTitle;
 
   final ValueNotifier<bool> isLoadingStream = ValueNotifier(false);
 
@@ -695,24 +702,31 @@ class AudioHandler {
         return;
       }
       if (StreamExtractionService.isMetadataSeedId(videoId)) {
-        // dz_/it_/sp_ seeds were never resolved to a real YouTube id —
-        // extraction can't help, surface it instead of hanging on the spinner.
-        debugPrint('playVideo: unresolved metadata seed $videoId');
-        final context = navigatorKey.currentContext;
-        if (context != null) {
-          showGlassSnackBar(context, 'This track is unavailable right now');
+        // dz_/it_/sp_ seeds carry no YouTube id, so the video resolvers cannot
+        // help — but their title/artist are real, which is all a title-driven
+        // source needs. Only refuse when there is not even a title to search.
+        final seedTitle = video is MuzoItem ? video.title : '';
+        if (seedTitle.isEmpty) {
+          debugPrint('playVideo: unresolved metadata seed $videoId');
+          final context = navigatorKey.currentContext;
+          if (context != null) {
+            showGlassSnackBar(context, 'This track is unavailable right now');
+          }
+          _isInitialLoading = false;
+          isLoadingStream.value = false;
+          isClipPlayback.value = false;
+          return;
         }
-        _isInitialLoading = false;
-        isLoadingStream.value = false;
-        isClipPlayback.value = false;
-        return;
+        debugPrint('playVideo: streaming seed $videoId by title « $seedTitle »');
       }
 
       // Extract stream URL — UI already shows loading state
+      _offlineBlockedTitle = null;
       var source = await _createAudioSource(video);
-      if (source == null) {
+      if (source == null && _offlineBlockedTitle == null) {
         // One cold-cache retry: a stale IP-bound googlevideo URL in the
-        // local stream cache is the most common first-tap failure.
+        // local stream cache is the most common first-tap failure. Useless
+        // when the reason is already known (no file on a device with no net).
         try {
           await StreamExtractionService.invalidateCache(videoId);
         } catch (_) {}
@@ -722,9 +736,19 @@ class AudioHandler {
         isLoadingStream.value = false;
         _isInitialLoading = false;
         isClipPlayback.value = false;
-        final context = navigatorKey.currentContext;
-        if (context != null) {
-          showGlassSnackBar(context, 'Failed to extract audio stream');
+        final blocked = _offlineBlockedTitle;
+        _offlineBlockedTitle = null;
+        _announceUnplayable(video is MuzoItem ? video.title : null,
+            offlineBlocked: blocked != null);
+        // "Quand un son ne marche pas, tu passes au suivant": a dead tap must
+        // not end the listening session. The queue still holds what comes
+        // after this track, so advance instead of stopping on the toast.
+        // SAUF hors ligne : là chaque titre de la file échoue pour la même
+        // raison, et défiler jusqu'au bout n'est qu'une rafale de toasts.
+        if (blocked == null &&
+            _player.audioSource == _playlist &&
+            _player.hasNext) {
+          await _skipToNextSafe(5);
         }
         return;
       }
@@ -874,20 +898,53 @@ class AudioHandler {
       }
 
       final downloadPath = _storage.getDownloadPath(videoId);
+      final String? directUrl = video.audioUrl;
       Uri? audioUri;
 
-      // 1) Offline download first — the most reliable source.
+      // 1) Bytes already on the device first — the most reliable source. The
+      // user's own local library travels as a file:// URL, and a local file
+      // must keep playing under both "offline" and "downloaded only" rules.
+      final onDevice = directUrl != null && directUrl.startsWith('file://');
       if (downloadPath != null && await File(downloadPath).exists()) {
         audioUri = Uri.file(downloadPath);
-      } else if (video.audioUrl != null &&
-          video.audioUrl!.isNotEmpty &&
-          StreamExtractionService.isReusableStreamUrl(video.audioUrl!)) {
-        // 2) Direct stream (iTunes previews, Jamendo/Audius/ccMixter/IA,
+      } else if (onDevice) {
+        audioUri = Uri.parse(directUrl);
+      } else if (resultType == 'radio') {
+        // 2) Live radio station: the URL the catalogue carries IS the stream.
+        // It bypasses the downloaded-only rule (a stream is never on disk and
+        // needs no relay, which is the point of having it) but not a real
+        // offline state, where it could only time out.
+        if (_storage.offlineMode || await ContentCacheService.isOffline()) {
+          _offlineBlockedTitle = title;
+          return null;
+        }
+        if (directUrl == null || directUrl.isEmpty) {
+          debugPrint('AudioHandler: radio $videoId has no stream URL');
+          return null;
+        }
+        audioUri = Uri.parse(directUrl);
+      } else if (_storage.offlineMode ||
+          _storage.playDownloadedOnly ||
+          await ContentCacheService.isOffline()) {
+        // 2) Nothing on disk and only downloads are allowed: AUCUNE source
+        // n'est possible. Le laisser entrer dans le pipeline attend un timeout,
+        // échoue, puis passe au suivant — donc la file entière défile en
+        // échouant titre après titre. On s'arrête net et on nomme le titre,
+        // comme Spotify qui affiche un titre grisé + une flèche de téléchargement.
+        _offlineBlockedTitle = title;
+        return null;
+      } else if (directUrl != null &&
+          directUrl.isNotEmpty &&
+          video.metadata?['previewOnly'] != true &&
+          StreamExtractionService.isReusableStreamUrl(directUrl)) {
+        // 3) Direct stream (iTunes previews, Jamendo/Audius/ccMixter/IA,
         //    community uploads, podcast feeds) — play it as-is regardless of
         //    resultType; these ids are never YouTube videos. Stale URLs
         //    (dead Vercel worker, expired IP-bound googlevideo) are ignored
         //    so they re-resolve through the extraction pipeline instead.
-        audioUri = Uri.parse(video.audioUrl!);
+        //    A `previewOnly` clip is skipped here: it is the last resort, and
+        //    the full-length hunt below runs first.
+        audioUri = Uri.parse(directUrl);
       } else if (video.resultType == 'user_track') {
         debugPrint('AudioHandler: user track missing audioUrl');
         return null;
@@ -897,12 +954,25 @@ class AudioHandler {
           title: title,
           artist: artist,
           durationSeconds: duration?.inSeconds,
+          // A tapped title must not wait its turn behind the background
+          // enrichment of a whole shelf.
+          priority: true,
         );
         if (streamUrl == null) {
-          debugPrint('AudioHandler: getStreamUrl returned null for $videoId');
-          return null;
+          // No full-length source answered. A catalogue clip still plays, so
+          // the tapped track makes sound instead of being dropped.
+          if (video.metadata?['previewOnly'] == true &&
+              directUrl != null &&
+              directUrl.isNotEmpty) {
+            debugPrint('AudioHandler: $videoId served by catalogue clip');
+            audioUri = Uri.parse(directUrl);
+          } else {
+            debugPrint('AudioHandler: getStreamUrl returned null for $videoId');
+            return null;
+          }
+        } else {
+          audioUri = Uri.parse(streamUrl);
         }
-        audioUri = Uri.parse(streamUrl);
       }
 
       return AudioSource.uri(
@@ -981,23 +1051,40 @@ class AudioHandler {
       // Drop items without a streamable videoId BEFORE computing safeStart:
       // _createLazyAudioSource skips them, so an index computed on the
       // unfiltered list would land on the wrong track (or out of range).
-      final ordered = <MuzoItem>[
-        for (final s in <MuzoItem>[...direct, ...extracted])
-          if (s.videoId != null && s.videoId!.isNotEmpty) s,
-      ];
+      // The same track can legitimately arrive twice ("Tous les titres" on a
+      // page whose artist also appears in a feature row) — keeping it twice
+      // made the queue replay the identical song back to back.
+      final ordered = <MuzoItem>[];
+      final queuedOnce = <String>{};
+      for (final s in <MuzoItem>[...direct, ...extracted]) {
+        final vid = s.videoId;
+        if (vid == null || vid.isEmpty) continue;
+        if (!queuedOnce.add(vid.toLowerCase())) continue;
+        ordered.add(s);
+      }
       final startSong = startIndex >= 0 && startIndex < results.length
           ? results[startIndex]
           : null;
-      var safeStart = 0;
-      if (startSong != null) {
-        final i = ordered.indexWhere((s) => identical(s, startSong));
-        safeStart = i >= 0 ? i : 0;
-      }
+var safeStart = 0;
+    if (startSong != null) {
+      final i = ordered.indexWhere((s) => identical(s, startSong));
+      safeStart = i >= 0 ? i : 0;
+    }
+    // Clamp to the ordered list length so the player does not throw
+    // RangeError when the start song was filtered out (no videoId) and
+    // ordered.length > sources.length (items without videoId are dropped).
+    safeStart = safeStart.clamp(0, ordered.length - 1);
 
       final sources = <AudioSource>[];
+      // Kept in lockstep with `sources` because AudioSource.tag is only
+      // exposed once the item is indexed into the playlist.
+      final queuedIds = <String>[];
       for (final song in ordered) {
         final source = _createLazyAudioSource(song);
-        if (source != null) sources.add(source);
+        if (source != null) {
+          sources.add(source);
+          queuedIds.add(song.videoId!);
+        }
       }
       if (sources.isEmpty) {
         final context = navigatorKey.currentContext;
@@ -1006,18 +1093,57 @@ class AudioHandler {
             context,
             _storage.offlineMode
                 ? AppLocalizations.of(context).offlineNotDownloaded
-                : 'No playable songs found',
+                : _storage.playDownloadedOnly
+                    ? 'Aucun titre téléchargé sur cet appareil — téléchargez-'
+                        'le pour l\'écouter (menu ⋮ › Télécharger).'
+                    : 'No playable songs found',
           );
         }
         return;
       }
 
+      // The lazy filter (offline / downloaded-only) drops tracks from `ordered`
+      // too, so safeStart — computed before filtering — can point past the end
+      // of the queue and make setAudioSource throw instead of playing the
+      // downloaded subset. Land on the tapped track when it survived,
+      // otherwise start at the first item that is actually on the device.
+      if (startSong != null) {
+        final hit = queuedIds.indexOf(startSong.videoId ?? '');
+        safeStart = hit >= 0 ? hit : 0;
+      }
+      safeStart = safeStart.clamp(0, sources.length - 1);
+
       await _playlist.addAll(sources);
+
+      // "Tous les titres" on a list that already holds the playing track must
+      // CONTINUE that track where the listener left it. playAll rebuilt the
+      // queue and seeked to Duration.zero, which restarted the song — heard as
+      // "it plays what I already had, from the beginning".
+      var resumeIndex = -1;
+      Duration resumePosition = Duration.zero;
+      final playingIndex = _player.currentIndex;
+      final playingSeq = _player.sequenceState?.sequence;
+      final previousId = (playingIndex != null &&
+              playingSeq != null &&
+              playingIndex < playingSeq.length)
+          ? (playingIndex >= 0 ? playingSeq[playingIndex].tag : null)
+          : null;
+      if (previousId is MediaItem &&
+          previousId.id.isNotEmpty &&
+          _player.processingState != ProcessingState.idle &&
+          _player.position > const Duration(seconds: 2)) {
+        resumeIndex = sources.indexWhere((s) {
+          final tag = s is IndexedAudioSource ? s.tag : null;
+          return tag is MediaItem && tag.id == previousId.id;
+        });
+        if (resumeIndex >= 0) resumePosition = _player.position;
+      }
+      final start = resumeIndex >= 0 ? resumeIndex : safeStart;
 
       // Pre-resolve only the next 2 tracks — keeps the queue flowing while
       // avoiding network flooding (Saavn/yt-dlp can't handle 5+ concurrent).
       final startWindow = _storage.crossfadeEnabled ? 0 : 2;
-      for (int i = safeStart; i < sources.length && i < safeStart + startWindow; i++) {
+      for (int i = start; i < sources.length && i < start + startWindow; i++) {
         final source = sources[i];
         if (source is ResolvingAudioSource) {
           _preResolve(source);
@@ -1026,8 +1152,8 @@ class AudioHandler {
 
       await _player.setAudioSource(
         _playlist,
-        initialPosition: Duration.zero,
-        initialIndex: safeStart,
+        initialPosition: resumePosition,
+        initialIndex: start,
         preload: true,
       );
 
@@ -1145,7 +1271,11 @@ class AudioHandler {
     final tag = sequence[index].tag;
     if (tag is! MediaItem) return false;
     final videoId = tag.id;
-    if (videoId.isEmpty || StreamExtractionService.isMetadataSeedId(videoId)) {
+    if (videoId.isEmpty) return false;
+    if (StreamExtractionService.isMetadataSeedId(videoId) &&
+        tag.title.isEmpty) {
+      // A seed with a title can still be re-resolved by title; without one
+      // there is nothing any source could search for.
       return false;
     }
     if (_retryCount >= _maxResolvesPerTrack) {
@@ -1162,6 +1292,7 @@ class AudioHandler {
       title: tag.title,
       artist: tag.artist,
       avoidSources: _avoidedSources,
+      priority: true,
     );
     if (url == null || url.isEmpty) return false;
 
@@ -1205,6 +1336,15 @@ class AudioHandler {
         return;
       }
 
+      // The track is unplayable everywhere: tell the user instead of skipping
+      // in silence (a song that just vanishes looks like a bug).
+      String? failedTitle;
+      if (index != null && sequence != null && index < sequence.length) {
+        final t = sequence[index].tag;
+        if (t is MediaItem) failedTitle = t.title;
+      }
+      _announceUnplayable(failedTitle);
+
       if (!_player.hasNext) {
         debugPrint('Playback error on the last track: nothing left to skip to');
         return;
@@ -1218,6 +1358,55 @@ class AudioHandler {
     } finally {
       _handlingError = false;
     }
+  }
+
+  /// Toast announcing the track the player had to stop on. A 30 s extract that
+  /// ends without explanation reads as a playback bug, and on an IP where the
+  /// label's uploads are geo-refused it happens for a whole queue — so it is
+  /// said once per minute, not on every track.
+  void _announceClip(String? title) {
+    try {
+      final now = DateTime.now();
+      if (_lastClipNotice != null &&
+          now.difference(_lastClipNotice!) < const Duration(minutes: 1)) {
+        return;
+      }
+      _lastClipNotice = now;
+      final context = navigatorKey.currentContext;
+      if (context == null) return;
+      final name =
+          (title != null && title.isNotEmpty) ? '« $title » ' : 'Ce titre ';
+      showGlassSnackBar(
+        context,
+        '$name se lit en extrait de 30 s : la version complète est bloquée dans '
+            'ce pays. Les titres libres et vos téléchargements restent entiers.',
+      );
+    } catch (_) {}
+  }
+
+  DateTime? _lastClipNotice;
+
+  /// Surfaces a toast naming the track that could not be resolved, so a
+  /// failure is never a silent skip. Best-effort: never throws.
+  void _announceUnplayable(String? title, {bool offlineBlocked = false}) {
+    try {
+      final context = navigatorKey.currentContext;
+      if (context == null) return;
+      final name =
+          (title != null && title.isNotEmpty) ? '« $title » ' : 'Ce titre ';
+      final msg = offlineBlocked
+          ? _storage.offlineMode
+              ? '$name n\'est pas téléchargé. Hors ligne, seuls vos titres '
+                  'téléchargés se lisent.'
+              : '$name n\'est pas téléchargé. Seuls vos titres téléchargés se '
+                  'lisent — téléchargez-le (menu ⋮), ou désactivez la règle '
+                  'dans Réglages › Lecture.'
+          : _storage.offlineMode
+              ? '$name est indisponible hors ligne — téléchargez-le pour '
+                  'l\'écouter.'
+              : '$name est indisponible pour le moment.';
+      showGlassSnackBar(context, msg, error: true);
+    } catch (_) {}
   }
 
   /// Pre-resolves a lazy source in the background, swallowing failures so they
@@ -1234,11 +1423,22 @@ class AudioHandler {
     if (result.videoId == null) return null;
     final videoId = result.videoId!;
 
-    // Strict offline mode: only tracks present on disk are queued. Non-
-    // downloaded items are dropped here so every queue path (playAll /
-    // enqueueSongs / DJ radio) becomes offline-only without extra plumbing.
-    if (_storage.offlineMode && !_storage.isDownloaded(videoId)) {
-      debugPrint('Offline mode: skipping non-downloaded $videoId');
+    // Strict offline mode / "downloaded only" rule: only tracks present on
+    // disk are queued. Non-downloaded items are dropped here so every queue
+    // path (playAll / enqueueSongs / DJ radio) becomes local-only without
+    // extra plumbing. Local-device library files live on disk by definition,
+    // so they always pass.
+    //
+    // A radio station is the one item that is never bytes on disk AND never a
+    // YouTube track: its URL is a live stream that plays with no relay and no
+    // server, which is exactly why the downloaded-only rule must not drop it.
+    // A forced offline mode still refuses it (there is no network at all).
+    final isRadio = result.resultType == 'radio';
+    final downloadsOnly = _storage.playDownloadedOnly && !isRadio;
+    if ((_storage.offlineMode || downloadsOnly) &&
+        result.resultType != 'local_file' &&
+        !_storage.isDownloaded(videoId)) {
+      debugPrint('Downloaded-only: skipping non-downloaded $videoId');
       return null;
     }
     final title = result.title;
@@ -1249,6 +1449,12 @@ class AudioHandler {
     final duration = result.durationSeconds != null
         ? Duration(seconds: result.durationSeconds!)
         : null;
+
+    // A seed whose only stream is a short clip from the catalogue API (Deezer
+    // answers with 30s previews). The clip keeps the title playable, but it is
+    // a fallback, not the goal: the resolver still hunts a full-length source
+    // by title and the clip is used only when every one of them fails.
+    final previewOnly = result.metadata?['previewOnly'] == true;
 
     final mediaItem = MediaItem(
       id: videoId,
@@ -1261,6 +1467,7 @@ class AudioHandler {
         'resultType': result.resultType,
         'lazy': true,
         'audioUrl': result.audioUrl,
+        'previewOnly': previewOnly,
         'album': result.album?.name,
         'albumId': result.album?.id,
         'artists': result.artists
@@ -1309,8 +1516,11 @@ class AudioHandler {
             !lower.contains('netlify.app') &&
             !lower.contains('supabase.co') &&
             !lower.contains('trycloudflare.com');
-      if (StreamExtractionService.isReusableStreamUrl(url) ||
-          (freshGooglevideo || freshOnDevice)) {
+      if (isRadio ||
+          (!previewOnly &&
+              (StreamExtractionService.isReusableStreamUrl(url) ||
+                  freshGooglevideo ||
+                  freshOnDevice))) {
         return AudioSource.uri(
           Uri.parse(url),
           headers: {
@@ -1322,9 +1532,23 @@ class AudioHandler {
       }
     }
 
+    // A station without its stream URL has nothing to resolve: there is no
+    // YouTube video behind it, so the resolver would only search and fail.
+    if (isRadio) {
+      debugPrint('Radio: no stream URL for $videoId');
+      return null;
+    }
+
     return ResolvingAudioSource(
       videoId: videoId,
       storage: _storage,
+      // A track that ends up unresolvable must not vanish in silence: the queue
+      // advances on the empty response, so say which one it skipped.
+      onUnresolvable: (id, t) => _announceUnplayable(t),
+      onClipServed: (id, t) => _announceClip(t),
+      // The clip travels here so the resolver can fall back to it after the
+      // full-length hunt fails, instead of returning nothing.
+      fallbackUrl: previewOnly ? result.audioUrl : null,
       tag: mediaItem,
     );
   }
@@ -1426,8 +1650,11 @@ class AudioHandler {
       }
       if (result.videoId == null) return;
       final videoId = result.videoId!;
-      if (_storage.offlineMode && !_storage.isDownloaded(videoId)) {
-        debugPrint('Offline mode: playNext blocked (not downloaded) $videoId');
+      if ((_storage.offlineMode ||
+              (_storage.playDownloadedOnly && result.resultType != 'radio')) &&
+          result.resultType != 'local_file' &&
+          !_storage.isDownloaded(videoId)) {
+        debugPrint('Downloaded-only: playNext blocked (not downloaded) $videoId');
         return;
       }
       final title = result.title;
@@ -1447,12 +1674,24 @@ class AudioHandler {
 
       if (downloadPath != null && await File(downloadPath).exists()) {
         audioUri = Uri.file(downloadPath);
+      } else if (resultType == 'radio') {
+        // A live station is not a YouTube video: its own URL is the stream,
+        // so the extraction pipeline (which would fail on an "ra_" id) never
+        // runs for it. A device with no network still refuses it.
+        if (_storage.offlineMode || await ContentCacheService.isOffline()) {
+          _offlineBlockedTitle = title;
+          return;
+        }
+        final url = result.audioUrl;
+        if (url == null || url.isEmpty) return;
+        audioUri = Uri.parse(url);
       } else {
         final streamUrl = await StreamExtractionService.getStreamUrl(
           videoId,
           title: title,
           artist: artist,
           durationSeconds: duration?.inSeconds,
+          priority: true,
         );
         if (streamUrl == null) return;
         audioUri = Uri.parse(streamUrl);
@@ -1544,15 +1783,55 @@ class ResolvingAudioSource extends StreamAudioSource {
   int? _durationSeconds;
   bool _retriedWithoutSaavn = false;
   bool _retriedDeadUrl = false;
+  bool _retriedFullCascade = false;
+  bool _unresolvableAnnounced = false;
+
+  /// Called when the player itself asks for this track's bytes and nothing can
+  /// be resolved. That is the moment a silent skip looks like a bug to the user,
+  /// so the handler gets one chance to say so. Pre-resolution of the next track
+  /// never reaches it: `request` only runs for the track being played.
+  final void Function(String videoId, String? title)? onUnresolvable;
+
+  /// Short catalogue clip (Deezer's 30s preview) kept as a last resort: the
+  /// full-length sources are tried first, and if none answers the clip is
+  /// streamed so the track the user tapped always makes sound.
+  final String? fallbackUrl;
+
+  /// Set when the track is finally served by a short catalogue clip rather than
+  /// a full stream. Without a word about it, a song stopping at 30 seconds reads
+  /// as a new playback bug — and on an IP where YouTube geo-refuses the label's
+  /// uploads, that is now the normal outcome.
+  final void Function(String videoId, String? title)? onClipServed;
 
   ResolvingAudioSource({
     required this.videoId,
     required this.storage,
+    this.onUnresolvable,
+    this.onClipServed,
+    this.fallbackUrl,
     super.tag,
   });
 
+  /// The clip to fall back on, from the constructor or from the MediaItem
+  /// extras (whichever path built this source passed it).
+  String? get _clipUrl {
+    if (fallbackUrl != null && fallbackUrl!.isNotEmpty) return fallbackUrl;
+    final mediaItem = tag as MediaItem?;
+    if (mediaItem?.extras?['previewOnly'] == true) {
+      final url = mediaItem?.extras?['audioUrl'];
+      if (url is String && url.isNotEmpty) return url;
+    }
+    return null;
+  }
+
+  /// Finds a stream URL for this track. It deliberately does NOT fetch the
+  /// audio body: pre-resolving the next tracks used to download every one of
+  /// them, which is exactly what the user read as "it downloads while I listen"
+  /// (and it stalled the track actually asked for). The body is fetched by
+  /// `request()`, i.e. only for the song the player is about to play.
   Future<void> resolve() async {
-    if (_downloadedBytes != null || _resolvedUrl == 'EMPTY') return;
+    if (_resolvedUrl != null && _resolvedUrl != 'EMPTY') return;
+    if (_resolvedUrl == 'EMPTY') return;
     if (_resolveFuture != null) {
       await _resolveFuture;
       return;
@@ -1560,11 +1839,11 @@ class ResolvingAudioSource extends StreamAudioSource {
 
     final mediaItem = tag as MediaItem?;
     final audioUrl = mediaItem?.extras?['audioUrl'];
-    if (audioUrl is String &&
+    if (mediaItem?.extras?['previewOnly'] != true &&
+        audioUrl is String &&
         audioUrl.isNotEmpty &&
         StreamExtractionService.isReusableStreamUrl(audioUrl)) {
       _resolvedUrl = audioUrl;
-      await _downloadFullAudio();
       return;
     }
     if (mediaItem?.extras?['resultType'] == 'user_track') {
@@ -1588,21 +1867,64 @@ class ResolvingAudioSource extends StreamAudioSource {
             )
             .then((url) async {
               _resolvedUrl = url;
-              if (url != null) {
-                await _downloadFullAudio();
-              } else {
-                // Full race failed: mark EMPTY so request() stops retrying
-                // a hopeless extraction. The empty response is read as an
-                // instant end-of-track, so playback moves on by itself — the
-                // user asked for dead songs to be skipped without a message.
-                debugPrint(
-                    'ResolvingAudioSource: no stream resolved for $videoId');
-                _resolvedUrl = 'EMPTY';
+              if (url != null) return;
+              // Nothing resolved. Before giving up, force a second pass with the
+              // stream cache dropped and Saavn out of the mix: the first pass can
+              // miss because a source parked itself for the whole artist page,
+              // and a cached dead URL is replayed instead of re-resolved.
+              // Skipped when a catalogue clip is already in hand — a second
+              // 18s hunt would only delay the audio the user is waiting for.
+              if (!_retriedFullCascade && _clipUrl == null) {
+                _retriedFullCascade = true;
+                try {
+                  await StreamExtractionService.invalidateCache(videoId);
+                } catch (_) {}
+                final again = await StreamExtractionService.getStreamUrl(
+                  videoId,
+                  title: title,
+                  artist: artist,
+                  durationSeconds: durationSeconds,
+                  skipSaavn: true,
+                );
+                if (again != null) {
+                  _resolvedUrl = again;
+                  debugPrint('ResolvingAudioSource: cascade retry resolved '
+                      '$videoId via $again');
+                }
               }
+              // Full race failed. A short catalogue clip beats silence: play it
+              // so the track the user tapped always makes sound. Without one,
+              // mark EMPTY so request() stops retrying a hopeless extraction —
+              // the empty response reads as an instant end-of-track, so the
+              // queue moves on by itself.
+              // When the item carries no clip of its own, ask Deezer: French
+              // "- Topic" uploads are licensed to a country list that excludes
+              // Benin, so on this network a whole shelf can come back
+              // UNPLAYABLE while Deezer's preview CDN answers in two seconds.
+              final clip = _clipUrl ??
+                  await StreamExtractionService.catalogClipUrl(
+                      title ?? '', artist ?? '');
+              if (clip != null) {
+                debugPrint('ResolvingAudioSource: $videoId served by '
+                    'catalogue clip after full hunt failed');
+                // Recorded so nothing downstream treats this source as a full
+                // track (no clip-of-a-clip retry, no "download" of an extract).
+                final item = tag;
+                if (item is MediaItem) {
+                  item.extras?['previewOnly'] = true;
+                }
+                _resolvedUrl = clip;
+                onClipServed?.call(videoId, title);
+                return;
+              }
+              debugPrint(
+                  'ResolvingAudioSource: no stream resolved for $videoId');
+              _resolvedUrl = 'EMPTY';
             })
             .catchError((e) {
               debugPrint('Error pre-resolving track $videoId: $e');
-              _resolvedUrl = 'EMPTY';
+              final clip = _clipUrl;
+              _resolvedUrl = clip ?? 'EMPTY';
             })
             .whenComplete(() {
               _resolveFuture = null;
@@ -1803,9 +2125,20 @@ class ResolvingAudioSource extends StreamAudioSource {
 
     if (_downloadedBytes == null && _resolvedUrl != 'EMPTY') {
       await resolve();
+      // The player is asking for THIS track's bytes now, so this is the only
+      // moment a body may be fetched.
+      if (_resolvedUrl != null && _resolvedUrl != 'EMPTY') {
+        await _downloadFullAudio();
+      }
     }
 
     if (_downloadedBytes == null || _downloadedBytes!.isEmpty) {
+      if (_resolvedUrl == 'EMPTY' && !_unresolvableAnnounced) {
+        _unresolvableAnnounced = true;
+        try {
+          onUnresolvable?.call(videoId, _title);
+        } catch (_) {}
+      }
       return _emptyResponse(start);
     }
 

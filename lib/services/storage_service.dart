@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/models/user_data.dart';
 import 'package:muzo/services/category_artists_service.dart';
@@ -92,6 +91,10 @@ class StorageService {
     await Hive.openBox(_qrHistoryBoxName);
     await stats.init();
 
+    // Verified downloads before anything reads the list: pages, the Library
+    // tile and the player all ask isDownloaded().
+    await _sweepDownloadedFiles();
+
     // Load QR history
     final qrBox = Hive.box(_qrHistoryBoxName);
     final cachedQr = qrBox.get('list');
@@ -173,10 +176,9 @@ class StorageService {
       }
     }
 
-    // Repair orphan downloads: files on disk whose registry entries were
-    // lost (e.g. corrupt box recovery) are re-registered so they show and
-    // play again. No-op when the registry already has entries.
-    await repairDownloads();
+    // No directory scan here: a stray .m4a used to be re-registered as a
+    // download, which listed every auto-cached track as if the user had
+    // downloaded it. The `downloads` box is the only source of truth.
 
     // API is now lazily initialized
     // Supabase seed + merge happens in the background (await-free so the app
@@ -842,6 +844,53 @@ class StorageService {
   Box get _downloadsBox => Hive.box(_downloadsBoxName);
   ValueListenable<Box> get downloadsListenable => _downloadsBox.listenable();
 
+  /// Ids whose downloaded bytes are verifiably on disk, filled once by
+  /// [_sweepDownloadedFiles] at init and kept in step by add/remove/clear.
+  Set<String>? _downloadedOnDisk;
+
+  /// A record means nothing without its file. Measured on the test device:
+  /// 3669 download records against 88 audio files — thousands of entries left
+  /// by the old auto-download-on-play build. Every one of them made
+  /// [isDownloaded] answer true, so the Library "Downloads" page listed a
+  /// several-thousand-row catalogue of silent titles and the artist pages drew
+  /// green "downloaded" marks on songs that could not be played offline.
+  /// Records with no bytes are dropped here; the files themselves are untouched.
+  Future<void> _sweepDownloadedFiles() async {
+    final downloads = getDownloads();
+    if (downloads.isEmpty) {
+      _downloadedOnDisk = <String>{};
+      return;
+    }
+    final present = <String>{};
+    final kept = <Map<String, dynamic>>[];
+    for (final d in downloads) {
+      final videoId = d['videoId'];
+      final path = d['path'];
+      if (videoId is! String || videoId.isEmpty) continue;
+      if (path is! String || path.isEmpty) {
+        // No path recorded: nothing to verify, so it can never play offline.
+        continue;
+      }
+      var exists = true;
+      try {
+        exists = File(path).existsSync();
+      } catch (_) {
+        exists = true; // An unreadable path is not proof of a missing file.
+      }
+      if (!exists) continue;
+      present.add(videoId);
+      kept.add(d);
+    }
+    _downloadedOnDisk = present;
+    if (kept.length != downloads.length) {
+      await _downloadsBox.put('list', kept);
+      debugPrint('Downloads: purged ${downloads.length - kept.length} '
+          'record(s) without a file on disk (${kept.length} kept)');
+    } else {
+      debugPrint('Downloads: ${kept.length} record(s), all present on disk');
+    }
+  }
+
   List<Map<String, dynamic>> getDownloads() {
     // Element-wise parsing: one malformed entry (e.g. written by an older
     // build) must never nuke the whole list into [].
@@ -862,6 +911,8 @@ class StorageService {
   }
 
   bool isDownloaded(String videoId) {
+    final swept = _downloadedOnDisk;
+    if (swept != null) return swept.contains(videoId);
     final downloads = getDownloads();
     return downloads.any((d) => d['videoId'] == videoId);
   }
@@ -876,88 +927,25 @@ class StorageService {
   }
 
   Future<void> addDownload(MuzoItem result, String path) async {
+    final videoId = result.videoId;
     final downloads = getDownloads();
-    if (!downloads.any((d) => d['videoId'] == result.videoId)) {
+    if (!downloads.any((d) => d['videoId'] == videoId)) {
       downloads.insert(0, {
-        'videoId': result.videoId,
+        'videoId': videoId,
         'result': result.toJson(),
         'path': path,
         'timestamp': DateTime.now().toIso8601String(),
       });
       await _downloadsBox.put('list', downloads);
     }
+    if (videoId != null) _downloadedOnDisk?.add(videoId);
   }
 
   Future<void> removeDownload(String videoId) async {
     final downloads = getDownloads();
     downloads.removeWhere((d) => d['videoId'] == videoId);
     await _downloadsBox.put('list', downloads);
-  }
-
-  /// Re-registers orphan .m4a files (registry empty/lost but files on disk).
-  /// Titles and covers are recovered from the artist-songs cache when the
-  /// videoId matches a known track, so repaired rows look like real entries.
-  Future<void> repairDownloads() async {
-    try {
-      if (kIsWeb || getDownloads().isNotEmpty) return;
-      final dir = await getApplicationDocumentsDirectory();
-      final files = Directory(dir.path)
-          .listSync()
-          .whereType<File>()
-          .where((f) => f.path.toLowerCase().endsWith('.m4a'))
-          .toList();
-      if (files.isEmpty) return;
-      // videoId -> full track for real titles/covers.
-      final known = <String, MuzoItem>{};
-      try {
-        final box = Hive.box('artist_songs_cache');
-        for (final k in box.keys) {
-          try {
-            final m = box.get(k) as Map?;
-            final list = (m?['songs'] as List?) ?? [];
-            for (final e in list) {
-              try {
-                final item =
-                    MuzoItem.fromJson(Map<String, dynamic>.from(e as Map));
-                final vid = item.videoId;
-                if (vid != null && vid.isNotEmpty) {
-                  known.putIfAbsent(vid, () => item);
-                }
-              } catch (_) {}
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-      final entries = <Map<String, dynamic>>[];
-      for (final f in files) {
-        try {
-          if (await f.length() == 0) continue;
-          final name = f.uri.pathSegments.last;
-          if (!name.toLowerCase().endsWith('.m4a')) continue;
-          final vid = name.substring(0, name.length - 4);
-          if (vid.isEmpty) continue;
-          final item = known[vid] ??
-              MuzoItem(
-                title: vid,
-                thumbnails: const [],
-                resultType: 'song',
-                isExplicit: false,
-              );
-          entries.add({
-            'videoId': vid,
-            'result': item.toJson(),
-            'path': f.path,
-            'timestamp': DateTime.now().toIso8601String(),
-          });
-        } catch (_) {}
-      }
-      if (entries.isNotEmpty) {
-        await _downloadsBox.put('list', entries);
-        debugPrint('Repaired ${entries.length} orphan downloads');
-      }
-    } catch (e) {
-      debugPrint('repairDownloads failed: $e');
-    }
+    _downloadedOnDisk?.remove(videoId);
   }
 
   /// Strict offline mode: when enabled, only downloaded tracks are playable
@@ -966,6 +954,30 @@ class StorageService {
 
   Future<void> setOfflineMode(bool value) async {
     await _downloadsBox.put('offlineMode', value);
+  }
+
+  /// Legacy yt-dlp relays (Freedify loopback, Vercel workers, Supabase shared
+  /// cache). These hosts are frequently dead and each one burns race budget
+  /// (5–30s timeouts) before giving up, so they are OFF by default. Enable only
+  /// when a working relay is actually configured.
+  bool get enableLegacyYtDlpServers =>
+      _settingsBox.get('enableLegacyYtDlpServers', defaultValue: false) == true;
+
+  Future<void> setEnableLegacyYtDlpServers(bool value) async {
+    await _settingsBox.put('enableLegacyYtDlpServers', value);
+  }
+
+  /// « Seuls les titres téléchargés se lisent » — **option de réglage, éteinte
+  /// par défaut** : un tap sur un titre doit le jouer en streaming, sans
+  /// passer par un téléchargement. Le téléchargement reste un choix explicite
+  /// de l'utilisateur (menu ⋮) pour l'écoute hors ligne, pas une condition
+  /// préalable à la lecture. L'appareil est vraiment hors ligne ? `offlineMode`
+  /// prend le relais et réserve la lecture aux fichiers déjà sur disque.
+  bool get playDownloadedOnly =>
+      _settingsBox.get('playDownloadedOnly', defaultValue: false) == true;
+
+  Future<void> setPlayDownloadedOnly(bool value) async {
+    await _settingsBox.put('playDownloadedOnly', value);
   }
 
   // Subscriptions
@@ -1393,6 +1405,7 @@ class StorageService {
 
   Future<void> clearDownloads() async {
     await _downloadsBox.delete('list');
+    _downloadedOnDisk = <String>{};
   }
 
   // App Links

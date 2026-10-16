@@ -62,6 +62,9 @@ class MultiApiService {
   /// main ytify search. Bounded to [max] resolutions, run in a small worker
   /// pool (the search endpoint can't absorb 60+ parallel bursts), deduplicated
   /// by videoId. Returns only playable items — in the input order.
+  /// A YouTube miss no longer deletes the title: a seed whose own source
+  /// streams (see [_fallbackFor]) is returned as-is, so a dead worker leaves a
+  /// shorter shelf rather than an empty one.
   Future<List<MuzoItem>> resolveToPlayable(
     List<MuzoItem> discovered, {
     int max = 8,
@@ -119,13 +122,31 @@ class MultiApiService {
             await Future<void>.delayed(const Duration(milliseconds: 250));
             continue;
           }
-          return const <MuzoItem>[];
+          return _fallbackFor(item);
         }
         final best = results.first;
         final existing = results.indexWhere(
           (r) => r.title.toLowerCase() == base.toLowerCase(),
         );
-        var chosen = existing >= 0 ? results[existing] : best;
+        MuzoItem? chosen = existing >= 0 ? results[existing] : null;
+        // `best` n'est qu'« à peu près la même requête » : c'est en lui faisant
+        // confiance qu'une autre chanson se retrouvait tamponnée de la vraie
+        // date de sortie de la graine et affichée comme nouveauté. On exige
+        // désormais que le hit nomme le titre ET l'artiste ; sinon la graine
+        // retombe sur sa propre source (`_fallbackFor`) au lieu de mentir.
+        if (chosen == null) {
+          for (final r in results) {
+            if (matchesNamedEntity(r, item.title, artist)) {
+              chosen = r;
+              break;
+            }
+          }
+        }
+        if (chosen == null) {
+          debugPrint('MultiApi.resolve: no verified match for "$q" '
+              '(nearest was "${best.title} / ${best.displayArtist}")');
+          return _fallbackFor(item);
+        }
         // Preserve the original source cover art (e.g. the Deezer album art)
         // when the resolved YouTube item ships without any thumbnail, so the
         // release cards never show an empty placeholder.
@@ -158,10 +179,32 @@ class MultiApiService {
           await Future<void>.delayed(const Duration(milliseconds: 250));
           continue;
         }
-        return const <MuzoItem>[];
+        return _fallbackFor(item);
       }
     }
-    return const <MuzoItem>[];
+    return _fallbackFor(item);
+  }
+
+  /// Last-resort stream for a seed YouTube could not match. Sources that
+  /// already hand over a stream answer (Audius/Jamendo/ccMixter/Internet
+  /// Archive full files, Deezer's 30s `metadata.dzPreview`) keep their title
+  /// in the shelf AND audible instead of it vanishing on a dead worker.
+  /// A Deezer clip is flagged `previewOnly`, which makes the player hunt a
+  /// full-length source by title first and use the clip only when all fail.
+  List<MuzoItem> _fallbackFor(MuzoItem item) {
+    final direct = item.audioUrl;
+    if (direct != null && direct.isNotEmpty) return [item];
+    final preview = item.metadata?['dzPreview'];
+    if (preview is! String || preview.isEmpty) return const <MuzoItem>[];
+    return [
+      item.copyWith(
+        audioUrl: preview,
+        metadata: {
+          ...?item.metadata,
+          'previewOnly': true,
+        },
+      ),
+    ];
   }
 
   Future<List<MuzoItem>> _safe(

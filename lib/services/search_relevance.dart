@@ -46,25 +46,40 @@ class SearchRelevance {
       case 'videos':
         return t == 'video' || (t.isEmpty && (item.videoId?.isNotEmpty ?? false));
       case 'albums':
-        return t == 'album' ||
-            (t.isEmpty &&
-                (item.browseId?.isNotEmpty ?? false) &&
-                item.videoId == null);
+        return t == 'album' || (t.isEmpty && _isBrowseId(item, 'album'));
       case 'artists':
         return t == 'artist' ||
             t == 'channel' ||
-            (t.isEmpty &&
-                (item.browseId?.isNotEmpty ?? false) &&
-                item.videoId == null);
+            (t.isEmpty && _isBrowseId(item, 'artist'));
       case 'playlists':
-        return t == 'playlist' ||
-            (t.isEmpty &&
-                (item.browseId?.isNotEmpty ?? false) &&
-                item.videoId == null);
+        return t == 'playlist' || (t.isEmpty && _isBrowseId(item, 'playlist'));
       case 'channels':
         return t == 'channel' || t == 'artist';
       default:
         return true;
+    }
+  }
+
+  /// Shape check for an UNTYPED browse entity, keyed off its browseId prefix
+  /// (YouTube Music ids are self-describing). Without this, albums / artists /
+  /// playlists shared the same "empty type + has browseId" fallback and every
+  /// one of those chips showed the same ambiguous grab-bag.
+  static bool _isBrowseId(MuzoItem item, String type) {
+    if (item.videoId != null && item.videoId!.isNotEmpty) return false;
+    final id = item.browseId;
+    if (id == null || id.isEmpty) return false;
+    switch (type) {
+      case 'album':
+        return id.startsWith('MPREb_');
+      case 'playlist':
+        return id.startsWith('PL') ||
+            id.startsWith('VL') ||
+            id.startsWith('OL') ||
+            id.startsWith('RD');
+      case 'artist':
+        return id.startsWith('UC');
+      default:
+        return false;
     }
   }
 

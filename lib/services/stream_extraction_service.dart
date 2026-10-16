@@ -1,15 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:muzo/utils/net_guard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/services/piped_api_service.dart';
+import 'package:muzo/services/deezer_api_service.dart';
+import 'package:muzo/services/jamendo_api_service.dart';
+import 'package:muzo/services/audius_api_service.dart';
+import 'package:muzo/services/playability_geo_service.dart';
 import 'package:muzo/services/stream_endpoint_resolver.dart';
 import 'package:muzo/services/youtube_api_service.dart';
 import 'package:muzo/services/youtube_music_auth.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 class _SourceHealth {
   int failures = 0;
@@ -20,20 +26,63 @@ class _SourceHealth {
 class StreamExtractionService {
   static final Map<String, bool> isSaavnCache = {};
 
+  /// Jitter source for Saavn retry backoff, so a burst of simultaneous
+  /// resolves does not strike the rate limiter at the same instant.
+  static final Random _rng = Random();
+
   // ─── Pré-check de jouabilité (sections du Home) ────────────────────────────
   // Mémoïsé par videoId avec un TTL court : certaines pistes (géo-bloquées,
   // IP cloud bot-checkée) ne sont simplement pas résolvables à un instant T.
   static final Map<String, bool> _playableMemo = {};
   static final Map<String, DateTime> _playableMemoAt = {};
 
-  /// Metadata-only seed ids (iTunes `it_`, Spotify `sp_`, Deezer `dz_`, …)
-  /// that are NOT YouTube video ids — no extraction source can ever stream
-  /// them, so callers must resolve them to a real videoId first.
+  /// Metadata-only seed ids (iTunes `it_`, Spotify `sp_`, Deezer `dz_`, the
+  /// title-only `tt_` fallback, …) that are NOT YouTube video ids. No video
+  /// resolver can stream them; they are played by title+artist instead (see
+  /// [getStreamUrlByTitle]).
   static final RegExp _metadataSeedRe =
-      RegExp(r'^(it_|sp_|sp:|yr_|al_|user_track_|dz_)');
+      RegExp(r'^(it_|sp_|sp:|yr_|al_|user_track_|dz_|tt_)');
 
   static bool isMetadataSeedId(String videoId) =>
       videoId.isNotEmpty && _metadataSeedRe.hasMatch(videoId);
+
+  // ─── Verdict « cette vidéo n'existe plus » ────────────────────────────────
+  // Un résolveur qui répond « Video unavailable » ne rend pas un timeout : il
+  // rend un verdict sur LA vidéo (upload supprimé, privé, région fermée). Sans
+  // ce signal la cascade attendait les huit branches jusqu'au bout — mesuré sur
+  // l'appareil : « All sources failed after 65368ms » de silence avant le toast.
+  // Deux verdicts concordants suffisent pour conclure, et les sources trouvées
+  // par TITRE (Saavn en tête) gardent la main.
+  static final Map<String, Set<String>> _videoGoneBy = {};
+  static final Map<String, int> _videoGoneAt = {};
+  static const Duration _videoGoneTtl = Duration(minutes: 30);
+
+  /// [source] est le label du résolveur (`relay`, `explode`, `ytapi`,
+  /// `innertube`). Un seed metadata (`dz_`, `it_`…) n'est pas une vidéo : il ne
+  /// peut pas être « mort », il se joue par titre.
+  static void reportVideoGone(String videoId, String source) {
+    if (videoId.isEmpty || isMetadataSeedId(videoId)) return;
+    (_videoGoneBy[videoId] ??= <String>{}).add(source);
+    _videoGoneAt[videoId] = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// Le relais yt-dlp tourne sur le PC avec son propre client : quand il dit
+  /// « Video unavailable », c'est la vidéo qui est en cause, pas l'IP du
+  /// téléphone. Un seul client de l'app refusant tout (déjà arrivé : l'IP de
+  /// l'appareil était revenue UNPLAYABLE sur toutes les pistes) ne doit donc
+  /// jamais déclencher le raccourcissement — il en faut deux distincts.
+  static bool isVideoGone(String videoId) {
+    final at = _videoGoneAt[videoId];
+    if (at == null) return false;
+    if (DateTime.now().millisecondsSinceEpoch - at >
+        _videoGoneTtl.inMilliseconds) {
+      _videoGoneBy.remove(videoId);
+      _videoGoneAt.remove(videoId);
+      return false;
+    }
+    final sources = _videoGoneBy[videoId] ?? const <String>{};
+    return sources.contains('relay') || sources.length >= 2;
+  }
 
   /// Résout le stream de façon synchrone rapide (cache local → yt-dlp/
   /// Supabase → Saavn), sans les fallbacks lourds (YoutubeExplode/Piped/
@@ -78,31 +127,42 @@ class StreamExtractionService {
     try {
       final localCached = await _localCachedStreamUrl(videoId);
       if (localCached != null) return localCached;
+      // Not worth ten seconds of race for an upload two resolvers already
+      // reported as removed.
+      if (isVideoGone(videoId)) return null;
 
       try {
-        final connectivity = await Connectivity().checkConnectivity();
+        final connectivity = await safeConnectivity();
         if (connectivity.contains(ConnectivityResult.none)) return null;
       } catch (_) {}
 
-      // Race Cloud Vercel + Invidious (parallel) + YoutubeExplode + YouTube Music Auth for fast pre-check.
-      // Outer timeouts must stay ABOVE each source's internal work budget so
-      // a slow-but-alive source is not cut off before it can answer.
+      // Race Saavn + YoutubeExplode + InnerTube + Jamendo/Audius (fallbacks).
       return await _race([
         if (title != null && title.isNotEmpty)
           getSaavnStreamUrl(title, artist ?? '', durationSeconds: durationSeconds)
-              .timeout(const Duration(seconds: 18)),
-        _getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 35)),
+              .timeout(const Duration(seconds: 15)),
+        _getYoutubeExplodeAudioUrl(videoId),
         _getInvidiousStreamUrl(videoId).timeout(const Duration(seconds: 12)),
-        _getYouTubeMusicStreamUrl(videoId).timeout(const Duration(seconds: 18)),
-        _getCobaltStreamUrl(videoId).timeout(const Duration(seconds: 20)),
-        YouTubeMusicAuth.instance
-            .getStreamUrlInnerTubeNoAuth(videoId)
-            .timeout(const Duration(seconds: 18)),
-        YouTubeApiService()
-            .getStreamUrl(videoId,
-                title: title, artist: artist, preferLowBitrate: preferLowBitrate)
-            .timeout(const Duration(seconds: 25)),
-        _getPipedStreamUrl(videoId).timeout(const Duration(seconds: 12)),
+        _getYouTubeMusicStreamUrl(videoId),
+        _getCobaltStreamUrl(videoId).timeout(const Duration(seconds: 15)),
+        _youtubeSlot(
+            () => YouTubeMusicAuth.instance.getStreamUrlInnerTubeNoAuth(videoId),
+            timeout: const Duration(seconds: 15)),
+        _youtubeSlot(
+            () => YouTubeApiService().getStreamUrl(videoId,
+                title: title, artist: artist, preferLowBitrate: preferLowBitrate),
+            timeout: const Duration(seconds: 20)),
+        // The loopback relay (PC via `adb reverse`) is the resolver that still
+        // works when YouTube bot-checks every direct source, and asking it costs
+        // under a second when no relay is running. It used to be consulted only
+        // at playback time, so a playable shelf was rated unplayable here.
+        _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 25))),
+        if (title != null && title.isNotEmpty)
+          _getJamendoFallbackUrl(title, artist ?? '')
+              .timeout(const Duration(seconds: 14)),
+        if (title != null && title.isNotEmpty)
+          _getAudiusFallbackUrl(title, artist ?? '')
+              .timeout(const Duration(seconds: 14)),
       ]);
     } catch (_) {}
     return null;
@@ -138,24 +198,32 @@ class StreamExtractionService {
     try {
       final localCached = await _localCachedStreamUrl(videoId);
       if (localCached != null && !kIsWeb) return localCached;
+      if (isVideoGone(videoId)) return null;
 
       try {
-        final connectivity = await Connectivity().checkConnectivity();
+        final connectivity = await safeConnectivity();
         if (connectivity.contains(ConnectivityResult.none)) return null;
       } catch (_) {}
 
       // Cache miss: hit Saavn (fast, no YouTube bot-check) so shelf
       // enrichment actually attaches an audioUrl instead of always
-      // returning null and deferring every resolve to tap time. The full
-      // multi-source race still runs inside getStreamUrl at playback.
-      if (title != null && title.isNotEmpty) {
-        final url = await getSaavnStreamUrl(
-          title,
-          artist ?? '',
-          durationSeconds: durationSeconds,
-        ).timeout(const Duration(seconds: 15));
-        if (url != null && url.isNotEmpty) return url;
-      }
+      // returning null and deferring every resolve to tap time. The loopback
+      // relay runs alongside it — it is the source that resolves the titles
+      // YouTube refuses, and it is refused in under a second when the PC is not
+      // attached. The full multi-source race still runs inside getStreamUrl at
+      // playback.
+      return await _race([
+        if (title != null && title.isNotEmpty)
+          _quiet(getSaavnStreamUrl(
+            title,
+            artist ?? '',
+            durationSeconds: durationSeconds,
+          ).timeout(const Duration(seconds: 15))),
+        // A seed id is not a YouTube video, so the relay can only burn its full
+        // budget on it; those items are matched by title alone.
+        if (!isMetadataSeedId(videoId))
+          _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 25))),
+      ]);
     } catch (_) {}
     return null;
   }
@@ -275,30 +343,73 @@ class StreamExtractionService {
       }
     }
     cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Le worker tronque parfois une parenthèse (« Finesse Out The Gang Way ( »)
+    // et Saavn matche le titre littéral : un crochet orphelin suffit à ne rien
+    // trouver. On retire les ouvrants jamais refermés, les paires intactes
+    // restent.
+    cleaned = cleaned
+        .replaceAll(RegExp(r'[()\[\]–—-]+\s*$'), '')
+        .replaceAll(RegExp(r'\((?![^)]*\))'), '')
+        .replaceAll(RegExp(r'\[(?![^\]]*\])'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     return cleaned.isNotEmpty ? cleaned : title;
   }
 
   static Future<String?> getSaavnStreamUrl(String title, String artist, {int? durationSeconds}) async {
-    try {
-      final dio = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        sendTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 15),
-      ));
-      final cleanTitle = _cleanTitle(title, artist);
-      final cleanArtist = _cleanArtist(artist);
-      String? durationString;
-      if (durationSeconds != null && durationSeconds > 0) {
-        final minutes = durationSeconds ~/ 60;
-        final seconds = durationSeconds % 60;
-        durationString = "$minutes:${seconds.toString().padLeft(2, '0')}";
+    final cleanTitle = _cleanTitle(title, artist);
+    final cleanArtist = _cleanArtist(artist);
+    String? durationString;
+    if (durationSeconds != null && durationSeconds > 0) {
+      final minutes = durationSeconds ~/ 60;
+      final seconds = durationSeconds % 60;
+      durationString = "$minutes:${seconds.toString().padLeft(2, '0')}";
+    }
+    final queryParams = {
+      'title': cleanTitle,
+      'artist': cleanArtist,
+      if (durationString != null) 'duration': durationString,
+    };
+
+    // fast-saavn is the one free Saavn proxy that still answers from a phone's
+    // residential IP (saavn.dev / saavn.me are rate-limited or dead). It returns
+    // an empty body both for "no such song" and for a transient upstream
+    // failure, and the two are indistinguishable — so retry once after a short
+    // pause before giving up. A random jitter keeps many simultaneous resolves
+    // (an artist page floods them) from hitting the limiter in lockstep.
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(
+          Duration(milliseconds: 250 + _rng.nextInt(400)),
+        );
       }
-      final queryParams = {
-        'title': cleanTitle,
-        'artist': cleanArtist,
-        if (durationString != null) 'duration': durationString,
-      };
-      debugPrint('SaavnExtraction: Requesting stream for "$cleanTitle" by "$cleanArtist" (${durationString ?? "unknown"})');
+      final url = await _saavnOnce(queryParams, cleanTitle, cleanArtist,
+          durationString, attempt);
+      if (url != null) return url;
+    }
+    return null;
+  }
+
+  /// One fast-saavn request. Returns the built 320 URL on a real hit, null on
+  /// an empty/errored body. The caller owns the retry loop.
+  static Future<String?> _saavnOnce(
+    Map<String, String> queryParams,
+    String cleanTitle,
+    String cleanArtist,
+    String? durationString,
+    int attempt,
+  ) async {
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      sendTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
+    ));
+    try {
+      if (attempt == 0) {
+        debugPrint('SaavnExtraction: Requesting stream for "$cleanTitle" by "$cleanArtist" (${durationString ?? "unknown"})');
+      } else {
+        debugPrint('SaavnExtraction: retrying "$cleanTitle" (attempt ${attempt + 1})');
+      }
       final response = await dio.get<String>(
         'https://fast-saavn.vercel.app/',
         queryParameters: queryParams,
@@ -347,6 +458,11 @@ class StreamExtractionService {
   // qui resolve yt-dlp hors de l'IP de l'app et proxifie le flux (Range OK).
   // Circuit-breaker local via adb reverse, sinon désactivé.
   static const String freedifyBase = 'http://127.0.0.1:8000';
+  // Le relais local réellement fourni par le dépôt : backend/local_stream_server.py
+  // (outils start_local_stream.ps1 / stream_watchdog.ps1), qui resolve avec yt-dlp
+  // sur le PC et répond {"url": …} sur GET /stream. Joint du téléphone grâce à
+  // `adb reverse tcp:9877 tcp:9877`.
+  static const String localServerBase = 'http://127.0.0.1:9877';
 
   /// Race multiple futures — returns the first non-null result instantly.
   /// Error-tolerant: a single timeout/failure never kills the race (the old
@@ -374,6 +490,61 @@ class StreamExtractionService {
       });
     }
     return completer.future;
+  }
+
+  // ─── Filet de parallélisme YouTube ───
+  // Un titre en race dix résolveurs, dont plusieurs qui frappent youtube.com
+  // depuis CETTE IP ; la mise en file attendue en ajoute plusieurs autres. Le
+  // plafonnement tombe en « rate limiting » en quelques secondes, et alors
+  // PLUS AUCUN son ne se résout — l'impression d'une app cassée. Deux requêtes
+  // YouTube à la fois suffisent ; les autres attendent leur tour. Cobalt et
+  // Invidious sont volontairement hors file : ce sont des serveurs tiers, ils
+  // ne salissent pas l'IP de l'appareil et les faire attendre affamerait les
+  // résolveurs qui marchent.
+  static const int _youtubeMaxParallel = 2;
+  static int _youtubeInFlight = 0;
+  static final List<Completer<void>> _youtubeWaiters = [];
+
+  /// Le chronomètre démarre à l'obtention du créneau, pas avant : sinon un
+  /// résolveur qui attend sagement son tour expire en file et l'échec est
+  /// attribué à la source alors qu'elle n'a jamais eu sa chance.
+  static Future<String?> _youtubeSlot(
+    Future<String?> Function() resolve, {
+    Duration timeout = const Duration(seconds: 20),
+    bool priority = false,
+  }) async {
+    if (_youtubeInFlight >= _youtubeMaxParallel) {
+      final releaser = Completer<void>();
+      // File FIFO, SAUF pour ce que l'utilisateur attend à l'instant : posé en
+      // tête, sinon un titre tapé derrière dix enrichissements de rayon
+      // patientait ~57 s (mesuré) avant sa première requête YouTube.
+      if (priority) {
+        _youtubeWaiters.insert(0, releaser);
+      } else {
+        _youtubeWaiters.add(releaser);
+      }
+      // L'attente elle-même doit être bornée. Mesuré sur l'appareil : une
+      // branche de fond avait patienté 323 s en file, le futur appelant
+      // resté vivant d'autant — et le rayon suivant avec lui.
+      final wait = priority
+          ? const Duration(seconds: 10)
+          : const Duration(seconds: 5);
+      try {
+        await releaser.future.timeout(wait);
+      } on TimeoutException {
+        _youtubeWaiters.remove(releaser);
+        debugPrint('StreamExtraction: [YouTubeSlot] saturated ${wait.inSeconds}s, '
+            'branch skipped (priority=$priority)');
+        return null;
+      }
+    }
+    _youtubeInFlight++;
+    try {
+      return await resolve().timeout(timeout);
+    } finally {
+      _youtubeInFlight--;
+      if (_youtubeWaiters.isNotEmpty) _youtubeWaiters.removeAt(0).complete();
+    }
   }
 
   static Box? _streamUrlBox;
@@ -612,28 +783,148 @@ static Future<String?> ensurePlayableUrl(
     } catch (_) {}
   }
 
+  /// Probes the loopback relay (`http://127.0.0.1:8000`, the user's own PC via
+  /// `adb reverse`). HEAD only — never GET the body, which would pull the whole
+  /// track into memory just to inspect its type. Returns the proxy URL when the
+  /// relay answers with audio, else null.
+  static Future<String?> _tryFreedify(String videoId) async {
+    final client = http.Client();
+    try {
+      final fdUri = Uri.parse('$freedifyBase/api/stream/ytm_$videoId');
+      final fdResp =
+          await client.head(fdUri).timeout(const Duration(seconds: 25));
+      if (fdResp.statusCode == 200) {
+        final ct = (fdResp.headers['content-type'] ?? '').toLowerCase();
+        final okAudio = ct.startsWith('audio/') ||
+            ct.contains('octet-stream') ||
+            ct.contains('flac') ||
+            ct.contains('mpeg') ||
+            ct.contains('mp4') ||
+            ct.contains('wav');
+        if (okAudio) {
+          // The player streams the proxy URL directly (Range supported), and
+          // the bytes are fetched by the PC, so they are not IP-bound here.
+          debugPrint('StreamExtraction: [Freedify] proxy ready ($ct)');
+          return fdUri.toString();
+        }
+        debugPrint('StreamExtraction: [Freedify] unexpected CT: $ct');
+      } else if (fdResp.statusCode != 404) {
+        debugPrint('StreamExtraction: [Freedify] HTTP ${fdResp.statusCode}');
+      }
+    } catch (_) {
+      // Connection refused is the normal "no relay running" case — keep it quiet
+      // so a phone without the PC server does not spam the log on every track.
+      debugPrint('StreamExtraction: [Freedify] unavailable');
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
+  /// Probes the local relay this project actually ships
+  /// (`backend/local_stream_server.py`, port 9877, reachable through
+  /// `adb reverse tcp:9877 tcp:9877`). It resolves with yt-dlp on the PC and
+  /// answers `{"url": …}`; the phone and the PC share the same public IP, so
+  /// that URL plays from the phone even though YouTube bot-checks the phone's
+  /// own requests. GET is cheap here — only a small JSON body is fetched, the
+  /// audio itself is streamed by the player from the returned URL.
+  static Future<String?> _tryLocalServer(String videoId) async {
+    final client = http.Client();
+    try {
+      final uri = Uri.parse('$localServerBase/stream')
+          .replace(queryParameters: {'videoId': videoId, 'kind': 'audio'});
+      final resp = await client
+          .get(uri)
+          // yt-dlp needs 10-20s to extract a page on a cold cache; the caller's
+          // 30s race budget governs, so stay just under it rather than cutting
+          // a working resolve short.
+          .timeout(const Duration(seconds: 28));
+      if (resp.statusCode == 200) {
+        final body = (jsonDecode(resp.body) as Map).cast<String, dynamic>();
+        final url = body['url'] as String?;
+        if (url != null && url.isNotEmpty) {
+          debugPrint('StreamExtraction: [LocalRelay] resolved via 9877');
+          return url;
+        }
+      } else if (resp.statusCode != 404) {
+        debugPrint(
+            'StreamExtraction: [LocalRelay] HTTP ${resp.statusCode} ${resp.body}');
+        if (resp.statusCode == 502 && _relaySaysGone(resp.body)) {
+          reportVideoGone(videoId, 'relay');
+        }
+      }
+    } on TimeoutException {
+      // The relay was still inside yt-dlp; that is a slow PC, not a dead video.
+      debugPrint('StreamExtraction: [LocalRelay] no answer in 28s');
+    } catch (e) {
+      final text = e.toString();
+      if (text.contains('Connection refused') ||
+          text.contains('Failed host lookup')) {
+        // Nothing listening on 9877: the normal case on a phone used standalone.
+        debugPrint('StreamExtraction: [LocalRelay] not running');
+      } else {
+        // The relay answered and then lost the connection. Saying "unavailable"
+        // here is what hid the real cause for a whole session.
+        debugPrint('StreamExtraction: [LocalRelay] $text');
+      }
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
+  /// The relay runs yt-dlp with its own client, so its "unavailable" is a
+  /// verdict about the upload (removed, private, or — the common case here — a
+  /// label whose country whitelist excludes this one). `gone` is the explicit
+  /// flag; the text checks stay because an older relay only has the message.
+  static bool _relaySaysGone(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map && decoded['gone'] == true) return true;
+    } catch (_) {
+      // Truncated body: fall through to the substring test.
+    }
+    return body.contains('Video unavailable') ||
+        body.contains('not available') ||
+        body.contains('UNPLAYABLE');
+  }
+
   static Future<String?> _getYtDlpStreamUrl(String videoId) async {
+    // 1. Loopback relay on the user's own PC (started with tools/relay_server.py
+    //    and reachable through `adb reverse tcp:8000 tcp:8000`). Always probed:
+    //    a HEAD against 127.0.0.1 fails in <1s when nothing is listening, so it
+    //    costs nothing while absent and fixes YouTube-blocked playback when up.
+    final local = await _tryLocalServer(videoId);
+    if (local != null) return local;
+    final loopback = await _tryFreedify(videoId);
+    if (loopback != null) return loopback;
+
     String? cloudBase;
+    bool legacyEnabled = false;
     try {
       final Box box = Hive.isBoxOpen('settings')
           ? Hive.box('settings')
           : await Hive.openBox('settings');
       final saved = box.get('ytdlpServerUrl') as String?;
       if (saved != null && saved.trim().isNotEmpty) cloudBase = saved;
+      legacyEnabled =
+          box.get('enableLegacyYtDlpServers', defaultValue: false) == true;
     } catch (_) {}
 
-    // Sur mobile, on tente d'abord le serveur local sur le loopback (adb
-    // reverse / client embarqué), puis Freedify (backend Python équilibré),
-    // puis le serveur configuré (réglages), puis le cloud Vercel. Le probe
-    // loopback échoue en <1s quand il est absent.
-    //
+    // 2. Expensive legacy cloud relays (config server, Vercel workers, Supabase
+    //    shared cache) stay behind the explicit opt-in: they are usually dead
+    //    and each probe burns 5–30s of the resolve budget before failing.
+    if (!legacyEnabled) {
+      debugPrint('StreamExtraction: [YtDlp] cloud relays disabled — skipping');
+      return null;
+    }
+
     // The cloud list comes from StreamEndpointResolver, which probes the
     // candidates in order and remembers the one that answered — so a redeploy
     // to a new domain is picked up without shipping a new build.
     final healthy = await _endpoints.healthyBases();
     final candidates = <String>[
-      'http://127.0.0.1:9877',
-      freedifyBase,
+      // Loopback (freedifyBase) already handled above; do not probe it twice.
       if (cloudBase != null &&
           cloudBase.trim().isNotEmpty &&
           !cloudBase.contains('trycloudflare.com'))
@@ -647,39 +938,6 @@ static Future<String?> ensurePlayableUrl(
     for (final candidate in candidates) {
       final client = http.Client();
       try {
-        // Freedify: resolve via yt-dlp hors IP-device + proxy Range-friendly.
-        if (candidate == freedifyBase) {
-          try {
-            final fdUri = Uri.parse('$candidate/api/stream/ytm_$videoId');
-            // HEAD only — never GET the body (would buffer the whole audio
-            // into memory just to inspect Content-Type). Freedify supports
-            // HEAD on /api/stream/{isrc} and still resolves yt-dlp server-side.
-            final fdResp = await client
-                .head(fdUri)
-                .timeout(const Duration(seconds: 25));
-            if (fdResp.statusCode == 200) {
-              final ct = (fdResp.headers['content-type'] ?? '').toLowerCase();
-              final okAudio = ct.startsWith('audio/') ||
-                  ct.contains('octet-stream') ||
-                  ct.contains('flac') ||
-                  ct.contains('mpeg') ||
-                  ct.contains('mp4') ||
-                  ct.contains('wav');
-              if (okAudio) {
-                // Player streams the proxy URL directly (Range supported).
-                debugPrint('StreamExtraction: [Freedify] proxy ready ($ct)');
-                return fdUri.toString();
-              }
-              debugPrint('StreamExtraction: [Freedify] unexpected CT: $ct');
-            } else {
-              debugPrint(
-                  'StreamExtraction: [Freedify] HTTP ${fdResp.statusCode}');
-            }
-          } catch (e) {
-            debugPrint('StreamExtraction: [Freedify] $e');
-          }
-          continue;
-        }
         // Vercel proxy: resolve + proxy in a single call to avoid re-resolution.
         if (candidate.contains('vercel.app')) {
           try {
@@ -806,12 +1064,15 @@ static Future<String?> ensurePlayableUrl(
   static Future<String?> getVideoStreamUrl(String videoId) async {
     if (videoId.trim().isEmpty) return null;
     String? configured;
+    bool legacyEnabled = false;
     try {
       final Box box = Hive.isBoxOpen('settings')
           ? Hive.box('settings')
           : await Hive.openBox('settings');
       final saved = box.get('ytdlpServerUrl') as String?;
       if (saved != null && saved.trim().isNotEmpty) configured = saved.trim();
+      legacyEnabled =
+          box.get('enableLegacyYtDlpServers', defaultValue: false) == true;
     } catch (_) {}
 
     // Same resolver as audio: probed, last known good first.
@@ -820,23 +1081,66 @@ static Future<String?> ensurePlayableUrl(
     // Deduplicated: `configured`, `healthy` and `cloudYtDlpBases` usually
     // overlap, and a host listed twice used to be awaited twice.
     final candidates = <String>{
-      'http://127.0.0.1:9877',
+      // Le relais local (adb reverse 9877) connaît kind=video et répond en
+      // <1 s quand rien n'écoute : toujours sondé, contrairement au cloud.
+      localServerBase,
       if (configured != null &&
           configured.isNotEmpty &&
           !configured.contains('trycloudflare.com'))
         configured,
-      ...healthy,
-      ...cloudYtDlpBases,
+      // Les relais cloud publics sont derrière l'opt-in, exactement comme pour
+      // l'audio : ils sont presque toujours morts et chaque sonde brûle 15 s
+      // du budget — c'est ce qui faisait « bugger » l'app à l'activation de la
+      // vidéo. Sans opt-in, on tombe directement sur YoutubeExplode.
+      if (legacyEnabled) ...healthy,
+      if (legacyEnabled) ...cloudYtDlpBases,
     };
 
     // Raced, not sequential: the cloud hosts answer a bot-check 502 after
     // ~19s (or hang for the whole budget), and waiting for them before
     // reaching the loopback server meant minutes of frozen playback before
     // "Vidéo indisponible". First valid URL wins, the rest settle silently.
-    return _race(
+    final viaServer = await _race(
       candidates.map((c) => _tryVideoSource(c, videoId)).toList(),
     );
+    return viaServer ?? await getSmallVideoUrlWithoutServer(videoId);
   }
+
+  /// Résolution vidéo **sans aucun serveur** : YoutubeExplode demande la
+  /// page player de YouTube et renvoie une URL déjà signée pour l'IP de
+  /// l'appareil.
+  ///
+  /// La plus petite vidéo muxée compatible est choisie (≤ 45 Mo) : ce flux
+  /// alimente une pochette animée ou un fond de paroles, jamais un plein
+  /// écran — décoder du 1080p en boucle suffit à saturer un téléphone.
+  static Future<String?> getSmallVideoUrlWithoutServer(String videoId) =>
+      _youtubeSlot(() => _resolveSmallVideoUrl(videoId),
+          timeout: const Duration(seconds: 20));
+
+  static Future<String?> _resolveSmallVideoUrl(String videoId) async {
+    if (videoId.trim().isEmpty) return null;
+    try {
+      final manifest = await _ytExplode.videos.streamsClient
+          .getManifest(videoId)
+          .timeout(const Duration(seconds: 14));
+      final muxed = manifest.muxed.toList()
+        ..sort((a, b) => a.size.totalBytes.compareTo(b.size.totalBytes));
+      for (final stream in muxed) {
+        if (stream.size.totalBytes <= _canvasMaxBytes) {
+          debugPrint('StreamExtraction: [YoutubeExplode] video '
+              '${stream.container} ${stream.bitrate.kiloBitsPerSecond.toInt()}kbps'
+              ' sans serveur');
+          return stream.url.toString();
+        }
+      }
+      if (muxed.isNotEmpty) return muxed.first.url.toString();
+    } catch (e) {
+      debugPrint('StreamExtraction: [YoutubeExplode-video] $e');
+    }
+    return null;
+  }
+
+  static const int _canvasMaxBytes = 45 * 1024 * 1024;
 
   /// One candidate of the video cascade. Loopback gets a long budget (cold
   /// yt-dlp runs take 5–25s); cloud hosts either answer in ~2s or are dead,
@@ -865,6 +1169,180 @@ static Future<String?> ensurePlayableUrl(
       debugPrint('StreamExtraction: [Video] $e on $candidate');
     } finally {
       client.close();
+    }
+    return null;
+  }
+
+  // Singleton YoutubeExplode — une seule session HTTP réutilisée partout.
+  static final YoutubeExplode _ytExplode = YoutubeExplode();
+
+  /// YoutubeExplode direct — résout l'audio/vidéo **sans aucun serveur**.
+  ///
+  /// Le package interroge youtube.com/player et renvoie l'URL googlevideo
+  /// déjà signée pour l'IP de l'appareil. C'est la source la plus rapide
+  /// quand elle fonctionne (~1-2 s), et elle ne dépend d'aucune infra.
+  static Future<String?> _getYoutubeExplodeAudioUrl(String videoId) =>
+      _youtubeSlot(() => _resolveYoutubeExplodeAudio(videoId),
+          timeout: const Duration(seconds: 12));
+
+  static Future<String?> _resolveYoutubeExplodeAudio(String videoId) async {
+    try {
+      final manifest =
+          await _ytExplode.videos.streamsClient.getManifest(videoId);
+      // Audio mp4a (compatible iOS/Android) de préférence, sinon best.
+      final streams = manifest.audioOnly.toList()
+        ..sort((a, b) => b.bitrate.kiloBitsPerSecond
+            .compareTo(a.bitrate.kiloBitsPerSecond));
+      if (streams.isNotEmpty) {
+        final url = streams.first.url.toString();
+        debugPrint(
+            'StreamExtraction: [YoutubeExplode] audio ${streams.first.bitrate.kiloBitsPerSecond}kbps');
+        return url;
+      }
+    } catch (e) {
+      debugPrint('StreamExtraction: [YoutubeExplode] $e');
+      if (e is VideoUnplayableException ||
+          '$e'.contains('unplayable') ||
+          '$e'.contains('not available')) {
+        reportVideoGone(videoId, 'explode');
+      }
+    }
+    return null;
+  }
+
+  /// Jamendo/Audius hold Creative-Commons catalogues, not the requested song.
+  /// Without this gate a search for "Ma copine" happily returned the first CC
+  /// track — a different artist, sometimes even a premium URL that serves an
+  /// HTML body, which the player then reported as "Source error". So a fallback
+  /// only counts when it carries the sought title and really serves media.
+  static bool _sameTitle(String wanted, String candidate) {
+    String norm(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'\([^)]*\)|\[[^\]]*\]'), ' ')
+        .replaceAll(RegExp(r'[^a-z0-9\u00c0-\u017f]+'), ' ')
+        .trim();
+    final w = norm(wanted);
+    final c = norm(candidate);
+    if (w.isEmpty || c.isEmpty) return false;
+    // Short generic words ("New", "Sad") are substrings of hundreds of
+    // unrelated titles, so they only count as an exact match.
+    if (w.length < 5) return c == w;
+    return c == w || c.contains(w) || w.contains(c);
+  }
+
+  static Future<String?> _validatedFallback(String url, String label) async {
+    if (url.isEmpty) return null;
+    final client = http.Client();
+    try {
+      if (!await _servesMedia(client, Uri.parse(url))) {
+        debugPrint('StreamExtraction: [$label] $url does not serve media');
+        return null;
+      }
+      return url;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Jamendo fallback — cherche par titre+artiste dans le catalogue CC.
+  /// Retourne une URL directe (CDN statique, jamais IP-bound).
+  static Future<String?> _getJamendoFallbackUrl(
+      String title, String artist) async {
+    try {
+      final jamendo = JamendoApiService();
+      final query = artist.isNotEmpty ? '$title $artist' : title;
+      final tracks = await jamendo.searchTracks(query, limit: 3);
+      for (final t in tracks) {
+        if (!_sameTitle(title, t.name)) continue;
+        final url = await _validatedFallback(t.audioUrl, 'Jamendo');
+        if (url != null) {
+          debugPrint('StreamExtraction: [Jamendo] "${t.name}" — direct CDN');
+          return url;
+        }
+      }
+    } catch (e) {
+      debugPrint('StreamExtraction: [Jamendo] $e');
+    }
+    return null;
+  }
+
+  /// Audius fallback — cherche le titre exact dans le catalogue décentralisé
+  /// et rend la signed stream URL: full file, no YouTube, no relay.
+  static Future<String?> _getAudiusFallbackUrl(
+      String title, String artist) async {
+    try {
+      final audius = AudiusApiService();
+      // Audius' genre filter only matches its own declared tokens, so a title
+      // word passed as a genre answered 0 hits every time — the endpoint that
+      // understands a song name is the full-text search.
+      final queries = <String>[
+        if (artist.trim().isNotEmpty) '$title $artist',
+        title,
+      ];
+      for (final q in queries) {
+        final tracks = await audius.searchTracks(q, limit: 5);
+        for (final t in tracks) {
+          if (t.streamUrl.isEmpty || !_sameTitle(title, t.title)) continue;
+          final url = await _validatedFallback(t.streamUrl, 'Audius');
+          if (url != null) {
+            debugPrint('StreamExtraction: [Audius] "${t.title}" — signed stream');
+            return url;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('StreamExtraction: [Audius] $e');
+    }
+    return null;
+  }
+
+  /// Deezer's 30-second clip — the one audio this network can always fetch.
+  /// French "- Topic" uploads are licensed to a country whitelist that does not
+  /// include Benin, so YouTube answers `UNPLAYABLE`/"Video unavailable" for them
+  /// from here (verified on the PC's own IP) while `cdnt-preview.dzcdn.net`
+  /// answers 200 in two seconds. An extract the user hears beats a full track
+  /// that never starts, and it is the only honest answer when every
+  /// full-track resolver has already said no.
+  /// Public door to the clip, for the one caller that has already exhausted the
+  /// full-length hunt (`ResolvingAudioSource`, after its own retry). Keeping it
+  /// out of [getStreamUrl] matters: the dead-URL retries inside the player call
+  /// that method expecting a full track, and handing them a 30 s extract would
+  /// make them stop looking for audio that does exist.
+  static Future<String?> catalogClipUrl(String title, String artist) async {
+    if (title.isEmpty || _isDown('deezer')) return null;
+    final clip = await _quiet(
+        _getDeezerClipUrl(title, _cleanArtist(artist))
+            .timeout(const Duration(seconds: 12)));
+    if (clip != null) {
+      _recordOk('deezer');
+      return clip;
+    }
+    // "No clip for this title" is a content answer, not an outage — same
+    // generous threshold as Saavn, so one artist page cannot park the source.
+    _recordFail('deezer', threshold: 6);
+    return null;
+  }
+
+  static Future<String?> _getDeezerClipUrl(String title, String artist) async {
+    try {
+      final queries = <String>[
+        if (artist.trim().isNotEmpty) '$title ${artist.trim()}',
+        title,
+      ];
+      for (final q in queries) {
+        final tracks = await DeezerApiService().searchTracks(q, limit: 6);
+        for (final t in tracks) {
+          final clip = t.metadata?['dzPreview']?.toString() ?? '';
+          if (clip.isEmpty || !_sameTitle(title, t.title)) continue;
+          final url = await _validatedFallback(clip, 'Deezer');
+          if (url != null) {
+            debugPrint('StreamExtraction: [Deezer] "${t.title}" — 30s clip');
+            return url;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('StreamExtraction: [Deezer] $e');
     }
     return null;
   }
@@ -914,54 +1392,6 @@ static Future<String?> ensurePlayableUrl(
         debugPrint('StreamExtraction: [Cobalt] status=$status on $instance');
       } catch (e) {
         debugPrint('StreamExtraction: [Cobalt] $e on $instance');
-      } finally {
-        client.close();
-      }
-    }
-    return null;
-  }
-
-  /// Piped instances expose `/streams/{id}` with the real audio and video
-  /// renditions. Most public instances are down, so the whole list is raced
-  /// and the first answer wins — the same strategy as the other resolvers.
-  static Future<String?> _getPipedStreamUrl(String videoId) async {
-    const instances = [
-      'api.piped.private.coffee',
-      'pipedapi.reallyaweso.me',
-      'pipedapi.adminforge.de',
-      'pipedapi.kavin.rocks',
-      'pipedapi-libre.kavin.rocks',
-      'pipedapi.ducks.party',
-    ];
-    for (final instance in instances) {
-      final client = http.Client();
-      try {
-        final uri = Uri.parse('https://$instance/streams/$videoId');
-        final response = await client
-            .get(uri, headers: {'User-Agent': 'Mozilla/5.0'})
-            .timeout(const Duration(seconds: 8));
-        if (response.statusCode != 200) continue;
-        final data = jsonDecode(response.body);
-        if (data is! Map) continue;
-        final audios = (data['audioStreams'] as List?) ?? const [];
-        String? bestUrl;
-        var bestBitrate = 0;
-        for (final a in audios) {
-          if (a is! Map) continue;
-          final url = a['url']?.toString() ?? '';
-          if (url.isEmpty) continue;
-          final bitrate = (a['bitrate'] as num?)?.toInt() ?? 0;
-          if (bitrate >= bestBitrate) {
-            bestBitrate = bitrate;
-            bestUrl = url;
-          }
-        }
-        if (bestUrl != null) {
-          debugPrint('StreamExtraction: [Piped] $instance ($bestBitrate bps)');
-          return bestUrl;
-        }
-      } catch (e) {
-        debugPrint('StreamExtraction: [Piped] $instance: $e');
       } finally {
         client.close();
       }
@@ -1071,7 +1501,12 @@ static Future<String?> ensurePlayableUrl(
   }
 
   /// Try YouTube Music authenticated player API.
-  static Future<String?> _getYouTubeMusicStreamUrl(String videoId) async {
+  static Future<String?> _getYouTubeMusicStreamUrl(String videoId,
+          {bool priority = false}) =>
+      _youtubeSlot(() => _resolveYouTubeMusic(videoId),
+          timeout: const Duration(seconds: 15), priority: priority);
+
+  static Future<String?> _resolveYouTubeMusic(String videoId) async {
     try {
       final auth = YouTubeMusicAuth.instance;
       final url = await auth.getStreamUrl(videoId);
@@ -1120,10 +1555,13 @@ static Future<String?> ensurePlayableUrl(
     h.successes++;
   }
 
-  static void _recordFail(String source) {
+  static void _recordFail(String source, {int? threshold}) {
     final h = _health.putIfAbsent(source, () => _SourceHealth());
     h.failures++;
-    if (h.failures >= _failureThreshold) {
+    // A caller-supplied threshold is for sources whose "no result" is a normal
+    // content answer rather than an outage (see Saavn below): parking the one
+    // resolver that still works from a phone starves every next track.
+    if (h.failures >= (threshold ?? _failureThreshold)) {
       h.downUntil = DateTime.now().add(_cooldown(h.failures));
       debugPrint('StreamExtraction: source "$source" parked until '
           '${h.downUntil.toIso8601String()} ($source)');
@@ -1153,23 +1591,105 @@ static Future<String?> ensurePlayableUrl(
     debugPrint('StreamExtraction: source health reset');
   }
 
+  /// Title-driven sources only. A metadata seed (`dz_`, `it_`, `sp_`…) carries
+  /// no YouTube id, so no video resolver can help it — but its title and artist
+  /// are real, and these three answer to those alone. Without this path every
+  /// Deezer/iTunes card the home sections now show would report "unavailable".
+  static Future<String?> getStreamUrlByTitle(
+    String videoId, {
+    required String? title,
+    String? artist,
+    int? durationSeconds,
+    Set<String> avoidSources = const {},
+  }) async {
+    if (title == null || title.isEmpty) return null;
+    final cached = await _localCachedStreamUrl(videoId);
+    if (cached != null) {
+      debugPrint('StreamExtraction: [LocalCache] served seed $videoId');
+      return cached;
+    }
+    final cleanArtist = _cleanArtist(artist ?? '');
+    final attempts = <(String, Future<String?>)>[
+      if (!avoidSources.contains('saavn') && !_isDown('saavn'))
+        (
+          'saavn',
+          _quiet(getSaavnStreamUrl(title, cleanArtist,
+                  durationSeconds: durationSeconds)
+              .timeout(const Duration(seconds: 18)))
+        ),
+      if (!avoidSources.contains('jamendo') && !_isDown('jamendo'))
+        (
+          'jamendo',
+          _quiet(_getJamendoFallbackUrl(title, cleanArtist)
+              .timeout(const Duration(seconds: 14)))
+        ),
+      if (!avoidSources.contains('audius') && !_isDown('audius'))
+        (
+          'audius',
+          _quiet(_getAudiusFallbackUrl(title, cleanArtist)
+              .timeout(const Duration(seconds: 14)))
+        ),
+      // Guarantor of audible sound: Saavn/Jamendo/Audius simply do not carry
+      // most French catalog titles, and this device's IP cannot get YouTube.
+      if (!avoidSources.contains('deezer'))
+        (
+          'deezer',
+          _quiet(_getDeezerClipUrl(title, cleanArtist)
+              .timeout(const Duration(seconds: 12)))
+        ),
+    ];
+    if (attempts.isEmpty) return null;
+
+    String? hitSource;
+    Future<String?> guarded(String label, Future<String?> task) async {
+      final url = await task;
+      if (url == null || url.isEmpty) return null;
+      hitSource ??= label;
+      return url;
+    }
+
+    final winner =
+        await _race(attempts.map((a) => guarded(a.$1, a.$2)).toList());
+    if (winner != null && hitSource != null) {
+      _recordOk(hitSource!);
+      debugPrint('StreamExtraction: seed $videoId streamed via $hitSource');
+      isSaavnCache[videoId] = hitSource == 'saavn';
+      await _cacheStreamUrl(videoId, winner);
+      return winner;
+    }
+    for (final a in attempts) {
+      _recordFail(a.$1, threshold: 6);
+    }
+    debugPrint('StreamExtraction: no title source for seed $videoId');
+    return null;
+  }
+
   static Future<String?> getStreamUrl(
   String videoId, {
     String? title,
     String? artist,
     int? durationSeconds,
     bool skipSaavn = false,
+    bool priority = false,
+    bool allowGeoSwap = true,
     Set<String> avoidSources = const {},
   }) async {
     final overallStopwatch = Stopwatch()..start();
     debugPrint('StreamExtraction: --- getStreamUrl started for $videoId ---');
     final lowBitrate = _preferLowBitratePref;
 
-    // Metadata seeds (dz_/it_/sp_…) are not YouTube ids — fail fast instead
-    // of racing eight sources that can never resolve them.
+    // Metadata seeds (dz_/it_/sp_…) are not YouTube ids — the video resolvers
+    // below can never answer for them. They can still be streamed by title, so
+    // try the title-driven sources instead of refusing the track outright.
     if (isMetadataSeedId(videoId)) {
-      debugPrint('StreamExtraction: metadata seed id, not streamable: $videoId');
-      return null;
+      debugPrint('StreamExtraction: metadata seed $videoId — title-only resolve');
+      return getStreamUrlByTitle(
+        videoId,
+        title: title,
+        artist: artist,
+        durationSeconds: durationSeconds,
+        avoidSources: avoidSources,
+      );
     }
 
     // 0. Local disk cache — instant, zero network
@@ -1181,99 +1701,303 @@ static Future<String?> ensurePlayableUrl(
 
     // Fast offline guard
     try {
-      final connectivity = await Connectivity().checkConnectivity();
+      final connectivity = await safeConnectivity();
       if (connectivity.contains(ConnectivityResult.none)) {
         debugPrint('StreamExtraction: offline — skipping network cascade for $videoId');
         return null;
       }
     } catch (_) {}
 
-    // 1. Race Saavn + Cloud/yt-dlp + Invidious (parallel) + YouTube Music Auth — first valid URL wins.
-    // Outer timeouts must stay ABOVE each source's internal work budget
-    // (Saavn dio 15s, Cobalt 2×15s, Piped 3×6s, YT API receive 30s) so a
-    // slow source is never cut off before it finishes.
-    // 1. Direct-CDN sources first, and alone. Saavn (and friends) hand out
-    // static CDN URLs that are not IP-bound, so when one resolves the track is
-    // instantly playable. Racing it against the YouTube chain used to hand a
-    // fast-but-dead 403 URL to the player and throw this result away.
-    if (title != null && title.isNotEmpty && !skipSaavn && !avoidSources.contains('saavn')) {
-      final saavnUp = !_isDown('saavn');
-      try {
-        final direct = saavnUp
-            ? await getSaavnStreamUrl(
-                title,
-                artist ?? '',
-                durationSeconds: durationSeconds,
-              ).timeout(const Duration(seconds: 18))
-            : null;
-        if (direct != null && direct.isNotEmpty) {
-          _recordOk('saavn');
-          debugPrint('StreamExtraction: direct CDN hit in '
-              '${overallStopwatch.elapsedMilliseconds}ms');
-          isSaavnCache[videoId] = true;
-          await _cacheStreamUrl(videoId, direct);
-          return direct;
-        }
-        if (saavnUp) _recordFail('saavn');
-      } catch (_) {
-        if (saavnUp) _recordFail('saavn');
-      }
+    // Upload confirmé retiré (deux verdicts concordants) : plus aucun résolveur
+    // par id ne peut répondre pour lui. Le morceau vit peut-être ailleurs →
+    // chasse par titre+artiste, immédiate au lieu des 65 s de cascade morte.
+    if (isVideoGone(videoId)) {
+      debugPrint('StreamExtraction: $videoId already gone — title-only resolve');
+      return getStreamUrlByTitle(
+        videoId,
+        title: title,
+        artist: artist,
+        durationSeconds: durationSeconds,
+        avoidSources: avoidSources,
+      );
     }
 
-    // 2. YouTube-derived sources, all in parallel, but every result is kept.
-    // A blind race is only safe if the winner is also the best candidate: here
-    // the YouTube chain answers fastest with a URL resolved on *its* server's
-    // IP, which this device then gets a 403 for. So the candidates are verified
-    // one after another and the first that really plays wins.
-    final futures = <Future<String?>>[
-      if (!avoidSources.contains('ytdlp') && !_isDown('ytdlp'))
-        _getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 40)),
-      if (!avoidSources.contains('invidious') && !_isDown('invidious'))
-        _getInvidiousStreamUrl(videoId).timeout(const Duration(seconds: 12)),
-      if (!avoidSources.contains('ytmusic') && !_isDown('ytmusic'))
-        _getYouTubeMusicStreamUrl(videoId).timeout(const Duration(seconds: 18)),
-      // Cobalt public backend — resolves OFF the device IP (bypasses the
-      // bot-check that kills the other YouTube sources), returns a fresh
-      // file URL that plays directly.
-      if (!avoidSources.contains('cobalt') && !_isDown('cobalt'))
-        _getCobaltStreamUrl(videoId).timeout(const Duration(seconds: 32)),
-      // Piped API — proxy YouTube gratuit, dernier recours (streams souvent 500)
-      if (!avoidSources.contains('piped') && !_isDown('piped'))
-        PipedApiService()
-            .getStreamUrl(videoId)
-            .timeout(const Duration(seconds: 18)),
+    // 1. Saavn gets a short HEAD START instead of a serial await. Its static CDN
+    // URLs are not IP-bound, so when it answers the track is instantly
+    // playable — but waiting the full 18s for a title it does not carry used to
+    // delay every other source by that much, which is what the user heard as
+    // "le son ne se lance pas". The rest of the cascade is started BEFORE we
+    // wait, so a Saavn miss costs nothing.
+    final saavnEligible = title != null &&
+        title.isNotEmpty &&
+        !skipSaavn &&
+        !avoidSources.contains('saavn') &&
+        !_isDown('saavn');
+    final Future<String?>? saavnTask = saavnEligible
+        ? _quiet(getSaavnStreamUrl(
+            title,
+            artist ?? '',
+            durationSeconds: durationSeconds,
+          ).timeout(const Duration(seconds: 18)))
+        : null;
+
+    // 2. Every remaining source runs concurrently, each labelled so a dead URL
+    // is blamed on the resolver that produced it. They were all charged to
+    // "ytdlp" before, so one expired InnerTube link parked the loopback relay —
+    // the one resolver that always works with the PC attached — and every
+    // following track failed with it.
+    //
+    // Verdict géo d'abord, quand un échange de voie reste possible : un upload
+    // dont `availableCountries` exclut le pays de l'appareil est fermé pour
+    // TOUTES les résolutions par id, simultanément (mesuré 6/6 contre le relais
+    // yt-dlp depuis l'IP béninoise, le 2026-10-15 : « Video unavailable » en
+    // 6-8 s sur les trois ids fermés, flux googlevideo livré sur les trois
+    // ouverts). Le verdict coûte ~400 ms et se paie une fois par upload
+    // (mémoire + disque, 30 j), alors que la cascade morte coûte 30-65 s de
+    // silence à chaque écoute. Saavn est déjà parti au-dessus : lui joue par
+    // TITRE et ne dépend pas de cette vidéo.
+    final geoSwapPossible = allowGeoSwap && title != null && title.isNotEmpty;
+    final geoClosed =
+        geoSwapPossible && await PlayabilityGeoService.isClosedHere(videoId);
+    final attempts = <(String, Future<String?>)>[
+      if (!avoidSources.contains('explode') && !_isDown('explode'))
+        (
+          'explode',
+          _quiet(_youtubeSlot(
+              () => _resolveYoutubeExplodeAudio(videoId),
+              timeout: const Duration(seconds: 12),
+              priority: priority))
+        ),
       if (!avoidSources.contains('innertube') && !_isDown('innertube'))
-        YouTubeMusicAuth.instance
-            .getStreamUrlInnerTubeNoAuth(videoId)
-            .timeout(const Duration(seconds: 20)),
-      YouTubeApiService()
-          .getStreamUrl(videoId,
-              title: title, artist: artist, preferLowBitrate: lowBitrate)
-          .timeout(const Duration(seconds: 30)),
+        (
+          'innertube',
+          _quiet(_youtubeSlot(
+              () => YouTubeMusicAuth.instance
+                  .getStreamUrlInnerTubeNoAuth(videoId),
+              timeout: const Duration(seconds: 15),
+              priority: priority))
+        ),
+      if (!avoidSources.contains('ytmusic') && !_isDown('ytmusic'))
+        (
+          'ytmusic',
+          _quiet(_getYouTubeMusicStreamUrl(videoId, priority: priority))
+        ),
+      // Loopback relay (user's PC via adb reverse) consulted directly here, not
+      // only as the dead-googlevideo retry: when YouTube bot-checks every direct
+      // source it returns no URL at all, so the retry never fired and the relay
+      // went unused. Cheap when absent (<1s refused), the fix when present.
+      if (!avoidSources.contains('ytdlp'))
+        ('ytdlp', _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 30)))),
+      if (!avoidSources.contains('invidious') && !_isDown('invidious'))
+        (
+          'invidious',
+          _quiet(
+              _getInvidiousStreamUrl(videoId).timeout(const Duration(seconds: 14)))
+        ),
+      if (!avoidSources.contains('cobalt') && !_isDown('cobalt'))
+        (
+          'cobalt',
+          _quiet(_getCobaltStreamUrl(videoId).timeout(const Duration(seconds: 20)))
+        ),
+      (
+        'ytapi',
+        _quiet(_youtubeSlot(
+            () => YouTubeApiService().getStreamUrl(videoId,
+                title: title, artist: artist, preferLowBitrate: lowBitrate),
+            timeout: const Duration(seconds: 20),
+            priority: priority))
+      ),
+      // Fallback non-YouTube : catalogue CC/décentralisé, URLs statiques.
+      if (title != null && title.isNotEmpty && !avoidSources.contains('jamendo'))
+        (
+          'jamendo',
+          _quiet(
+              _getJamendoFallbackUrl(title, artist ?? '').timeout(const Duration(seconds: 14)))
+        ),
+      if (title != null && title.isNotEmpty && !avoidSources.contains('audius'))
+        (
+          'audius',
+          _quiet(_getAudiusFallbackUrl(title, artist ?? '').timeout(const Duration(seconds: 14)))
+        ),
     ];
-    final results = await Future.wait(futures, eagerError: false);
-    isSaavnCache[videoId] = false;
 
-    for (final candidate in results) {
-      if (candidate == null || candidate.isEmpty) continue;
-      final ensured = await ensurePlayableUrl(videoId, candidate);
-      if (ensured != null && ensured.isNotEmpty) {
-        _recordOk('ytdlp');
-        debugPrint('StreamExtraction: succeeded in '
-            '${overallStopwatch.elapsedMilliseconds}ms');
-        await _cacheStreamUrl(videoId, ensured);
-        return ensured;
+    // Whoever answers first wins — but Saavn keeps a 6s priority window, because
+    // its link needs no probe while a googlevideo one can still 403 on this
+    // device. Waiting past that only reproduces the old serial stall.
+    String? winner;
+    String? winnerSource;
+    if (saavnTask != null) {
+      final grace = Future.delayed(const Duration(seconds: 6), () => null);
+      String? early;
+      try {
+        early = await Future.any(<Future<String?>>[saavnTask, grace]);
+      } catch (_) {}
+      if (early != null && early.isNotEmpty) {
+        winner = early;
+        winnerSource = 'saavn';
       }
-      // The URL came back but would not play here: whatever produced it is
-      // either dead or resolving on an IP this device cannot use. Parking it
-      // is what stops the next track from paying the same price.
-      _recordFail('ytdlp');
-      debugPrint(
-          'StreamExtraction: dead googlevideo only for $videoId after ${overallStopwatch.elapsedMilliseconds}ms');
     }
+    // First resolver whose link actually plays wins; the others keep running in
+    // the background. Waiting for all of them (the old Future.wait) made a track
+    // cost the slowest source's full budget even when YoutubeExplode had the
+    // answer in two seconds.
+    String? hitSource;
+    // Deux verdicts concordants « cette vidéo est retirée » : on cesse
+    // d'attendre les branches YouTube (14-30 s chacune, 65 s au total mesuré sur
+    // l'appareil) et il ne reste que ce qui répond par TITRE — Saavn, dont la
+    // fenêtre est déjà ouverte.
+    final gone = Completer<String?>();
+    void noteVerdicts() {
+      if (!isVideoGone(videoId) || gone.isCompleted) return;
+      debugPrint('StreamExtraction: $videoId confirmed gone — cascade cut at '
+          '${overallStopwatch.elapsedMilliseconds}ms');
+      _playableMemo[videoId] = false;
+      _playableMemoAt[videoId] = DateTime.now();
+      gone.complete(null);
+    }
+
+    Future<String?> guarded(String label, Future<String?> task) async {
+      final candidate = await task;
+      if (candidate == null || candidate.isEmpty) {
+        noteVerdicts();
+        return null;
+      }
+      final ensured = await ensurePlayableUrl(videoId, candidate);
+      if (ensured == null || ensured.isEmpty) {
+        // The URL came back but would not play here: whatever produced it is
+        // either dead or resolving on an IP this device cannot use. Park it —
+        // and only it — so the next track does not pay the same price.
+        _recordFail(label);
+        debugPrint('StreamExtraction: dead link from $label for $videoId');
+        return null;
+      }
+      hitSource ??= label;
+      return ensured;
+    }
+
+    // Upload fermé au pays : les sept résolveurs PAR ID sont retirés d'un coup
+    // (les garder ferait payer 12-30 s de plus à une piste qui ne peut pas
+    // aboutir) et remplacés par la seule voie qui reste — un AUTRE upload du
+    // même morceau, ouvert ici. Les branches par TITRE (jamendo, audius) et
+    // Saavn gardent leur place : elles ne dépendent pas de cette vidéo.
+    final liveAttempts = <(String, Future<String?>)>[
+      for (final attempt in attempts)
+        if (!geoClosed || !_byIdResolvers.contains(attempt.$1)) attempt,
+      if (geoClosed)
+        (
+          'geoswap',
+          _quiet(_geoSwapStream(videoId,
+              title: title,
+              artist: artist,
+              durationSeconds: durationSeconds,
+              priority: priority))
+        ),
+    ];
+    if (winner == null) {
+      winner = await Future.any(<Future<String?>>[
+        _race(liveAttempts.map((a) => guarded(a.$1, a.$2)).toList()),
+        gone.future,
+      ]);
+      winnerSource = hitSource;
+    }
+    // Saavn may still answer after its priority window (a slow dio box): take it
+    // rather than reporting a failure the relay could have avoided.
+    if (winner == null && saavnTask != null) {
+      final String? late;
+      if (gone.isCompleted) {
+        // The video itself is gone — Saavn keeps only a short remaining window
+        // instead of its full 18 s, which is what turned a dead upload into a
+        // minute of silence.
+        late = await Future.any(<Future<String?>>[
+          saavnTask,
+          Future.delayed(const Duration(seconds: 4), () => null),
+        ]);
+      } else {
+        late = await saavnTask;
+      }
+      if (late != null && late.isNotEmpty) {
+        winner = late;
+        winnerSource = 'saavn';
+      }
+    }
+
+    if (winner != null && winnerSource != null) {
+      _recordOk(winnerSource);
+      debugPrint('StreamExtraction: succeeded via $winnerSource in '
+          '${overallStopwatch.elapsedMilliseconds}ms');
+      isSaavnCache[videoId] = winnerSource == 'saavn';
+      await _cacheStreamUrl(videoId, winner);
+      return winner;
+    }
+
+    // A Saavn miss is usually "this title is not on Saavn" (karaoke and cover
+    // versions dominate that), not "the proxy is down" — and the two are
+    // indistinguishable from the response. Park after 6 consecutive misses
+    // instead of 2: with 2, one artist page full of karaoke titles parked
+    // Saavn for 30s, and it is currently the only source that still
+    // resolves from a phone, so every subsequent track failed.
+    isSaavnCache[videoId] = false;
+    if (saavnEligible) _recordFail('saavn', threshold: 6);
 
     debugPrint('StreamExtraction: All sources failed after ${overallStopwatch.elapsedMilliseconds}ms');
     return null;
+  }
+
+  /// Résolveurs qui ne savent répondre que « donne-moi le flux de CETTE
+  /// vidéo » : quand l'upload est fermé au pays du téléphone, ils échouent
+  /// tous en même temps et ne méritent pas leur budget cumulé (12-30 s).
+  /// Les branches par TITRE (saavn, jamendo, audius, deezer) en sont exclues :
+  /// elles trouvent le morceau chez un autre distributeur.
+  static const Set<String> _byIdResolvers = {
+    'explode',
+    'innertube',
+    'ytmusic',
+    'ytdlp',
+    'invidious',
+    'cobalt',
+    'ytapi',
+  };
+
+  /// L'échange de voie : le même morceau existe presque toujours en upload
+  /// OUVERT (chaîne artiste / VEVO) alors que l'upload « - Topic » sous
+  /// licence est bloqué hors de sa liste de pays. Une fois trouvé, le couple
+  /// id ferme -> id ouvert est mémorisé, donc la piste ne repaie plus la
+  /// recherche. [allowGeoSwap] est coupé à la récursion pour qu'un ouvert
+  /// supposé ne puisse pas déclencher une seconde chasse.
+  static Future<String?> _geoSwapStream(
+    String videoId, {
+    String? title,
+    String? artist,
+    int? durationSeconds,
+    bool priority = false,
+  }) async {
+    final alt = await PlayabilityGeoService.findOpenAlternate(
+      title: title ?? '',
+      artist: artist ?? '',
+      skipId: videoId,
+    );
+    if (alt == null) return null;
+    debugPrint('StreamExtraction: [Geo] $videoId fermé ici -> upload ouvert '
+        '${alt.videoId} (« ${alt.title} » • ${alt.channel})');
+    return getStreamUrl(
+      alt.videoId,
+      title: title,
+      artist: artist,
+      durationSeconds: durationSeconds,
+      skipSaavn: true,
+      priority: priority,
+      allowGeoSwap: false,
+    ).timeout(const Duration(seconds: 45));
+  }
+
+  /// Awaits [future] and reports any failure (including the timeout that raised
+  /// it) as "no answer", so one dead resolver cannot abort the whole cascade.
+  static Future<String?> _quiet(Future<String?> future) async {
+    try {
+      return await future;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

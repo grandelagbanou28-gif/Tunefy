@@ -86,9 +86,54 @@ class CuratedArtistsService extends ChangeNotifier {
   int _catalogRevision = 0;
   int get catalogRevision => _catalogRevision;
 
+  /// Canonical bucket key for [genre] (display names like "fr rap" map to the
+/// "fr-rap" bucket). Falls back to the input when nothing matches.
+  String _canonicalGenre(String genre) {
+    final key = genre.trim().toLowerCase();
+    // Exact match first.
+    if (_byGenre.containsKey(key)) return key;
+    // Space → hyphen variant ('fr rap' → 'fr-rap').
+    final hyphen = key.replaceAll(' ', '-');
+    if (_byGenre.containsKey(hyphen)) return hyphen;
+    // Alias map (same logic as catalogGenreFor in category_providers.dart).
+    final mapped = _genreAliases[key] ?? _genreAliases[hyphen];
+    if (mapped != null && _byGenre.containsKey(mapped)) return mapped;
+    return key;
+  }
+
+  /// Static map of display-name / query aliases → canonical bucket keys.
+  /// Mirrors the same aliases used by catalogGenreFor so that both pipelines
+  /// stay in sync without duplicate maintenance.
+  static const Map<String, String> _genreAliases = {
+    // FR Rap
+    'fr rap': 'fr-rap',
+    'french rap': 'fr-rap',
+    'rap francais': 'fr-rap',
+    'rap fr': 'fr-rap',
+    'rap france': 'fr-rap',
+    // US Rap
+    'hip-hop': 'us-rap',
+    'hip hop': 'us-rap',
+    'us rap': 'us-rap',
+    'rap': 'us-rap',
+    'drill': 'us-rap',
+    'trap': 'us-rap',
+    'rnb': 'us-rap',
+    'r&b': 'us-rap',
+    // Afro
+    'afro rap': 'afro-rap',
+    'african rap': 'afro-rap',
+    // Afrobeats / Afro Hits
+    'afrobeats': 'afrobeats',
+    'afrobeat': 'afrobeats',
+    'afro pop': 'afrobeats',
+    'afropop': 'afrobeats',
+    'afro-hits': 'afro-hits',
+  };
+
   /// Artists for a category (genre key), sorted top listeners first.
   List<CuratedArtist> artistsFor(String genre) =>
-      List.unmodifiable(_byGenre[genre.toLowerCase()] ?? const []);
+      List.unmodifiable(_byGenre[_canonicalGenre(genre)] ?? const []);
 
   /// Artists of [genre] restricted to a country (case-insensitive) when
   /// [country] is provided, preserving the popularity-first order.

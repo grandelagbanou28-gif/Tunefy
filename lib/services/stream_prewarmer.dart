@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:muzo/utils/net_guard.dart';
 
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 
 /// Resolves tracks in the background *before* the user taps them.
@@ -44,13 +46,22 @@ class StreamPrewarmer {
   /// Warms the first [limit] playable items of a shelf or a result list.
   void warm(List<MuzoItem> items, {int limit = _maxPerCall}) {
     // Cheap guard before touching connectivity: never queue while offline.
+    //
+    // Same reasoning for "downloaded only" (the default): those streams cannot
+    // start playback at all — the queue path refuses anything not on disk — so
+    // a resolution here is pure network spent on tracks the tap will refuse.
+    // Left unguarded, a Home pass burned ~20 s per track walking the dead
+    // relay chain and starved the shelves that were still loading.
+    if (StorageService().offlineMode || StorageService().playDownloadedOnly) {
+      return;
+    }
     unawaited(_pump(items, limit));
   }
 
   Future<void> _pump(List<MuzoItem> items, int limit) async {
     List<ConnectivityResult> state;
     try {
-      state = await Connectivity().checkConnectivity();
+      state = await safeConnectivity();
     } catch (_) {
       return;
     }

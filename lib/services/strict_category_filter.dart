@@ -175,6 +175,9 @@ bool _hasAny(String haystack, List<String> markers) {
 /// Detect the country/region a (category, sub) name refers to, if any.
 /// Matches whole words ("Benin", "Nigerian", "Rap Français") so "French Pop"
 /// resolves to france and "Indian Pop" to india.
+///
+/// A word that only names a **scene** is skipped (see [_isSceneWord]): naming a
+/// genre is not naming a country.
 String? detectGeo(String category, String sub) {
   final text = _norm('$category $sub');
   final seen = <String, int>{};
@@ -182,6 +185,7 @@ String? detectGeo(String category, String sub) {
     for (final m in c.markers) {
       final nm = _norm(m);
       if (nm.length < 3) continue;
+      if (_isSceneWord(nm)) continue;
       if (nm.contains(' ')) {
         if (text.contains(nm)) {
           seen[c.name] = (seen[c.name] ?? 0) + 1;
@@ -266,17 +270,41 @@ CategoryConstraint categoryConstraintFor(String category, String sub) {
   );
 }
 
+/// Genre / scene words a section name can carry. Also the list that disqualifies a country marker from geo-scoping a section — see [_isSceneWord].
+const List<String> _genreWords = [
+  'gospel', 'rap', 'hip hop', 'afrobeats', 'highlife', 'amapiano',
+  'makossa', 'soca', 'zouk', 'kompa', 'dancehall', 'r&b', 'soul',
+  'reggae', 'pop', 'rock', 'jazz', 'folk', 'country', 'classical',
+  'electronic', 'techno', 'house', 'trap', 'drill', 'k-pop', 'edm',
+  'bollywood', 'funk', 'cumbia', 'salsa', 'bachata', 'merengue',
+  'reggaeton', 'latin',
+];
+
+/// Scene words that sit inside a country's marker list as *evidence* about a
+/// track ("afropiano" does hint at South Africa) without ever naming the
+/// country in a section title. They must not geo-scope a section: "Amapiano",
+/// "Reggae" or "Dancehall" claim a genre, and the geo veto then starves every
+/// row of the card — measured 2026-10-11 in logcat, where all 8 Amapiano rows,
+/// 11 of 12 Reggae rows and 7 of 8 Dancehall rows came back at 0 because the
+/// genre word resolved to a country.
+const List<String> _sceneWords = [
+  'kwaito', 'gengetone', 'funkeira', 'piseiro', 'calypso', 'afropiano',
+  'coupé-décalé', 'coupe-decale',
+];
+
+bool _isSceneWord(String normalizedMarker) {
+  for (final g in _genreWords) {
+    if (_norm(g) == normalizedMarker) return true;
+  }
+  for (final g in _sceneWords) {
+    if (_norm(g) == normalizedMarker) return true;
+  }
+  return false;
+}
+
 String _detectGenre(String sub, String category) {
   final text = _norm('$sub $category');
-  const genres = [
-    'gospel', 'rap', 'hip hop', 'afrobeats', 'highlife', 'amapiano',
-    'makossa', 'soca', 'zouk', 'kompa', 'dancehall', 'r&b', 'soul',
-    'reggae', 'pop', 'rock', 'jazz', 'folk', 'country', 'classical',
-    'electronic', 'techno', 'house', 'trap', 'drill', 'k-pop', 'edm',
-    'bollywood', 'funk', 'cumbia', 'salsa', 'bachata', 'merengue',
-    'reggaeton', 'latin',
-  ];
-  for (final g in genres) {
+  for (final g in _genreWords) {
     final ng = _norm(g);
     if (RegExp(r'(^| )' + ng + r'( |$)').hasMatch(text)) return g;
   }
@@ -371,23 +399,33 @@ bool _genreConfirmed(String text, CategoryConstraint c) {
       _genreArtistHint(text, c.genre);
 }
 
-/// True when a genre-scoped candidate may stay. Geo-scoped sections also apply
-/// the country check (hard reject on an other-country marker).
+/// Decides whether a candidate may stay in a section.
 ///
-/// Rules (strictness is by design):
-///  - any other-country marker → reject.
-///  - a *confirmed gospel artist of the target country* always passes: this is
-///    what makes "Benin Gospel" show Siano Bless (whose titles never say the
-///    word "gospel") instead of Fanicko (R&B, not gospel). Curated per-country
-///    artists live in the gospel artist database — nothing is guessed here.
-///  - a confirmed gospel artist of a *different* country → reject, even if a
-///    country marker is present. Nigerian gospel never fills "Benin Gospel".
-///  - otherwise (unknown artist): geo-scoped sections need BOTH genre word in
-///    the text AND a country marker; non-geo sections need genre confirmation.
+/// Two very different situations, and the strictness only applies to one:
+///
+///  - **Geo-scoped section** ("Gospel Bénin", "Rap Français"): the name claims
+///    a country, so this is where a veto is justified — a free-text search for
+///    "gospel" happily returns Nigerian and American gospel, which do not
+///    belong. Rules, in order: any other-country marker → reject; a *confirmed
+///    gospel artist of the target country* always passes (this is what makes
+///    "Benin Gospel" show Siano Bless, whose titles never say "gospel", instead
+///    of Fanicko, who is R&B); a confirmed gospel artist of a *different*
+///    country → reject, even with a country marker present (Nigerian gospel
+///    never fills "Benin Gospel"); otherwise an unknown artist needs BOTH the
+///    genre word and a country marker in the artist/channel text.
+///  - **Genre-only section** ("Drill", "Lo-Fi Beats", "Metal", "Chill"): no
+///    country is claimed and the section was already fetched under its own
+///    name, so nothing is deleted here — see the note at the end of the
+///    function. [categoryMatchScore] ranks, it does not reject.
 bool acceptsForCategory(MuzoItem song, CategoryConstraint c) {
   if (c.isEmpty) return true;
   final score = categoryMatchScore(song, c);
-  if (score == 0) return false;
+  // score == 0 means either "an explicit other-country marker" (the hard
+  // reject that keeps Nigerian gospel out of "Gospel Benin") or "nothing
+  // matched at all". Only the first is a real veto: a genre-only section is
+  // built from its own search term, so a low score demotes a song instead of
+  // deleting it.
+  if (score == 0 && c.isGeoScoped) return false;
   if (score >= 60 && !c.hasGenre) return true;
 
   final text = _norm(
@@ -430,8 +468,6 @@ bool acceptsForCategory(MuzoItem song, CategoryConstraint c) {
     // Artist not in DB at all → fall through to text-based matching below.
   }
 
-  final artistGeo = gospelArtistGeo(primary);
-
   if (!c.hasGenre) {
     // Pure country browse: a confirmed country marker is enough.
     return _hasAny(text, c.includeMarkers);
@@ -439,6 +475,7 @@ bool acceptsForCategory(MuzoItem song, CategoryConstraint c) {
 
   // Genre + geo (e.g. "Benin Gospel"): the artist database is authoritative.
   if (c.isGeoScoped) {
+    final artistGeo = gospelArtistGeo(primary);
     if (artistGeo != null) {
       // Confirmed gospel artist: keep only when its country is inside the
       // target geo (Nigeria ⊂ Africa, but Nigeria ∉ Benin).
@@ -453,17 +490,17 @@ bool acceptsForCategory(MuzoItem song, CategoryConstraint c) {
     return _genreConfirmed(text, c) && _hasAny(artistContext, c.includeMarkers);
   }
 
-  // Non-geo (pure genre): a confirmed gospel artist (e.g. Sinach — "Way
-  // Maker" never says "gospel") passes; otherwise the genre word is required.
-  if (artistGeo != null) return true;
-  // Mainstream genres (pop, rock, jazz, dance, electronic, soul...) — a real
-  // song's title rarely spells the genre word ("Blinding Lights" never says
-  // "pop"), so hard-requiring the word starves the section down to novelty
-  // titles that happen to literally spell it ("Soda Pop", "Pop That").
-  // Gospel keeps its strict word/artist gate (authoritative DB + hints);
-  // every other non-geo genre accepts a metadata-complete track as well.
-  if (c.genre == 'gospel') return _genreConfirmed(text, c);
-  return _genreConfirmed(text, c) || score >= 10;
+  // ─── Non-geo (pure genre) sections: no veto, only ranking ───
+  // These rows are built from their own name ("drill", "lo-fi beats", "metal",
+  // "chill"...) sent to the search backend, so the query already did the
+  // selecting here. Deleting candidates on top of it starved whole sections:
+  // a real song's title rarely spells its genre ("Blinding Lights" never says
+  // "pop", a drill track never says "drill"), and [categoryMatchScore] can only
+  // reach 10 through album + duration metadata, so it rejected ordinary songs.
+  // [categoryMatchScore] still ranks them (relevanceScore drives ordering), and
+  // every hard gate stays where it is justified: the other-country reject above
+  // (score == 0) and the geo-scoped country/genre checks above it.
+  return true;
 }
 
 /// Keeps only candidates that pass the strict constraint.

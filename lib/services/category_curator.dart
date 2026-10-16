@@ -350,6 +350,34 @@ const Map<String, List<String>> _categorySeeds = {
     'Zeynab Habib',
     'Blaaz',
   ],
+  'trending': [
+    'Sabrina Carpenter',
+    'The Weeknd',
+    'Billie Eilish',
+    'Kendrick Lamar',
+    'Taylor Swift',
+    'Dua Lipa',
+    'Bad Bunny',
+    'Tyla',
+  ],
+  'musique arabe': [
+    'Amr Diab',
+    'Nancy Ajram',
+    'Fairuz',
+    'Cheb Khaled',
+    'Saad Lamjarred',
+    'Elissa',
+    'Assala Nasri',
+  ],
+  'rumba congolaise': [
+    'Fally Ipupa',
+    'Ferré Gola',
+    'Koffi Olomide',
+    'JB Mpiana',
+    'Werrason',
+    'Innoss\'B',
+    'Ndoro A.',
+  ],
 };
 
 /// Dedicated editorial anchor artists for specific sub-categories.
@@ -1184,13 +1212,33 @@ List<String> seedsFor(String query) {
   if (key.isEmpty) return const [];
   final direct = _categorySeeds[key];
   if (direct != null) return direct;
-  // Allow "Deep Focus", "Lo-Fi Beats", ... to fall back on a parent genre
-  // only when that makes musical sense; otherwise stay empty (term path).
-  if (key.contains('focus') || key.contains('sleep') || key.contains('study')) {
-    return const [];
+  // Several top-level tiles (Drill, Amapiano, Trap, EDM, Techno, Dancehall,
+  // Heavy Metal, ...) only have anchors in the sub-category table. Consult it
+  // too — exact match first, then a contained key — so the tile shows real
+  // genre artists instead of falling back to a misleading free-text search.
+  final subDirect = _subCategorySeeds[key];
+  if (subDirect != null && subDirect.isNotEmpty) return subDirect;
+  // Aucun ancrage direct : ne jamais prêter un genre au hasard ("beat" ne veut
+  // pas dire chill, "mix" ne veut pas dire pop). On ne prend des ancres que si
+  // un nom de genre connu apparaît tel quel dans la requête, la plus longue
+  // correspondance gagnant ("afro beats" avant "beats"). Sinon on reste vide et
+  // l'appelant cherche sur le terme lui-même, ce qui collera au genre demandé.
+  var best = '';
+  List<String>? bestSeeds;
+  for (final entry in <String, List<String>>{
+    ..._categorySeeds,
+    ..._subCategorySeeds,
+  }.entries) {
+    final name = entry.key;
+    if (name.length < 4 || entry.value.isEmpty) continue;
+    if (bestSeeds != null && name.length <= best.length) continue;
+    if (RegExp(r'(?:^|[^a-z])' + RegExp.escape(name) + r'(?:[^a-z]|$)')
+        .hasMatch(key)) {
+      best = name;
+      bestSeeds = entry.value;
+    }
   }
-  if (key.contains('beat')) return _categorySeeds['chill'] ?? const [];
-  if (key.contains('mix')) return _categorySeeds['pop'] ?? const [];
+  if (bestSeeds != null) return bestSeeds;
   return const [];
 }
 

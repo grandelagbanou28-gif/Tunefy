@@ -284,53 +284,90 @@ class MusicBrainzService {
   };
 
   /// Look up one artist: country/area + genres. Cached per name in memory.
-  Future<MusicBrainzArtist?> findArtist(String name) async {
-    final key = name.trim().toLowerCase();
-    if (key.isEmpty) return null;
-    if (_artistCache.containsKey(key)) return _artistCache[key];
+  ///
+  /// [preferGeo] (a canonical country key like "benin") breaks homonym ties:
+  /// MusicBrainz answers up to five hits for a stage name and the plain
+  /// `limit=1` lookup used to take whichever the index happened to rank first,
+  /// so "Sidiki" (Côte d'Ivoire) could be graded against "Sidiki" (Belgium).
+  /// With no hint the old behaviour stands — first hit, one request.
+  Future<MusicBrainzArtist?> findArtist(String name, {String? preferGeo}) async {
+    final trimmed = name.trim().toLowerCase();
+    if (trimmed.isEmpty) return null;
+    final hint = (preferGeo ?? '').trim().toLowerCase();
+    final cacheKey = hint.isEmpty ? trimmed : '$trimmed|$hint';
+    if (_artistCache.containsKey(cacheKey)) return _artistCache[cacheKey];
     try {
       final uri = Uri.parse(
           '$_base/artist/?query=${Uri.encodeComponent('artist:"$name"')}'
-          '&fmt=json&limit=1');
+          // `inc=tags` is what makes the genre evidence exist: measured on
+          // 2026-10-11, the plain search answer carries NO tags at all
+          // (Soolking → []), while the same single request with inc=tags
+          // returns ['french','hip hop','rap']. One extra query param, no
+          // extra round trip — the 1 req/s limit stays untouched.
+          '&fmt=json&inc=tags&limit=${hint.isEmpty ? 1 : 5}');
       final resp =
           await http.get(uri, headers: {'User-Agent': _ua}).timeout(_timeout);
       if (resp.statusCode != 200) return null;
       final data = json.decode(resp.body) as Map<String, dynamic>;
       final artists = data['artists'] as List? ?? [];
       if (artists.isEmpty) {
-        _artistCache[key] = null;
+        _artistCache[cacheKey] = null;
         return null;
       }
-      final a = Map<String, dynamic>.from(artists.first as Map);
-      final area = a['area'] as Map?;
-      final country = a['country']?.toString() ??
-          area?['country-code']?.toString() ??
-          '';
-      final genres = <String>[
-        for (final g in (a['genres'] as List? ?? []))
-          if (g is Map) g['name']?.toString() ?? '',
-        for (final g in (a['tags'] as List? ?? []))
-          if (g is Map) g['name']?.toString() ?? '',
-      ].where((s) => s.isNotEmpty).toList();
-      final info = MusicBrainzArtist(
-        country: country,
-        area: area?['name']?.toString(),
-        sortName: a['sort-name']?.toString(),
-        genres: genres.toSet().toList(),
-      );
-      _artistCache[key] = info;
-      return info;
+      final hits = <MusicBrainzArtist>[];
+      for (final raw in artists.whereType<Map>()) {
+        final a = Map<String, dynamic>.from(raw);
+        final area = a['area'] as Map?;
+        final country = a['country']?.toString() ??
+            area?['country-code']?.toString() ??
+            '';
+        final genres = <String>[
+          for (final g in (a['genres'] as List? ?? []))
+            if (g is Map) g['name']?.toString() ?? '',
+          for (final g in (a['tags'] as List? ?? []))
+            if (g is Map) g['name']?.toString() ?? '',
+        ].where((s) => s.isNotEmpty).toList();
+        hits.add(MusicBrainzArtist(
+          name: a['name']?.toString() ?? '',
+          country: country,
+          area: area?['name']?.toString(),
+          sortName: a['sort-name']?.toString(),
+          genres: genres.toSet().toList(),
+        ));
+      }
+      if (hits.isEmpty) {
+        _artistCache[cacheKey] = null;
+        return null;
+      }
+      var pick = hits.first;
+      if (hint.isNotEmpty) {
+        // A hit the caller's country claims wins; a same-name recording artist
+        // beats any other only when nothing matches the country.
+        final byGeo = hits.where((h) => _geoContains(hint, _geoKeyFor(h)));
+        final exact = hits.where((h) => _norm(h.name) == _norm(name));
+        pick = byGeo.isNotEmpty
+            ? byGeo.first
+            : (exact.isNotEmpty ? exact.first : hits.first);
+      }
+      _artistCache[cacheKey] = pick;
+      return pick;
     } catch (e) {
       debugPrint('MusicBrainz findArtist error: $e');
-      _artistCache[key] = null;
+      _artistCache[cacheKey] = null;
       return null;
     }
   }
 
+  /// The canonical country key MusicBrainz reports for [a] ("BJ" → "benin").
+  String _geoKeyFor(MusicBrainzArtist a) =>
+      _countryName[a.country.toUpperCase()] ?? '';
+
   /// Authoritative rescue for a strict-gate rejection: keep only candidates
-  /// whose artist is country/region confirmed by MusicBrainz (and, when a
-  /// genre is given, on-genre too). Real evidence — never a guess. Returns a
-  /// subset of [candidates], stamped `verified` with their evidence score.
+  /// whose artist MusicBrainz places in the section's country. When the
+  /// database says the artist is from somewhere *else*, a matching genre is
+  /// deliberately not enough — that is how Nigerian gospel used to leak back
+  /// into "Gospel Bénin" through the rescue meant to save it. Genre evidence
+  /// alone still counts when the artist has no country on record at all.
   Future<List<MuzoItem>> rescueMatches(
     List<MuzoItem> candidates, {
     required String geo,
@@ -342,28 +379,26 @@ class MusicBrainzService {
           ? item.artists!.first.name
           : item.displayArtist.trim().split(RegExp(r'\s+-\s+')).first;
       if (artist.trim().isEmpty) continue;
-      final info = await findArtist(artist);
+      final info = await findArtist(artist, preferGeo: geo);
       if (info == null) continue;
-      var matched = false;
       final evidence = <String>[];
-      if (info.country.isNotEmpty) {
-        final geoName = _countryName[info.country.toUpperCase()];
-        if (geoName != null && _geoContains(geo, geoName)) {
-          matched = true;
-          evidence.add('country:${info.country}');
-        }
-      }
-      if (genre != null && genre.isNotEmpty) {
-        final g = _norm(genre);
+      // '' = the database gives no country for this artist (not "another one").
+      final artistGeo = info.country.isEmpty ? '' : _geoKeyFor(info);
+      final countryConfirmed =
+          artistGeo.isNotEmpty && _geoContains(geo, artistGeo);
+      if (countryConfirmed) evidence.add('country:${info.country}');
+      final g = _norm(genre ?? '');
+      var genreConfirmed = false;
+      if (g.isNotEmpty) {
         for (final mbGenre in info.genres) {
           if (_norm(mbGenre).contains(g) || g.contains(_norm(mbGenre))) {
-            matched = true;
+            genreConfirmed = true;
             evidence.add('genre:$mbGenre');
             break;
           }
         }
       }
-      if (matched) {
+      if (countryConfirmed || (genreConfirmed && artistGeo.isEmpty)) {
         out.add(item.copyWith(
           verified: true,
           relevanceScore: 85,
@@ -407,12 +442,14 @@ class MusicBrainzService {
 
 /// Verified evidence about one artist from the MusicBrainz database.
 class MusicBrainzArtist {
+  final String name;
   final String country;
   final String? area;
   final String? sortName;
   final List<String> genres;
 
   const MusicBrainzArtist({
+    this.name = '',
     this.country = '',
     this.area,
     this.sortName,

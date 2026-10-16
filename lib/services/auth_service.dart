@@ -11,7 +11,7 @@ final authServiceProvider = ChangeNotifierProvider<AuthService>((ref) {
 
 class AuthService extends ChangeNotifier {
   final StorageService _storage;
-  static const String _baseUrl = 'https://veltrixcode-ytify.hf.space/api/auth';
+  static const String _baseUrl = 'https://tunefy-api.onrender.com/api/auth';
   // Installed/Desktop client ID (used for iOS/macOS clientId)
   static const String _googleClientId = '1023316916513-gf1k3aqschlblasfafsl0bs4mcc1ebcn.apps.googleusercontent.com';
   // Web OAuth client ID — required for Android to generate idToken

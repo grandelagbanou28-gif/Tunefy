@@ -68,7 +68,9 @@ class DjMoodBot {
     return r;
   }
 
-  static String _norm(String s) =>
+  /// Texte mis en minuscules, sans accents ni apostrophes. Partagé avec la
+  /// conversation locale ([DjSmallTalk]) pour que les mêmes règles marchent.
+  static String norm(String s) =>
       _stripAccents(s.trim().toLowerCase()).replaceAll(RegExp(r"['’\-]"), '');
 
   /// Ordre de priorité pour départager les humeurs à score égal.
@@ -167,7 +169,7 @@ DjMood.nostalgia: [
   /// Détecte l'humeur dominante d'un message libre. Retourne null si aucune
   /// humeur n'est reconnaissable (le DJ demande alors de reformuler).
   DjMood? detect(String message) {
-    final text = _norm(message);
+    final text = norm(message);
     if (text.isEmpty) return null;
 
     var bestScore = 0;

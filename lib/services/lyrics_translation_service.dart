@@ -9,11 +9,15 @@ import 'package:muzo/services/lyrics_service.dart';
 /// Translates lyric lines into the app's selected language so the player can
 /// show a live, scrolling translation below each active line.
 ///
-/// Strategy:
-///   1. DeepL Free (api-free.deepl.com) — used when a valid API key is stored
-///      in Settings. High quality, 500k chars/month free, no billing card.
-///   2. MyMemory (free, no key) — automatic fallback when no DeepL key is
-///      configured or when the DeepL request fails.
+/// Strategy (tried in order, first non-null wins):
+///   1. Google Translate (`translate.googleapis.com`, `client=gtx`) — free,
+///      no key, and crucially the ONLY engine here that understands Fongbe
+///      ("fon"/Fon Gbe) and most African/source languages via `sl=auto`
+///      source detection. This is what makes non-English lyrics actually
+///      translate instead of spinning forever and showing nothing.
+///   2. DeepL Free (api-free.deepl.com) — used when a valid API key is stored
+///      in Settings. High quality for major languages, 500k chars/month free.
+///   3. MyMemory (free, no key) — last-resort fallback.
 ///
 /// Translations are cached per (song, target-lang) so it only costs one
 /// network round-trip the first time a lyric page is opened.
@@ -26,13 +30,31 @@ class TranslatedLyricLine {
 final lyricsTranslationServiceProvider =
     Provider((ref) => LyricsTranslationService());
 
+/// What Google's `client=gtx` endpoint gives back: the translated block (null
+/// when it is unusable) and the language it detected for the source.
+typedef _GoogleOutcome = ({String? text, String? detected});
+
 class LyricsTranslationService {
   static const String _myMemoryEndpoint =
       'https://api.mymemory.translated.net/get';
   static const String _deeplEndpoint = 'https://api-free.deepl.com/v2/translate';
+  static const String _googleEndpoint =
+      'https://translate.googleapis.com/translate_a/single';
+
+  static const Map<String, String> _headers = {
+    'User-Agent':
+        'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+    'Accept': '*/*',
+  };
 
   static const String _deeplKeyBox = 'settings';
   static const String _deeplKeyField = 'deeplApiKey';
+
+  /// Memoises Google's detected source language per lyric sample so opening the
+  /// same player twice does not repeat the detection round-trip.
+  static final Map<String, String?> _detectedLangCache = {};
+
   static const String _builtinDeeplKeyEncoded =
       '99~51~51~101~52~97~101~98~120~51~49~102~48~120~97~48~55~98~120~52~101~96~55~120~51~52~99~103~54~101~48~99~54~98~54~99~111~51~45';
 
@@ -112,15 +134,127 @@ class LyricsTranslationService {
   }
 
   /// Translates [text] (may contain multiple lines separated by "\n") into
-  /// [targetLang] (a 2-letter code like "fr"). Tries DeepL first when a key is
-  /// present, then falls back to MyMemory. Returns null when it fails.
+  /// [targetLang] (a 2-letter code like "fr"). Tries Google (the only engine
+  /// here that handles African / low-resource languages such as Fongbe via
+  /// `sl=auto`), then DeepL when a key is present, then MyMemory. Returns null
+  /// only when every engine fails.
   Future<String?> translateText(String text, String targetLang) async {
+    final google = await _translateGoogle(text, targetLang);
+    if (google != null) return google;
     final key = await getDeeplApiKey();
     if (key.isNotEmpty) {
       final deepl = await _translateDeepl(text, targetLang, key);
       if (deepl != null) return deepl;
     }
     return _translateMyMemory(text, targetLang);
+  }
+
+  /// Google's detected source language for [text], or null when Google cannot
+  /// be reached. Used to skip translation when the lyrics are already written
+  /// in the app's language — the user does not want a "translation" that is
+  /// the same language as the line above it.
+  ///
+  /// Only a leading slice is sent: detection needs a few sentences, not the
+  /// whole page, and lyric blocks can be several thousand characters.
+  Future<String?> detectSourceLanguage(String text) async {
+    final sample = _detectionSample(text);
+    if (sample.isEmpty) return null;
+    if (_detectedLangCache.containsKey(sample)) {
+      return _detectedLangCache[sample];
+    }
+    final out = await _googleRaw(sample, 'en');
+    final detected = out?.detected;
+    // Bound the memo so a long session cannot grow it without limit.
+    if (_detectedLangCache.length > 200) _detectedLangCache.clear();
+    _detectedLangCache[sample] = detected;
+    return detected;
+  }
+
+  static String _detectionSample(String text) {
+    final lines = text
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.length > 1)
+        .take(8)
+        .join('\n');
+    final src = lines.isEmpty ? text.trim() : lines;
+    return src.length > 320 ? src.substring(0, 320) : src;
+  }
+
+  /// Google's unauthenticated `client=gtx` endpoint. `sl=auto` lets Google
+  /// detect the source — the crucial part for Fongbe / Gbe lyrics, which
+  /// DeepL and MyMemory simply do not support and therefore returned nothing.
+  /// The translated segments are concatenated back in order, keeping the
+  /// original "\n" line structure so the caller can realign per line.
+  Future<String?> _translateGoogle(String text, String targetLang) async {
+    final out = await _googleRaw(text, targetLang);
+    return out?.text;
+  }
+
+  /// One request to Google's unauthenticated endpoint, returning both the
+  /// translated block and the language Google detected for the source.
+  Future<_GoogleOutcome?> _googleRaw(String text, String targetLang) async {
+    final tl = targetLang.split('-').first.toLowerCase();
+    try {
+      final res = await http
+          .get(
+            Uri.parse(_googleEndpoint).replace(queryParameters: {
+              'client': 'gtx',
+              'sl': 'auto',
+              'tl': tl,
+              'dt': 't',
+              'q': text,
+            }),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return null;
+      final decoded = jsonDecode(utf8.decode(res.bodyBytes));
+      if (decoded is! List || decoded.isEmpty) return null;
+      final segments = decoded.first is List ? decoded.first as List : const [];
+      final buffer = StringBuffer();
+      for (final seg in segments) {
+        final piece = (seg as List).isNotEmpty ? seg[0] : null;
+        if (piece is String) buffer.write(piece);
+      }
+      final detected = _googleDetectedLang(decoded);
+      final result = buffer.toString().trim();
+      // A block that Google echoed back, or that is mostly the source text with
+      // different casing/punctuation, is not a translation — and an error
+      // payload is definitely not. Report the detection either way.
+      final usable = result.isEmpty ||
+              _looksLikeEngineError(result) ||
+              _isNearEcho(text, result)
+          ? null
+          : result;
+      return (text: usable, detected: detected);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Which language Google thinks [text] is written in. Verified live against
+  /// the endpoint: `client=gtx&dt=t` answers `[[segments], null, "fr", …]`, so
+  /// the code sits at index 2 with index 1 empty (older shapes put it at 1, and
+  /// the trailing `[…,["fr"],…]` list form is accepted too). This is what makes
+  /// "no translation into the same language" work.
+  static String? _googleDetectedLang(Object? decoded) {
+    if (decoded is! List) return null;
+    String? from(Object? v) {
+      if (v is String && v.isNotEmpty) return v.toLowerCase();
+      if (v is List && v.isNotEmpty && v.first is String) {
+        final s = (v.first as String).trim();
+        if (s.isNotEmpty) return s.toLowerCase();
+      }
+      return null;
+    }
+
+    for (final i in const [2, 1]) {
+      if (i >= decoded.length) continue;
+      final code = from(decoded[i]);
+      if (code != null && code.length <= 8) return code;
+    }
+    return null;
   }
 
   Future<String?> _translateDeepl(
@@ -143,7 +277,12 @@ class LyricsTranslationService {
       final translated =
           (body['translations'] as List?)?.first['text'] as String?;
       final result = translated?.trim();
-      if (result == null || result.isEmpty || result == text) return null;
+      if (result == null ||
+          result.isEmpty ||
+          _looksLikeEngineError(result) ||
+          _isNearEcho(text, result)) {
+        return null;
+      }
       return result;
     } catch (_) {
       return null;
@@ -162,15 +301,186 @@ class LyricsTranslationService {
       final res = await http.get(uri).timeout(const Duration(seconds: 15));
       if (res.statusCode != 200) return null;
       final body = json.decode(res.body);
+      // The API answers 200 even when the pair is unusable: it puts the
+      // complaint ("'GB' IS AN INVALID TARGET LANGUAGE …", "PLEASE SELECT …")
+      // inside responseData.translatedText. Rendering that as a lyric line is
+      // exactly what the user saw, so check the status code it reports too.
+      final status = body['responseStatus'];
+      if (status is int && status != 200) return null;
       final translated =
           (body['responseData']?['translatedText'] as String?)?.trim();
       if (translated == null || translated.isEmpty) return null;
-      if (translated == text) return null;
-      return translated;
+      final result = _stripHtml(translated);
+      if (result.isEmpty ||
+          _looksLikeEngineError(result) ||
+          _isNearEcho(text, result)) {
+        return null;
+      }
+      return result;
     } catch (_) {
       return null;
     }
   }
+
+  /// True when [text] is an engine error/quota payload rather than translated
+  /// content. MyMemory, and occasionally DeepL proxies, return their complaint
+  /// as the "translation" with an HTTP 200, so it must never reach the screen.
+  static bool _looksLikeEngineError(String text) {
+    final lower = text.toLowerCase();
+    const markers = [
+      'please select',
+      'is an invalid',
+      'invalid language',
+      'invalid target',
+      'invalid source',
+      'langpair',
+      'mymemory warning',
+      'you used all available',
+      'next available translation',
+      'quota',
+      'example: langpair',
+      'almost all languages supported',
+      'query length limit',
+      'to report abuse',
+      'having trouble accessing',
+      'unauthorized',
+      'invalid auth_key',
+      'free plan',
+    ];
+    for (final m in markers) {
+      if (lower.contains(m)) return true;
+    }
+    // An HTML fragment is never a lyric line (MyMemory wraps errors in <b>).
+    return RegExp(r'<\s*/?\s*(b|i|p|br|a|div|span)\b', caseSensitive: false)
+        .hasMatch(text);
+  }
+
+  static String _stripHtml(String text) =>
+      text.replaceAll(RegExp(r'<[^>]*>'), '').trim();
+
+  /// True when [result] is really just [source] re-cased or lightly mangled.
+  /// Engines do this for languages they do not translate (verified live:
+  /// `en|ee` returned "I lOve yOu tOu tOo" for "I love you so much"), which the
+  /// old exact-equality check let through as a bogus green lyric line.
+  static bool _isNearEcho(String source, String result) {
+    final a = _normalizeChars(source);
+    final b = _normalizeChars(result);
+    if (a.isEmpty || b.isEmpty) return a == b;
+    if (a == b) return true;
+    // A different script is a real translation, never an echo.
+    if (_detectScriptStatic(source) != _detectScriptStatic(result)) {
+      return false;
+    }
+    // Verified live: for a pair it does not know (`en|ee`) MyMemory returned
+    // "I lOve yOu tOu tOo" for "I love you so much" — the SAME WORDS, re-cased
+    // and mangled, which a character-similarity test alone misses. Half the
+    // words still being the source's words is an echo, not a translation.
+    final srcTokens = _tokens(source);
+    final outTokens = _tokens(result);
+    if (srcTokens.length >= 4 && outTokens.length >= 4) {
+      final shared = outTokens.intersection(srcTokens).length;
+      final shorter = srcTokens.length < outTokens.length
+          ? srcTokens.length
+          : outTokens.length;
+      if (shared / shorter >= 0.60) return true;
+    }
+    return _bigramSimilarity(a, b) > 0.72;
+  }
+
+  static Set<String> _tokens(String text) => text
+      .toLowerCase()
+      .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true))
+      .where((t) => t.isNotEmpty)
+      .toSet();
+
+  /// Keeps only letters and digits, lower-cased, so "Je t'aime." and
+  /// "je t'aime" — or an Arabic line re-cased by an engine — compare equal.
+  static String _normalizeChars(String text) => text
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), '');
+
+  static String _detectScriptStatic(String text) {
+    if (RegExp(r'[\p{Script=Arabic}]', unicode: true).hasMatch(text)) {
+      return 'arab';
+    }
+    if (RegExp(r'[\p{Script=Cyrillic}]', unicode: true).hasMatch(text)) {
+      return 'cyrl';
+    }
+    if (RegExp(r'[\p{Script=Han}]', unicode: true).hasMatch(text)) {
+      return 'hani';
+    }
+    if (RegExp(r'[\p{Script=Devanagari}]', unicode: true).hasMatch(text)) {
+      return 'deva';
+    }
+    return 'latin';
+  }
+
+  /// Sørensen–Dice coefficient over character bigrams, on 0..1.
+  static double _bigramSimilarity(String a, String b) {
+    if (a.length < 2 || b.length < 2) return a == b ? 1.0 : 0.0;
+    final grams = <String, int>{};
+    for (var i = 0; i < a.length - 1; i++) {
+      final g = a.substring(i, i + 2);
+      grams[g] = (grams[g] ?? 0) + 1;
+    }
+    var hits = 0;
+    for (var i = 0; i < b.length - 1; i++) {
+      final g = b.substring(i, i + 2);
+      final left = grams[g] ?? 0;
+      if (left > 0) {
+        grams[g] = left - 1;
+        hits++;
+      }
+    }
+    return (2.0 * hits) / (a.length + b.length - 2);
+  }
+
+  /// True when both codes name the same language, ignoring region suffixes and
+  /// the 3-letter (ISO 639-2/3) forms Google and MyMemory sometimes report.
+  bool sameLanguage(String a, String b) {
+    String norm(String code) {
+      final base = code.toLowerCase().split('-').first.trim();
+      return _langAliases[base] ?? base;
+    }
+
+    return norm(a).isNotEmpty && norm(a) == norm(b);
+  }
+
+  static const Map<String, String> _langAliases = {
+    'fon': 'fo', // Fongbe (Gbe) — Google/MyMemory report "fon"
+    'fra': 'fr',
+    'fre': 'fr',
+    'eng': 'en',
+    'spa': 'es',
+    'deu': 'de',
+    'ger': 'de',
+    'por': 'pt',
+    'ita': 'it',
+    'nld': 'nl',
+    'dut': 'nl',
+    'rus': 'ru',
+    'ara': 'ar',
+    'hin': 'hi',
+    'ben': 'bn',
+    'urd': 'ur',
+    'tam': 'ta',
+    'tel': 'te',
+    'kan': 'kn',
+    'mal': 'ml',
+    'swa': 'sw',
+    'yor': 'yo',
+    'ibo': 'ig',
+    'hau': 'ha',
+    'ewe': 'ee',
+    'twi': 'ak',
+    'zul': 'zu',
+    'sot': 'st',
+    'nya': 'ny',
+    'kon': 'kg',
+    'lin': 'ln',
+    'lua': 'lu',
+    'check': 'en',
+  };
 
   /// Best-effort source-language detection needed by MyMemory (it rejects the
   /// "auto" source). Script-based for non-Latin languages (reliable) and
@@ -355,6 +665,13 @@ final translatedLyricsProvider =
   if (service.isLikelyInLanguage(fullText, targetLang)) {
     return null;
   }
+  // Stop-word heuristics cannot tell two Latin-script languages apart reliably,
+  // so ask Google which language the page is actually written in. If that is
+  // the app language, translating would only produce the same language twice.
+  final detected = await service.detectSourceLanguage(fullText);
+  if (detected != null && service.sameLanguage(detected, targetLang)) {
+    return null;
+  }
 
   final cacheKey = '$videoId::$targetLang';
   if (_translatedCache.containsKey(cacheKey)) {
@@ -371,6 +688,34 @@ final translatedLyricsProvider =
     _translatedCache.remove(cacheKey);
   });
   return future;
+});
+
+/// Cache for translated free-form UI strings (About tagline, artist bio,
+/// legal text), keyed by source text + target language.
+final Map<String, String> _translatedTextCache = {};
+
+/// Translates a free-form string into the app's currently selected language
+/// using the same engines as lyrics (Google first, so Fongbe works), skipping
+/// the round-trip when the text is already in the target language. This is how
+/// the whole About screen and the Now Playing "About the artist" bio follow the
+/// chosen language instead of staying stuck in French/English.
+final translatedTextProvider =
+    FutureProvider.family<String, ({String text})>((ref, key) async {
+  final text = key.text;
+  if (text.trim().isEmpty) return text;
+
+  final lang = ref.watch(localeProvider).languageCode;
+  final service = ref.watch(lyricsTranslationServiceProvider);
+  if (service.isLikelyInLanguage(text, lang)) return text;
+
+  final cacheKey = '$text::$lang';
+  final hit = _translatedTextCache[cacheKey];
+  if (hit != null) return hit;
+
+  final out = await service.translateText(text, lang);
+  final result = (out != null && out.trim().isNotEmpty) ? out : text;
+  _translatedTextCache[cacheKey] = result;
+  return result;
 });
 
 Future<List<TranslatedLyricLine>?> _doTranslate(
@@ -417,14 +762,30 @@ Future<void> _translateChunk(
   final chunkText = chunk.map((l) => l.text).join('\n');
   final trans = await service.translateText(chunkText, targetLang);
   if (trans == null) return;
-  final lines = trans.split('\n');
+  var lines = trans.split('\n');
+  // A line-count mismatch means the engine merged or dropped newlines and the
+  // per-index realignment would be wrong. Re-translate line by line so every
+  // lyric keeps its own correct translation (the "traduction complète" the
+  // user wants, not a handful of lines that happened to stay aligned).
+  if (lines.length != chunk.length) {
+    lines = <String>[];
+    for (final l in chunk) {
+      final one = await service.translateText(l.text, targetLang);
+      lines.add(one ?? l.text);
+    }
+  }
   for (var j = 0; j < chunk.length; j++) {
     final source = chunk[j].text.trim();
     final translated = j < lines.length ? lines[j].trim() : source;
-    // Safety net: if the "translation" is identical to the original, the
-    // lyrics were already in the target language — omit the line so the UI
-    // does not show a pointless green copy of the same text.
-    if (translated.isEmpty || _sameText(source, translated)) continue;
+    // Drop anything that is not an actual translation: the line unchanged (the
+    // lyrics were already in the target language), an engine error payload, or
+    // the source re-cased/mangled by an engine that does not know the language.
+    if (translated.isEmpty ||
+        _sameText(source, translated) ||
+        LyricsTranslationService._looksLikeEngineError(translated) ||
+        LyricsTranslationService._isNearEcho(source, translated)) {
+      continue;
+    }
     out.add(TranslatedLyricLine(startIndex + j, translated));
   }
 }

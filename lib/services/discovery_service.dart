@@ -9,7 +9,6 @@ import 'package:muzo/services/category_curator.dart';
 import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/services/itunes_api_service.dart';
-import 'package:muzo/services/musicbrainz_service.dart';
 import 'package:muzo/services/trending_service.dart';
 import 'package:muzo/utils/period_utils.dart';
 
@@ -17,7 +16,6 @@ final discoveryServiceProvider = Provider<DiscoveryService>((ref) {
   return DiscoveryService(
     deezer: ref.read(deezerApiServiceProvider),
     cache: ContentCacheService.instance,
-    musicBrainz: ref.read(musicBrainzServiceProvider),
   );
 });
 
@@ -30,13 +28,12 @@ class DiscoveryService {
   final DeezerApiService deezer;
   final ContentCacheService cache;
   final ItunesApiService itunes;
-  final MusicBrainzService musicBrainz;
 
   /// Refresh policy, per shelf:
   ///  * new releases / new albums → every day;
   ///  * the Sunday "recommendation of the day" → expires at the next midnight;
-  ///  * every other category (artists, podcasts…) → every 2 days.
-  static const Duration cacheTtl = ContentCacheService.twoDayTtl;
+  ///  * every other category (artists, podcasts…) → every 3 days.
+  static const Duration cacheTtl = ContentCacheService.browseTtl;
   static const Duration dailyCacheTtl = ContentCacheService.dailyTtl;
   static const Duration emptyCacheTtl = Duration(minutes: 2);
 
@@ -58,9 +55,7 @@ class DiscoveryService {
     required this.deezer,
     required this.cache,
     ItunesApiService? itunes,
-    MusicBrainzService? musicBrainz,
-  })  : itunes = itunes ?? ItunesApiService(),
-        musicBrainz = musicBrainz ?? MusicBrainzService();
+  }) : itunes = itunes ?? ItunesApiService();
 
   final Map<String, DateTime> _fetchedAt = {};
   final Map<String, dynamic> _memory = {};
@@ -171,8 +166,8 @@ class DiscoveryService {
 
   /// Nouvelles sorties — albums released in the last 7 days.
   /// Disk snapshot rolls every calendar day (never a multi-day-old shelf).
-  /// Sources: Deezer (dated discographies) + MusicBrainz (first-release
-  /// calendar) + Apple RSS tops with real `im:releaseDate`.
+  /// Sources: Deezer rap/R&B/afro charts + Apple RSS tops with real
+  /// `im:releaseDate`, both restricted to the urban catalogue.
   Future<DiscoverySection<MuzoItem>> fetchNewReleases({
     DiscoveryPeriod? period,
   }) async {
@@ -183,7 +178,7 @@ class DiscoveryService {
     if (cached != null) return cached;
 
     try {
-      final raw = await _mergeReleaseSources(days: 7, rssLimit: 16, mbLimit: 40);
+      final raw = await _mergeReleaseSources(days: 7, rssLimit: 16);
       final items = _filterAndSort(raw, p);
       final section = DiscoverySection<MuzoItem>(
         title: 'Nouvelles sorties',
@@ -229,7 +224,7 @@ class DiscoveryService {
     if (cached != null) return cached;
 
     try {
-      final raw = await _mergeReleaseSources(days: 30, rssLimit: 20, mbLimit: 50);
+      final raw = await _mergeReleaseSources(days: 30, rssLimit: 20);
       final items = _filterAndSort(raw, p);
       final section = DiscoverySection<MuzoItem>(
         title: 'Nouveaux albums',
@@ -266,7 +261,6 @@ class DiscoveryService {
   Future<List<MuzoItem>> _mergeReleaseSources({
     required int days,
     required int rssLimit,
-    required int mbLimit,
   }) async {
     final now = DateTime.now();
     final cutoff = now.subtract(Duration(days: days));
@@ -281,10 +275,18 @@ class DiscoveryService {
     }
 
     final batches = await Future.wait([
-      safe(days <= 7
-          ? deezer.newReleases(days: days, limit: 40)
-          : deezer.recentAlbums(days: days, limit: 40)),
-      safe(musicBrainz.releasesBetween(cutoff, horizon, limit: mbLimit)),
+      // Rap FR / rap US / afro only. Deezer's worldwide release pool and
+      // MusicBrainz's open first-release calendar are genre-agnostic, which is
+      // what used to fill these shelves with pop, rock and gospel reissues.
+      safe(deezer.newAlbumsInGenres(
+        const <int>[
+          DeezerApiService.genreRapHipHop,
+          DeezerApiService.genreRnbSoul,
+          DeezerApiService.genreAfricanMusic,
+        ],
+        days: days,
+        limit: 40,
+      )),
       safe(_rssAlbums(cutoff: cutoff, horizon: horizon, limit: rssLimit)),
     ]);
 
@@ -320,6 +322,9 @@ class DiscoveryService {
       final batch = await TrendingService.topAlbums(cc);
       for (final a in batch) {
         if (out.length >= limit) break;
+        // Discover's "Nouveaux albums" is an urban/afro shelf: only RSS rows
+        // carrying one of those chart labels may enter.
+        if (!TrendingService.isUrbanGenre(a.genre)) continue;
         final rel = a.releaseDate;
         if (rel == null || rel.isBefore(cutoff) || rel.isAfter(horizon)) {
           continue;
@@ -375,29 +380,71 @@ class DiscoveryService {
 
       final items = <PopularArtist>[];
       final seen = <String>{};
-      for (final (i, r) in chart.indexed) {
-        final name = r.title;
-        if (name.isEmpty || seen.contains(name.toLowerCase())) continue;
-        seen.add(name.toLowerCase());
-        items.add(PopularArtist(
-          name: name,
-          imageUrl: r.thumbnails.isNotEmpty ? r.thumbnails.first.url : null,
-          artistId: r.sourceId ?? r.browseId,
-          popularityScore:
-              (chart.length - i) / chart.length, // real chart-rank derived
-        ));
-        if (items.length >= 20) break;
+      // D'abord les artistes qui ont réellement sorti dans le mois demandé :
+      // c'est la seule lecture vérifiable d'un « mois précédent », puisque ni
+      // Deezer ni Apple ne rendent le classement d'un mois clos. Le classement
+      // du jour du chart Deezer ne sert que de repli, et garde alors son
+      // étiquette du jour au lieu de prétendre au mois écoulé.
+      final monthArtists = await TrendingService.artistsActiveDuring(
+          p.startDate, p.endDate, limit: 24);
+      var monthScoped = false;
+      if (monthArtists.length >= 12) {
+        // Une photo d'artiste vaut mieux qu'une pochette de single : Deezer en
+        // fournit une pour ceux que le classement du jour cite aussi.
+        final photos = <String, ({String art, String? id})>{};
+        for (final a in chart) {
+          final k = a.title.toLowerCase();
+          if (k.isEmpty || photos.containsKey(k)) continue;
+          photos[k] = (
+            art: a.thumbnails.isNotEmpty ? a.thumbnails.first.url : '',
+            id: a.sourceId ?? a.browseId,
+          );
+        }
+        for (final (i, m) in monthArtists.indexed) {
+          final k = m.name.toLowerCase();
+          if (k.isEmpty || !seen.add(k)) continue;
+          final hit = photos[k];
+          items.add(PopularArtist(
+            name: m.name,
+            imageUrl: hit != null && hit.art.isNotEmpty
+                ? hit.art
+                : (m.art.isNotEmpty ? m.art : null),
+            artistId: hit?.id,
+            popularityScore:
+                (monthArtists.length - i) / monthArtists.length,
+          ));
+          if (items.length >= 24) break;
+        }
+        monthScoped = items.length >= 12;
+      }
+      if (!monthScoped) {
+        for (final (i, r) in chart.indexed) {
+          final name = r.title;
+          if (name.isEmpty || seen.contains(name.toLowerCase())) continue;
+          seen.add(name.toLowerCase());
+          items.add(PopularArtist(
+            name: name,
+            imageUrl: r.thumbnails.isNotEmpty ? r.thumbnails.first.url : null,
+            artistId: r.sourceId ?? r.browseId,
+            popularityScore:
+                (chart.length - i) / chart.length, // real chart-rank derived
+          ));
+          if (items.length >= 20) break;
+        }
       }
 
       // Truthful label. Deezer serves no monthly history, so until this device
       // has accumulated enough recorded days to rebuild a real past-month
       // ranking, the data IS today's chart — and saying "previous month" about it
-      // is simply false. Once enough history exists the ranking is served with
-      // the requested period.
-      final history = await recordedMonthlyRanking(minDays: 25);
+      // is simply false. Once enough history exists — or once the row is built
+      // on releases that really came out in the requested window — the ranking
+      // is served with the requested period.
+      final history = monthScoped
+          ? const <String>[]
+          : await recordedMonthlyRanking(minDays: 25);
       final section = DiscoverySection<PopularArtist>(
         title: 'Artistes populaires',
-        period: history.length >= 20 ? p : currentMonth(),
+        period: monthScoped || history.length >= 20 ? p : currentMonth(),
         items: items,
       );
       _writeCache(key, section);

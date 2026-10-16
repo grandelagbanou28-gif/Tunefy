@@ -158,43 +158,43 @@ const Map<String, GenrePlan> _overrides = {
   'afro hits|amapiano': GenrePlan(
     key: 'amapiano',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['Afrobeats'],
     ytifyTerm: 'amapiano',
   ),
   'afro hits|afro house': GenrePlan(
     key: 'afro house',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['Afrobeats'],
     ytifyTerm: 'afro house',
   ),
   'afro hits|african gospel': GenrePlan(
     key: 'african gospel',
     jamendoTag: 'christian',
-    audiusGenres: [],
+    audiusGenres: ['Gospel'],
     ytifyTerm: 'african gospel',
   ),
   'afro hits|east africa': GenrePlan(
     key: 'east africa',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['Afrobeats'],
     ytifyTerm: 'east african music',
   ),
   'afro hits|west africa': GenrePlan(
     key: 'west africa',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['Afrobeats'],
     ytifyTerm: 'west african music',
   ),
   'afrobeats|afro r b': GenrePlan(
     key: 'afro rnb',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['R&B/Soul'],
     ytifyTerm: 'afro r&b',
   ),
   'afrobeats|afro fusion': GenrePlan(
     key: 'afro fusion',
     jamendoTag: 'africa',
-    audiusGenres: [],
+    audiusGenres: ['Afrobeats'],
     ytifyTerm: 'afro fusion',
   ),
 
@@ -246,13 +246,13 @@ const Map<String, GenrePlan> _overrides = {
   'hip hop|drill': GenrePlan(
     key: 'drill',
     jamendoTag: 'hiphop',
-    audiusGenres: [],
+    audiusGenres: ['Hip-Hop/Rap'],
     ytifyTerm: 'drill rap',
   ),
   'hip hop|boom bap': GenrePlan(
     key: 'boom bap',
     jamendoTag: 'hiphop',
-    audiusGenres: [],
+    audiusGenres: ['Hip-Hop/Rap'],
     ytifyTerm: 'boom bap',
   ),
   'hip hop|conscious hip hop': GenrePlan(
@@ -264,7 +264,7 @@ const Map<String, GenrePlan> _overrides = {
   'hip hop|french hip hop': GenrePlan(
     key: 'french hip hop',
     jamendoTag: 'hiphop',
-    audiusGenres: [],
+    audiusGenres: ['Hip-Hop/Rap'],
     ytifyTerm: 'rap français',
   ),
 
@@ -302,7 +302,7 @@ const Map<String, GenrePlan> _overrides = {
   'house|tropical house': GenrePlan(
     key: 'tropical house',
     jamendoTag: 'electronic',
-    audiusGenres: [],
+    audiusGenres: ['House'],
     ytifyTerm: 'tropical house',
   ),
 

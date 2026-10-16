@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
 import 'package:muzo/models/ytify_result.dart';
+import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/utils/api_constants.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -96,6 +97,10 @@ class YouTubeApiService {
           }
         } else {
           debugPrint('YoutubeExplode status: ${provider.statusMSG}');
+          final msg = provider.statusMSG.toLowerCase();
+          if (msg.contains('unplayable') || msg.contains('not available')) {
+            StreamExtractionService.reportVideoGone(videoId, 'explode');
+          }
         }
       } catch (ye) {
         debugPrint('Error in YoutubeExplode fallback attempt $i: $ye');
@@ -163,6 +168,9 @@ class YouTubeApiService {
       final status = data['playabilityStatus']?['status'] as String?;
       final reason = data['playabilityStatus']?['reason'] as String?;
       debugPrint('_tryDirectApi: status=$status reason=$reason');
+      if (status == 'UNPLAYABLE' && (reason ?? '').contains('not available')) {
+        StreamExtractionService.reportVideoGone(videoId, 'ytapi');
+      }
       if (status != 'OK') return null;
 
       final streamingData = data['streamingData'] as Map<String, dynamic>?;

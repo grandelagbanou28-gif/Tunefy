@@ -120,9 +120,11 @@ class AudiusApiService {
     }
   }
 
-  /// Trending tracks filtered by genre (Audius' free-text search endpoint 404s,
-  /// so trending-by-genre is the reliable genre lookup: the API returns tracks
-  /// whose declared genre matches exactly).
+  /// Trending tracks for one genre. The filter is an EXACT match against the
+  /// genre strings Audius' own catalogue declares — 'Hip-Hop/Rap', 'R&B/Soul',
+  /// 'Deep House', 'Lo-Fi', 'Afrobeats', 'Trap'… Anything looser ('Hip-Hop',
+  /// 'Rap', 'Drill') answers with zero rows, so [GenrePlan] carries those exact
+  /// tokens instead of display labels.
   Future<List<AudiusTrack>> tracksByGenre(
     String genre, {
     int limit = 10,
@@ -131,6 +133,23 @@ class AudiusApiService {
     if (q.isEmpty) return Future.value(const []);
     return _fetch('/v1/tracks/trending', {
       'genre': q,
+      'limit': '$limit',
+      'app_name': 'Tunefy',
+    });
+  }
+
+  /// Search tracks by free-text query. Returns the track's signed stream URL
+  /// when the catalogue has it, so callers can match a title by name instead
+  /// of guessing a genre. Not every row carries a stream — callers must skip
+  /// an empty [AudiusTrack.streamUrl].
+  Future<List<AudiusTrack>> searchTracks(
+    String query, {
+    int limit = 10,
+  }) {
+    final q = query.trim();
+    if (q.isEmpty) return Future.value(const []);
+    return _fetch('/v1/tracks/search', {
+      'query': q,
       'limit': '$limit',
       'app_name': 'Tunefy',
     });
