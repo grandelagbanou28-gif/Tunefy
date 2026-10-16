@@ -96,10 +96,20 @@ VIDEO_FORMAT = (
 )
 MERGE_TIMEOUT = 180
 
-RUN_TIMEOUT = 45
+# Kept under the phone's 28 s wait for this endpoint: a resolution that ran
+# past it produced a verdict the client could never receive, so the app logged
+# "no relay" and re-queued the same dead id forever.
+RUN_TIMEOUT = 20
 
-_cache: dict[str, str] = {}
+_cache: dict[str, tuple[str, float]] = {}
 _cache_lock = threading.Lock()
+# googlevideo links handed to the phone expire quickly (and 403 outright once
+# reused), so a cached answer older than this must be re-resolved instead of
+# served — that is exactly the "the relay answered but the song failed" case.
+CACHE_TTL = 1500
+# Bound the table so a long listening session cannot grow it without limit.
+CACHE_MAX = 300
+
 # One merge at a time: yt-dlp + ffmpeg are CPU bound, and a shelf of clips
 # resolving in parallel would starve the machine instead of going faster.
 _merge_lock = threading.Lock()
@@ -110,10 +120,77 @@ def cache_key(video_id: str, kind: str) -> str:
     return f"{kind}:{video_id}"
 
 
+def cache_get(video_id: str, kind: str) -> str | None:
+    key = cache_key(video_id, kind)
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        url, stored_at = entry
+        if time.time() - stored_at > CACHE_TTL:
+            del _cache[key]
+            return None
+        return url
+
+
+def cache_put(video_id: str, kind: str, url: str) -> None:
+    with _cache_lock:
+        _cache[cache_key(video_id, kind)] = (url, time.time())
+        if len(_cache) > CACHE_MAX:
+            for old in sorted(_cache, key=lambda k: _cache[k][1])[
+                : len(_cache) - CACHE_MAX
+            ]:
+                del _cache[old]
+
+
+# ─── Verdicts « cette vidéo ne se jouera pas ici » ───────────────────────────
+# yt-dlp answers in 15-45 s, and a label whose country whitelist excludes this
+# IP says the same thing every time. Without remembering it, each retry from the
+# phone re-ran the whole extraction (16 identical attempts for one id in a single
+# session) and the app kept queueing 30 s waits behind them instead of falling
+# back to the sources that answer by title.
+_gone: dict[str, tuple[str, float]] = {}
+_gone_lock = threading.Lock()
+GONE_TTL = 1800
+GONE_MARKS = (
+    "Video unavailable",
+    "video unavailable",
+    "not available",
+    "Private video",
+    "Removed by the owner",
+    "does not exist",
+)
+
+
+def _is_gone_verdict(message: str) -> bool:
+    return any(mark in message for mark in GONE_MARKS)
+
+
+def _remember_gone(video_id: str, message: str) -> None:
+    with _gone_lock:
+        _gone[video_id] = (message, time.time())
+        if len(_gone) > CACHE_MAX:
+            for old in sorted(_gone, key=lambda k: _gone[k][1])[
+                : len(_gone) - CACHE_MAX
+            ]:
+                del _gone[old]
+
+
+def _gone_verdict(video_id: str) -> str | None:
+    with _gone_lock:
+        entry = _gone.get(video_id)
+        if entry is None:
+            return None
+        message, stored_at = entry
+        if time.time() - stored_at > GONE_TTL:
+            del _gone[video_id]
+            return None
+        return message
+
+
 def resolve_audio(video_id: str) -> str:
     """Direct audio URL (no muxing needed — the player accepts adaptive audio)."""
-    with _cache_lock:
-        hit = _cache.get(cache_key(video_id, "audio"))
+    hit = cache_get(video_id, "audio")
     if hit:
         return hit
 
@@ -149,8 +226,7 @@ def resolve_audio(video_id: str) -> str:
     except Exception as exc:
         raise RuntimeError(f"yt-dlp audio failed: {exc}") from exc
 
-    with _cache_lock:
-        _cache[cache_key(video_id, "audio")] = url
+    cache_put(video_id, "audio", url)
     return url
 
 
@@ -214,9 +290,9 @@ def resolve_video(video_id: str) -> str:
                         os.replace(produced, target)
                     finally:
                         _untrack_process(proc)
-                with _cache_lock:
-                    _cache[cache_key(video_id, "video")] = f"http://127.0.0.1:9877/file/{video_id}.mp4"
-                return f"http://127.0.0.1:9877/file/{video_id}.mp4"
+                url = f"http://127.0.0.1:9877/file/{video_id}.mp4"
+                cache_put(video_id, "video", url)
+                return url
 
 
 def _first_url(proc) -> str:
@@ -253,7 +329,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+            self.wfile.flush()
+        except OSError:
+            # The device gave up on its 28-30 s budget and closed. Re-raising
+            # only made a second traceback land in the "internal server error"
+            # branch and buried the real verdict in noise.
+            pass
 
     def do_HEAD(self) -> None:  # noqa: N802 - stdlib naming
         self._serve_media(head_only=True)
@@ -270,6 +353,13 @@ class Handler(BaseHTTPRequestHandler):
                 if not VIDEO_ID_RE.match(video_id):
                     self._json(400, {"error": "invalid videoId"})
                     return
+                dead = _gone_verdict(video_id)
+                if dead is not None:
+                    # Instant answer for a verdict already given, so the app's
+                    # 30 s wait becomes a millisecond and it moves on to the
+                    # sources that resolve by title.
+                    self._json(502, {"error": dead, "gone": True, "cached": True})
+                    return
                 try:
                     url = (
                         resolve_video(video_id)
@@ -280,9 +370,19 @@ class Handler(BaseHTTPRequestHandler):
                 except subprocess.TimeoutExpired:
                     self._json(504, {"error": "yt-dlp timeout"})
                 except Exception as exc:  # noqa: BLE001 - reported to the caller
-                    # Log the full traceback for debugging
-                    traceback.print_exc()
-                    self._json(502, {"error": str(exc)[:200]})
+                    message = str(exc)[:200]
+                    gone = _is_gone_verdict(message)
+                    if gone:
+                        already = _gone_verdict(video_id)
+                        _remember_gone(video_id, message)
+                        # Print the traceback only the first time this id dies;
+                        # one dead upload repeated 8 times per session filled the
+                        # console with identical stacks and hid everything else.
+                        if already is None:
+                            traceback.print_exc()
+                    else:
+                        traceback.print_exc()
+                    self._json(502, {"error": message, "gone": gone})
                 return
             if parsed.path.startswith("/file/"):
                 self._serve_media(head_only=False)
