@@ -64,32 +64,40 @@ class HivefyDrawer extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        username,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      GestureDetector(
-                        onTap: () => navigate(const ProfileScreen()),
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(
-                          email ?? l10n.viewProfile,
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                          ),
+                  // Expanded: without a width bound the texts keep their full
+                  // intrinsic width, the ellipsis on the email never engages,
+                  // and a long address overflows the drawer.
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          username,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.3,
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 2),
+                        GestureDetector(
+                          onTap: () => navigate(const ProfileScreen()),
+                          behavior: HitTestBehavior.opaque,
+                          child: Text(
+                            email ?? l10n.viewProfile,
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 13,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -158,8 +166,6 @@ class _DrawerItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap ?? () {},
-      splashColor: Colors.white10,
-      highlightColor: Colors.white10,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(

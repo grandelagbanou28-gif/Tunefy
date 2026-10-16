@@ -4,10 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:muzo/models/muzo_item.dart';
-import 'package:muzo/providers/search_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/utils/song_navigation.dart';
+import 'package:muzo/utils/shelf_claim.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/skeleton_loader.dart';
@@ -24,6 +24,7 @@ class _QuickPicksSectionState extends ConsumerState<QuickPicksSection> {
   bool _isLoading = false;
   String? _error;
   List<String> _lastFetchedIds = [];
+  Set<String> _claimedArtists = <String>{};
 
   @override
   void initState() {
@@ -96,16 +97,16 @@ class _QuickPicksSectionState extends ConsumerState<QuickPicksSection> {
       final apiService = ref.read(muzoApiServiceProvider);
       final results = await apiService.getQuickPicks(ids);
 
-      // Never repeat an artist inside Quick Picks.
-      final seenArtists = <String>{};
-      final deduped = <MuzoItem>[];
-      for (final song in results) {
-        final artist =
-            primaryArtistName(song.displayArtist).trim().toLowerCase();
-        if (artist.isNotEmpty && seenArtists.contains(artist)) continue;
-        if (artist.isNotEmpty) seenArtists.add(artist);
-        deduped.add(song);
-      }
+      // Same rule as the rest of Home: Quick Picks claims its artists so no
+      // row below repeats them, and gives back the ones it owned before this
+      // fetch (history changed → new list → re-claim).
+      final claim = claimShelfItems(
+        ref.read(shownArtistsProvider),
+        results,
+        release: _claimedArtists,
+      );
+      _claimedArtists = claim.claimed;
+      final deduped = claim.items;
 
       if (mounted) {
         setState(() {

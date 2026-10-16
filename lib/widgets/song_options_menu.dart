@@ -316,7 +316,7 @@ class SongOptionsMenu extends ConsumerWidget {
             icon: isDownloaded
                 ? FluentIcons.checkmark_24_regular
                 : FluentIcons.arrow_download_24_regular,
-            label: isDownloaded ? l10n.removeDownload : l10n.downloaded,
+            label: isDownloaded ? l10n.removeDownload : l10n.download,
             onTap: () async {
               onClose?.call();
               final downloadService = DownloadService();
@@ -481,13 +481,17 @@ class SongOptionsMenu extends ConsumerWidget {
           children: [
             Icon(icon, color: effectiveIconColor, size: 24),
             const SizedBox(width: 16),
-            Text(
-              label,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurface,
-                fontSize: 16,
-                fontWeight: FontWeight.w400,
-                letterSpacing: -0.3,
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  letterSpacing: -0.3,
+                ),
               ),
             ),
           ],

@@ -26,6 +26,14 @@ import 'package:muzo/widgets/hivefy_drawer.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
 
+/// Hauteur cumulée du chrome flottant en bas des onglets : la nav (64 +
+/// `max(padding.bottom, 16)`, posée par-dessus le Scaffold) ET le mini-player
+/// (~65 px ancré à `84 + padding.bottom`, donc bord supérieur ≈ 149 px). Un
+/// onglet qui termine sa liste sur le vieux `bottom: 130` fait disparaître sa
+/// dernière rangée sous le mini-player — c'est ce qui masquait le bas de la
+/// grille « Parcourir tout » (catégories) et du dernier rayon de l'accueil.
+const double kBottomChromeHeight = 172;
+
 class MainLayout extends ConsumerStatefulWidget {
   final Widget child;
 
@@ -82,6 +90,53 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     debugPrint('Received Deep Link: $uri');
     // Using the exact logic as ShareService via the audio handler for playback
     _shareService.handleSharedText(context, uri.toString());
+  }
+
+  static const MethodChannel _appChannel =
+      MethodChannel('com.shashwat.muzo/app');
+
+  /// System back, handled at the shell instead of by Android.
+  ///
+  /// Left to the framework, back on the Home tab finishes the Activity: the
+  /// Dart isolate dies, and reopening the app is a cold start — every shelf
+  /// re-fetches, every counter restarts, the queue replays the calls the
+  /// worker already refused. That is what felt like "les titres ne viennent
+  /// plus vite". So back unwinds the stack the way a music app should: drawer,
+  /// then the deepest screen still stacked, then the Home tab.
+  ///
+  /// That last step is what keeps this override safe. `canPop: false` also
+  /// makes `Navigator.maybePop` — the back arrow of every pushed screen (full
+  /// player, video, concert clip, `SpotifyBackButton`) — return false once the
+  /// pushed page itself has been popped and the shell is on top. Without the
+  /// two branches below, those backscreens would stop doing anything. So pop
+  /// the nested navigator, then the root navigator's surplus routes (checked
+  /// with `canPop`, which does not consult this `PopScope`), and only when both
+  /// are already at their first page MINIMIZE the app with `moveTaskToBack`:
+  /// the Activity and its engine stay alive, so coming back resumes exactly
+  /// where the user left — playback included.
+  void _handleBack() {
+    final scaffold = mainScaffoldKey.currentState;
+    if (scaffold?.isDrawerOpen == true) {
+      scaffold!.closeDrawer();
+      return;
+    }
+    // Deepest thing first, so an artist page opened from the Search tab goes
+    // back to that tab instead of being flattened into Home.
+    final nested = nestedNavigatorKey.currentState;
+    if (nested != null && nested.canPop()) {
+      nested.pop();
+      return;
+    }
+    final root = Navigator.of(context);
+    if (root.canPop()) {
+      root.pop();
+      return;
+    }
+    if (ref.read(navigationIndexProvider) != 0) {
+      ref.read(navigationIndexProvider.notifier).state = 0;
+      return;
+    }
+    _appChannel.invokeMethod<void>('moveToBack').catchError((_) {});
   }
 
 
@@ -148,6 +203,10 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     
     final nestedNavigator = Navigator(
       key: nestedNavigatorKey,
+      // Concert/clip screens push HERE, not on the root navigator, so the
+      // scene observer that hides (and reliably re-shows) the mini player has
+      // to be attached to this navigator or the route-derived state never fires.
+      observers: [playerSceneObserver],
       onGenerateRoute: (settings) {
         return MaterialPageRoute(
           builder: (context) => widget.child,
@@ -215,24 +274,31 @@ class _MainLayoutState extends ConsumerState<MainLayout>
       systemNavigationBarDividerColor: Colors.transparent,
     );
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: systemOverlayStyle,
-      child: GlobalBackground(
-        child: Stack(
-          children: [
-            Scaffold(
-              key: mainScaffoldKey,
-              backgroundColor: Colors.transparent, // Ensure GlobalBackground is visible
-              drawer: HivefyDrawer(
-                onClose: () => mainScaffoldKey.currentState?.closeDrawer(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: systemOverlayStyle,
+        child: GlobalBackground(
+          child: Stack(
+            children: [
+              Scaffold(
+                key: mainScaffoldKey,
+                backgroundColor: Colors.transparent, // Ensure GlobalBackground is visible
+                drawer: HivefyDrawer(
+                  onClose: () => mainScaffoldKey.currentState?.closeDrawer(),
+                ),
+                body: mainBody,
               ),
-              body: mainBody,
-            ),
-            // Bottom nav bar rendered OUTSIDE the Scaffold so it stays
-            // visible above the drawer (Spotify behavior).
-            if (!isDesktop && hasMaterialLocalizations)
-              _buildBottomNavBar(context, ref, selectedIndex, isPlayerExpanded),
-          ],
+              // Bottom nav bar rendered OUTSIDE the Scaffold so it stays
+              // visible above the drawer (Spotify behavior).
+              if (!isDesktop && hasMaterialLocalizations)
+                _buildBottomNavBar(context, ref, selectedIndex, isPlayerExpanded),
+            ],
+          ),
         ),
       ),
     );
@@ -395,10 +461,11 @@ class _MainLayoutState extends ConsumerState<MainLayout>
     final l10n = AppLocalizations.of(context);
 
     String getInitials(String name) {
-      final parts = name.trim().split(' ');
+      final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
       if (parts.isEmpty) return 'U';
       if (parts.length == 1) {
-        return parts[0].substring(0, parts[0].length >= 2 ? 2 : 1).toUpperCase();
+        final first = parts[0];
+        return first.substring(0, first.length >= 2 ? 2 : 1).toUpperCase();
       }
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }

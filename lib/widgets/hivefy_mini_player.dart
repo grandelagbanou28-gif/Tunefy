@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,7 +11,7 @@ import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/screens/player_screen.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/app_colors.dart';
-import 'package:muzo/widgets/audio_device_badge.dart';
+import 'package:muzo/widgets/audio_device_button.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
 
 final playerColourProvider = StateProvider<Color>((ref) => Colors.black);
@@ -42,22 +40,9 @@ class HivefyMiniPlayer extends ConsumerStatefulWidget {
 
 class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
   // Accumulated drag distance so a plain tap (with micro finger jitter) never
-  // triggers skip / open-player. Swipes must travel a real distance.
+  // triggers a skip. Swipes must travel a real distance.
   double _accumDx = 0;
   double _accumDy = 0;
-  Timer? _pendingTap;
-
-  static const Duration _doubleTapWindow = Duration(milliseconds: 260);
-
-  void _handleSingleTap() {
-    _pendingTap?.cancel();
-    _pendingTap = Timer(_doubleTapWindow, () {
-      _pendingTap = null;
-      if (!mounted) return;
-      HapticFeedback.selectionClick();
-      _openFullPlayer();
-    });
-  }
 
   @override
   void initState() {
@@ -70,7 +55,6 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
 
   @override
   void dispose() {
-    _pendingTap?.cancel();
     super.dispose();
   }
 
@@ -122,18 +106,9 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
     });
   }
 
-  /// Double tap on the cover/title toggles playback without opening the
-  /// player. Kept on the title zone only, so the progress bar and buttons
-  /// never trigger it by accident.
-  void _togglePlayback() {
-    HapticFeedback.selectionClick();
-    final player = ref.read(audioHandlerProvider).player;
-    if (player.playing) {
-      player.pause();
-    } else {
-      player.play();
-    }
-  }
+  /// A plain tap on the bar only ever opens the player; play/pause lives on its
+  /// dedicated button. A former double-tap-to-toggle handler made ordinary taps
+  /// ambiguous (pause / restart / skip), which is what the user reported.
 
   Future<void> _updatePlayerCardColour() async {
     final mediaItem = ref.read(currentMediaItemProvider).valueOrNull;
@@ -199,7 +174,6 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
               return;
             }
             if (draggedUp && v < -300) {
-              _pendingTap?.cancel();
               HapticFeedback.selectionClick();
               _openFullPlayer();
             }
@@ -221,8 +195,7 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
                     children: [
                       GestureDetector(
                         behavior: HitTestBehavior.translucent,
-                        onTap: _handleSingleTap,
-                        onDoubleTap: _togglePlayback,
+                        onTap: _openFullPlayer,
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(4),
                           child: CachedNetworkImage(
@@ -243,8 +216,7 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
                       Expanded(
                         child: GestureDetector(
                           behavior: HitTestBehavior.translucent,
-                          onTap: _handleSingleTap,
-                          onDoubleTap: _togglePlayback,
+                          onTap: _openFullPlayer,
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -275,6 +247,8 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
                         ),
                       ),
                       const SizedBox(width: 10),
+                      // Device selector comes BEFORE the favourite "+".
+                      const AudioDeviceButton(size: 22, showName: true),
                       GestureDetector(
                         behavior: HitTestBehavior.translucent,
                         onTap: () {
@@ -310,8 +284,6 @@ class _HivefyMiniPlayerState extends ConsumerState<HivefyMiniPlayer> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 3),
-                      const AudioDeviceBadge(),
                       SizedBox(
                         width: 32,
                         height: 32,

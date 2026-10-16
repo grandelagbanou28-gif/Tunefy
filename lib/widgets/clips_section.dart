@@ -76,6 +76,9 @@ class ClipsSection extends ConsumerWidget {
                       clipsAsync.hasError
                           ? l10n.clipsUnavailableRetry
                           : l10n.clipsNoneRetry,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.white54,
                         fontSize: 12,

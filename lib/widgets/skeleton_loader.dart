@@ -116,12 +116,17 @@ class HomeSkeletonSection extends StatelessWidget {
             itemCount: 4,
             separatorBuilder: (_, __) => SizedBox(width: itemSpacing),
             itemBuilder: (context, index) {
+              // The card (cover + two text bars + gaps) must fit the row:
+              // a fixed 140px cover overflows every row shorter than 178px
+              // (the "Fans also like" row is 130px) and paints a yellow
+              // overflow stripe while loading.
+              final cover = (rowHeight - 44).clamp(60.0, 140.0);
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SkeletonLoader(
-                    width: 140,
-                    height: 140,
+                    width: cover,
+                    height: cover,
                     borderRadius: 12,
                     forceDark: forceDark,
                   ),

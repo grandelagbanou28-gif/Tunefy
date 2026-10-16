@@ -140,40 +140,49 @@ class _GlassSnackBarContent extends StatelessWidget {
               ),
             ],
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(7),
-                child: Image.asset(
-                  'assets/icon.png',
-                  width: 24,
-                  height: 24,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Icon(
-                    error
-                        ? Icons.error_outline_rounded
-                        : Icons.info_outline_rounded,
-                    color: error ? Colors.redAccent : accentColor,
-                    size: 22,
+          child: ConstrainedBox(
+            // Garde-fou : le toast ne peut jamais dépasser la hauteur utile
+            // au-dessus du mini-player, donc aucun débordement RenderFlex
+            // (bandes jaunes) quelle que soit la longueur du message.
+            constraints: const BoxConstraints(maxHeight: 120),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: Image.asset(
+                    'assets/icon.png',
+                    width: 24,
+                    height: 24,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Icon(
+                      error
+                          ? Icons.error_outline_rounded
+                          : Icons.info_outline_rounded,
+                      color: error ? Colors.redAccent : accentColor,
+                      size: 22,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  message,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  softWrap: true,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 14,
-                    height: 1.25,
+                const SizedBox(width: 12),
+                Flexible(
+                  child: Text(
+                    message,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: true,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      fontSize: 14,
+                      height: 1.25,
+                      // Aucun soulignement hérité (une Decoration d'erreur
+                      // Material peut peindre un trait jaune sous le texte).
+                      decoration: TextDecoration.none,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

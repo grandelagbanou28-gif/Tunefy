@@ -27,7 +27,9 @@ class TopOnMuzoSection extends ConsumerWidget {
           children: [
             _buildHeader(context),
             SizedBox(
-              height: 200,
+              // Square 152 cover + 10 gap + two 1.3-height title lines ≈ 196:
+              // any text scaling above 1.0 spilled past this row.
+              height: 220,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 20),

@@ -26,7 +26,9 @@ class HomeSectionWidget extends StatelessWidget {
           ),
         ),
         SizedBox(
-          height: 215, // Adjusted to prevent title/subtitle overflow
+          // Cover 140 + title (2 lines) + subtitle ≈ 197 at 1.0 text scale;
+          // anything larger overflowed the bottom of this row.
+          height: 236,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 16),

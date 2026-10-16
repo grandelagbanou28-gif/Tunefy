@@ -86,6 +86,11 @@ class SpotifySongChip extends ConsumerWidget {
   /// The full MuzoItem for this song — used to open the options menu.
   final MuzoItem? result;
 
+  /// When true, the song is already downloaded for offline playback: a small
+  /// green download badge is shown next to the title so the state stays
+  /// visible on the artist page and in search results.
+  final bool downloaded;
+
   const SpotifySongChip({
     super.key,
     required this.imageUrl,
@@ -99,6 +104,7 @@ class SpotifySongChip extends ConsumerWidget {
     this.videoId,
     this.isExplicit = false,
     this.result,
+    this.downloaded = false,
   });
 
   @override
@@ -141,10 +147,20 @@ class SpotifySongChip extends ConsumerWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontSize: 15,
-                                  color: titleColor,
+                                  color: downloaded
+                                      ? spotifyGreen
+                                      : titleColor,
                                 ),
                               ),
                             ),
+                            if (downloaded) ...[
+                              const SizedBox(width: 6),
+                              const Icon(
+                                Icons.arrow_downward,
+                                color: spotifyGreen,
+                                size: 13,
+                              ),
+                            ],
                           ],
                         ),
                         Row(

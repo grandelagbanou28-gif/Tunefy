@@ -118,6 +118,11 @@ Future<T?> showAppAlertDialog<T>({
 }) {
   return showDialog<T>(
     context: context,
+    // Push onto the CALLER's nearest navigator (the tab's nested one) so a
+    // plain Navigator.pop(context) from the action buttons dismisses THIS
+    // dialog. The default (root) would put it on a different navigator than
+    // the screen, causing over-pops / orphaned dialogs.
+    useRootNavigator: false,
     builder: (context) =>
         AppAlertDialog(title: title, content: content, actions: actions),
   );
