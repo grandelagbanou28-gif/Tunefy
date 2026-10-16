@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <!-- Declares the app as a media provider for Android Auto / Assistant:
+         the audio_service MediaBrowserService already registered in the
+         manifest does the browsing, this file only opts the package in. -->
+    <uses name="media" />
+</automotiveApp>

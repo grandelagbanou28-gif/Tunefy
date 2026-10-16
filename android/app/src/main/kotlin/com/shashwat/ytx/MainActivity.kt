@@ -1,14 +1,17 @@
 package com.shashwat.ytx
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.audiofx.EnvironmentalReverb
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -17,6 +20,7 @@ import com.ryanheise.audioservice.AudioServiceActivity
 class MainActivity : AudioServiceActivity() {
     private val CHANNEL = "com.shashwat.muzo/audio_effects"
     private val DEVICE_CHANNEL = "com.shashwat.muzo/audio_device"
+    private val APP_CHANNEL = "com.shashwat.muzo/app"
     private var reverb: EnvironmentalReverb? = null
     private var equalizer: Equalizer? = null
     private var loudness: LoudnessEnhancer? = null
@@ -48,6 +52,43 @@ class MainActivity : AudioServiceActivity() {
                         result.success(null)
                     } else {
                         result.error("INVALID_SESSION_ID", "Session ID is null", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Bouton retour : la coque Flutter demande à passer en arrière-plan
+        // plutôt que de finir l'Activity. Finir tuait l'isolate Dart, donc
+        // chaque réouverture était un démarrage à froid (rayons à recharger,
+        // compteurs à zéro, file de réponses perdue).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "moveToBack" -> {
+                    moveTaskToBack(true)
+                    result.success(null)
+                }
+                // Icône « Wifi » de l'app : Android ≥ 10 interdit aux apps
+                // d'allumer le Wi-Fi elles-mêmes, mais le panneau système
+                // (ACTION_WIFI) s'ouvre EN SURIMPRESSION au-dessus de l'app :
+                // un clic, et l'utilisateur bascule le Wi-Fi sans quitter la
+                // musique. Repli sur l'écran Wi-Fi complet sous Android 9.
+                "openWifiPanel" -> {
+                    try {
+                        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            Intent(Settings.Panel.ACTION_WIFI)
+                        } else {
+                            Intent(Settings.ACTION_WIFI_SETTINGS)
+                        }
+                        startActivity(intent)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        try {
+                            startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+                            result.success(null)
+                        } catch (e2: Exception) {
+                            result.error("WIFI_PANEL_UNAVAILABLE", e2.message, null)
+                        }
                     }
                 }
                 else -> result.notImplemented()
@@ -93,29 +134,62 @@ class MainActivity : AudioServiceActivity() {
         deviceEvents = null
     }
 
-    /// Pushes the device audio is actually routed to, the way the player
-    /// screens of the big apps surface "playing on AirPods / WH-1000XM4".
-    /// Only the kind of device is sent, never its name, so no runtime
-    /// permission is involved.
+    /// Pousse la sortie audio réellement utilisée, avec son nom quand le
+    /// système le fournit (« Pixel Buds », « WH-1000XM4 »…). Le nom vient de
+    /// AudioDeviceInfo.productName : sur Android 12+ il exige BLUETOOTH_CONNECT
+    /// et peut être refusé, donc chaque lecture est encapsulée — l'absence de
+    /// nom ne doit jamais faire perdre la route elle-même.
     private fun emitActiveDevice() {
         val manager = audioManager ?: return
         val sink = deviceEvents ?: return
-        val kind = try {
-            val usb = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+        var kind = "speaker"
+        var name = ""
+        try {
+            val outputs = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val usb = outputs.any {
                 it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
                     it.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
                     it.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
             }
-            when {
+            kind = when {
                 manager.isBluetoothA2dpOn || manager.isBluetoothScoOn -> "bluetooth"
                 manager.isWiredHeadsetOn -> "wired"
                 usb -> "usb"
                 else -> "speaker"
             }
+            val wanted = when (kind) {
+                "bluetooth" -> setOf(
+                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                )
+                "wired" -> setOf(
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                )
+                "usb" -> setOf(
+                    AudioDeviceInfo.TYPE_USB_HEADSET,
+                    AudioDeviceInfo.TYPE_USB_DEVICE,
+                    AudioDeviceInfo.TYPE_USB_ACCESSORY,
+                )
+                else -> emptySet()
+            }
+            // La route est déjà connue par `kind` : le premier appareil du bon
+            // type est la sortie active.
+            val device = outputs.firstOrNull { wanted.contains(it.type) }
+            if (device != null && android.os.Build.VERSION.SDK_INT >= 28) {
+                name = try {
+                    device.productName?.toString()?.takeIf { it.isNotBlank() } ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+            }
         } catch (e: Exception) {
-            "speaker"
+            kind = "speaker"
         }
-        sink.success(kind)
+        val payload = HashMap<String, Any>()
+        payload["kind"] = kind
+        payload["name"] = name
+        sink.success(payload)
     }
 
     private fun setLoudnessNormalization(sessionId: Int, enable: Boolean) {

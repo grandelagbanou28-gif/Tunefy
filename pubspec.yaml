@@ -1,4 +1,4 @@
-﻿name: muzo
+name: muzo
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -55,7 +55,7 @@ dependencies:
   palette_generator: ^0.3.3+7
   receive_sharing_intent: 1.8.1
   flutter_local_notifications: ^19.5.0
-  font_awesome_flutter: ^10.12.0
+  font_awesome_flutter: ^11.0.0
   flutter_svg: ^2.0.10
   connectivity_plus: ^7.0.0
   connectivity_plus_platform_interface: ^2.0.1
@@ -100,6 +100,7 @@ dependencies:
   google_mlkit_barcode_scanning: ^0.15.0
   video_player: ^2.14.0
   gal: ^2.3.3
+  on_audio_query: 2.9.0
 
 dev_dependencies:
   flutter_test:

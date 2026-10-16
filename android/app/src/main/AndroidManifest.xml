@@ -8,7 +8,12 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- Le nom de la sortie Bluetooth (productName) n'est lisible qu'avec
+         cette autorisation ; sans elle, la feuille « Lire sur » retombe sur un
+         simple « Casque Bluetooth ». -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
 
     <application
@@ -21,6 +26,12 @@
         android:enableOnBackInvokedCallback="true">
         
         <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false" />
+
+        <!-- Android Auto / Google Assistant : le MediaBrowserService
+             d'audio_service (ci-dessous) fournit déjà la navigation et la
+             lecture ; ce descripteur inscrit simplement le paquet. -->
+        <meta-data android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         
         <service android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
@@ -109,6 +120,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- speech_to_text needs to resolve an on-device speech recognizer.
+             Without this Android 11+ package-visibility filter returns no
+             RecognitionService, so _speech.initialize() always reports
+             "Microphone not available" and the voice/Shazam scan dies. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
     </queries>
 </manifest>
