@@ -2,7 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:muzo/models/discovery_models.dart';
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/services/taste_signals_service.dart';
 import 'package:muzo/utils/period_utils.dart';
 
 /// "Recommendation of the day" — a small playlist whose pick is derived from
@@ -34,21 +36,38 @@ final dailyPickProvider = FutureProvider<DiscoverySection<MuzoItem>>((ref) async
   final dayKey = dayKeys[day.weekday - 1];
   final terms = rotations[dayKey] ?? rotations['sunday']!;
   // Deterministic pick inside the rotation: same all day, new tomorrow.
-  final term = terms[day.day % terms.length];
+  final weekdayTerm = terms[day.day % terms.length];
+
+  // Lead with what this listener actually searched for, and rotate that set
+  // per installation so two phones on the same day do not show the same pick.
+  final personal = ref
+      .read(tasteSignalsProvider)
+      .recommendationSeeds(
+        max: 3,
+        seed: day.day + ContentCacheService.deviceSeed,
+      );
+  final candidates = <String>{...personal, weekdayTerm}.toList();
 
   final results = <MuzoItem>[];
+  String chosen = weekdayTerm;
   try {
     final api = ref.read(muzoApiServiceProvider);
-    final response = await api
-        .search(term, filter: 'songs')
-        .timeout(const Duration(seconds: 10));
     final seen = <String>{};
-    for (final r in response.results) {
-      final id = r.videoId;
-      if (id == null || id.isEmpty || !seen.add(id)) continue;
-      results.add(r);
+    for (final term in candidates) {
+      final response = await api
+          .search(term, filter: 'songs')
+          .timeout(const Duration(seconds: 10));
+      for (final r in response.results) {
+        final id = r.videoId;
+        if (id == null || id.isEmpty || !seen.add(id)) continue;
+        results.add(r);
+      }
+      // The title must name the query that produced these songs, otherwise the
+      // shelf lies about what it is.
+      if (results.isNotEmpty) chosen = term;
       if (results.length >= 12) break;
     }
+    if (results.length > 12) results.removeRange(12, results.length);
   } catch (_) {
     // A thin day must not break the page.
   }
@@ -56,7 +75,7 @@ final dailyPickProvider = FutureProvider<DiscoverySection<MuzoItem>>((ref) async
   // Built through the same l10n surface as the other shelves; the label
   // reuses the localized weekday name.
   return DiscoverySection<MuzoItem>(
-    title: term,
+    title: chosen,
     period: DiscoveryPeriod(
       id: 'day',
       label: _label(),

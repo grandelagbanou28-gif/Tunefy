@@ -1,10 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/providers/genre_chart_provider.dart';
 import 'package:muzo/services/category_curator.dart';
+import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/curated_artists_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/services/trending_service.dart';
 
 const _timeout = Duration(seconds: 8);
 
@@ -31,31 +35,80 @@ bool _isRecentPodcast(DateTime? date) {
   return date.year == years.current || date.year == years.previous;
 }
 
+/// True for date-sensitive "new" queries (new releases / new music / nouveautés
+/// / sorties / trending). These refresh daily instead of the default 3 days.
+bool _isNewCategoryQuery(String term) {
+  final t = term.toLowerCase();
+  return t.contains('new') ||
+      t.contains('nouveau') ||
+      t.contains('nouveaute') ||
+      t.contains('sortie') ||
+      t.contains('release') ||
+      t.contains('trending') ||
+      t.contains('tendance') ||
+      t.contains('hit') ||
+      t.contains('top');
+}
+
 /// Keyless iTunes Search API helper shared by the category providers.
-/// Throws on network/timeout/HTTP failures so callers can show an error state;
-/// returns [] only when iTunes genuinely has no results for the term.
+///
+/// Stale-while-revalidate: a fresh disk snapshot short-circuits the network; a
+/// hit goes to iTunes and is cached; an offline read (or a failed/empty
+/// network call) replays the last snapshot up to [ContentCacheService.offlineCeiling]
+/// so every category — and the songs inside it — stays browsable offline, the
+/// way Spotify keeps a once-seen catalogue visible on a flight. Only a genuine
+/// online failure with nothing cached throws, so callers can still show an
+/// error state. Returns [] when iTunes truly has no results for the term.
   Future<List<Map<String, dynamic>>> _itunesSearch(
     String term,
     String entity,
     int limit, {
     int offset = 0,
   }) async {
-    final uri = Uri.parse('https://itunes.apple.com/search').replace(
-      queryParameters: {
-        'term': term,
-        'entity': entity,
-        'limit': '$limit',
-        if (offset > 0) 'offset': '$offset',
-      },
-    );
-    final resp = await http.get(uri).timeout(_timeout);
-    if (resp.statusCode != 200) {
-      throw Exception('iTunes search failed (HTTP ${resp.statusCode})');
-    }
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    return ((data['results'] as List?) ?? [])
-        .map((e) => e as Map<String, dynamic>)
+    final cache = ContentCacheService.instance;
+    final cacheKey = 'itunes|$entity|$limit|$offset|$term';
+    // Categories refresh every 3 days; "new releases / new music" style queries
+    // renew daily.
+    final freshWindow = _isNewCategoryQuery(term)
+        ? ContentCacheService.dailyTtl
+        : ContentCacheService.browseTtl;
+    List<Map<String, dynamic>>? toRows(List<dynamic>? raw) => raw
+        ?.map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+
+    final fresh = toRows(await cache.readJsonIfFresh(cacheKey, maxAge: freshWindow));
+    if (fresh != null) return fresh;
+
+    if (await ContentCacheService.isOffline()) {
+      return toRows(await cache.readJsonStale(cacheKey,
+              maxAge: ContentCacheService.offlineCeiling)) ??
+          const <Map<String, dynamic>>[];
+    }
+
+    try {
+      final uri = Uri.parse('https://itunes.apple.com/search').replace(
+        queryParameters: {
+          'term': term,
+          'entity': entity,
+          'limit': '$limit',
+          if (offset > 0) 'offset': '$offset',
+        },
+      );
+      final resp = await http.get(uri).timeout(_timeout);
+      if (resp.statusCode != 200) {
+        throw Exception('iTunes search failed (HTTP ${resp.statusCode})');
+      }
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final results = ((data['results'] as List?) ?? [])
+          .map((e) => e as Map<String, dynamic>)
+          .toList();
+      if (results.isNotEmpty) unawaited(cache.writeJson(cacheKey, results));
+      return results;
+    } catch (_) {
+      final stale = toRows(await cache.readJsonStale(cacheKey));
+      if (stale != null && stale.isNotEmpty) return stale;
+      rethrow;
+    }
   }
 
   /// Pages iTunes until [target] rows are gathered. A single request tops out
@@ -115,10 +168,30 @@ String? catalogGenreFor(String query) {
     'afro hits': 'afro-hits',
   };
   final genre = aliases[key] ?? key;
-  // Only map when the catalog actually has that genre bucket.
+  // Only map when something real exists for that genre: the curated catalog
+  // bucket or one of the genre charts. Without this check a query would fall
+  // through to a generic term search and answer with off-genre music.
+  if (TrendingService.genreChartFor(genre) != null) return genre;
   return CuratedArtistsService.instance.artistsFor(genre).isNotEmpty
       ? genre
       : null;
+}
+
+/// Seed artists for a genre category: whoever charts in it right now, falling
+/// back to the curated catalog's hand-typed names only when no chart covers the
+/// genre. The catalog is ranked by followers and frozen between refreshes, so
+/// on its own it repeats the same famous names — and for the afro buckets it
+/// lists acts that are not that genre at all.
+Future<List<String>> genreSeedArtists(String? catalogGenre) async {
+  if (catalogGenre == null) return const <String>[];
+  final charted = await genreChartArtists(catalogGenre, limit: 8);
+  if (charted.isNotEmpty) return charted;
+  await CuratedArtistsService.instance.whenReady();
+  return CuratedArtistsService.instance
+      .artistsFor(catalogGenre)
+      .take(8)
+      .map((a) => a.name)
+      .toList();
 }
 
 /// Real songs of the catalog's real artists for a genre — the same catalog
@@ -136,6 +209,15 @@ final catalogTracksForGenreProvider = FutureProvider.family<
   // Watching the catalog service re-runs this shelf once the 72h load
   // completes, so genre rows fill automatically instead of staying hidden.
   final service = ref.watch(curatedArtistsServiceProvider);
+  // Charts first. The catalog below is a hand-typed list ranked by follower
+  // count, so it keeps showing the same famous names (and, for the afro
+  // buckets, names that are not that genre at all). A genre chart answers with
+  // whoever actually plays it this week, which is also what puts women rappers
+  // on a rap row instead of leaving them out of the list.
+  final charted = await ref
+      .read(genreChartSongsProvider((genre: args.genre, offset: args.offset))
+          .future);
+  if (charted.isNotEmpty) return charted.take(10).toList();
   if (!service.hasData) return const <MuzoItem>[];
   final artists = service.artistsWhere(args.genre, country: args.country);
   if (artists.isEmpty) return const <MuzoItem>[];
@@ -255,16 +337,8 @@ final categoryAlbumsProvider =
   // fresh with the 72h catalog while still plumbing through iTunes metadata.
   final catalogGenre = catalogGenreFor(query);
   List<String> seeds;
-  if (catalogGenre != null) {
-    await CuratedArtistsService.instance.whenReady();
-    seeds = CuratedArtistsService.instance
-        .artistsFor(catalogGenre)
-        .take(8)
-        .map((a) => a.name)
-        .toList();
-  } else {
-    seeds = seedsFor(query);
-  }
+  seeds = await genreSeedArtists(catalogGenre);
+  if (seeds.isEmpty) seeds = seedsFor(query);
   final yearTerm = query.contains(year.toString())
       ? query
       : '$query $year';
@@ -328,9 +402,13 @@ final categoryArtistsProvider =
     FutureProvider.family<List<CategoryArtist>, String>((ref, query) async {
   if (query.isEmpty) return [];
 
-  // Catalog-first: real artists from the curated catalog (real images).
+  // Genre-first: the artists charting in this genre right now, with artwork
+  // resolved from iTunes. The curated catalog is only reached when no chart
+  // covers the genre — its rows are hand-typed names ranked by followers, and
+  // for the afro buckets those names are not that genre.
   final catalogGenre = catalogGenreFor(query);
-  if (catalogGenre != null) {
+  final chartSeeds = await genreChartArtists(catalogGenre ?? '', limit: 8);
+  if (chartSeeds.isEmpty && catalogGenre != null) {
     await CuratedArtistsService.instance.whenReady();
     final catalog = CuratedArtistsService.instance.artistsFor(catalogGenre);
     if (catalog.isNotEmpty) {
@@ -344,7 +422,7 @@ final categoryArtistsProvider =
     }
   }
 
-  final seeds = seedsFor(query);
+  final seeds = chartSeeds.isNotEmpty ? chartSeeds : seedsFor(query);
   if (seeds.isNotEmpty) {
     final artists = <CategoryArtist>[];
     final seen = <String>{};
@@ -389,16 +467,8 @@ final categoryTracksProvider =
   final year = DateTime.now().year;
   final catalogGenre = catalogGenreFor(query);
   List<String> seeds;
-  if (catalogGenre != null) {
-    await CuratedArtistsService.instance.whenReady();
-    seeds = CuratedArtistsService.instance
-        .artistsFor(catalogGenre)
-        .take(8)
-        .map((a) => a.name)
-        .toList();
-  } else {
-    seeds = seedsFor(query);
-  }
+  seeds = await genreSeedArtists(catalogGenre);
+  if (seeds.isEmpty) seeds = seedsFor(query);
   final yearTerm = query.contains(year.toString())
       ? query
       : '$query $year';

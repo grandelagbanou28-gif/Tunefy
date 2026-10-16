@@ -152,6 +152,33 @@ class ThemeLogic {
     );
   }
 
+  /// Material paints a pale wash under whatever you tap: the ripple
+  /// (`splashColor`), the pressed highlight (`highlightColor`) and, on the
+  /// M3 buttons, a `overlayColor` state derived from the colour scheme. On this
+  /// dark UI that reads as a light flash, and the user wants none of it — so
+  /// every theme is post-processed to switch the ink effects off app-wide.
+  static ThemeData _noInkFlash(ThemeData theme) {
+    const noOverlay = WidgetStatePropertyAll<Color>(Colors.transparent);
+    ButtonStyle merged(ButtonStyle? existing) =>
+        (existing ?? const ButtonStyle()).copyWith(overlayColor: noOverlay);
+    return theme.copyWith(
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      splashFactory: NoSplash.splashFactory,
+      textButtonTheme: TextButtonThemeData(style: merged(theme.textButtonTheme.style)),
+      elevatedButtonTheme:
+          ElevatedButtonThemeData(style: merged(theme.elevatedButtonTheme.style)),
+      filledButtonTheme:
+          FilledButtonThemeData(style: merged(theme.filledButtonTheme.style)),
+      outlinedButtonTheme:
+          OutlinedButtonThemeData(style: merged(theme.outlinedButtonTheme.style)),
+      iconButtonTheme: IconButtonThemeData(style: merged(theme.iconButtonTheme.style)),
+      navigationBarTheme: theme.navigationBarTheme.copyWith(
+        overlayColor: noOverlay,
+      ),
+    );
+  }
+
   static ThemeData createThemeData(
     MaterialColor? primarySwatch,
     ThemeType themeType, {
@@ -294,11 +321,11 @@ class ThemeLogic {
         dialogTheme: DialogThemeData(backgroundColor: isAmoled ? Colors.black : const Color(0xFF181818)),
         tabBarTheme: const TabBarThemeData(indicatorColor: Colors.white),
       );
-      return baseTheme.copyWith(
+      return _noInkFlash(baseTheme.copyWith(
         textTheme: fontFamily == 'Karst'
             ? baseTheme.textTheme.apply(fontFamily: 'Karst')
             : GoogleFonts.getTextTheme(fontFamily, baseTheme.textTheme),
-      );
+      ));
     } else if (themeType == ThemeType.light) {
       SystemChrome.setSystemUIOverlayStyle(
         SystemUiOverlayStyle(
@@ -392,11 +419,11 @@ class ThemeLogic {
           ),
         ),
       );
-      return baseTheme.copyWith(
+      return _noInkFlash(baseTheme.copyWith(
         textTheme: fontFamily == 'Karst'
             ? baseTheme.textTheme.apply(fontFamily: 'Karst')
             : GoogleFonts.getTextTheme(fontFamily, baseTheme.textTheme),
-      );
+      ));
     } else {
       SystemChrome.setSystemUIOverlayStyle(
         SystemUiOverlayStyle(
@@ -491,11 +518,11 @@ class ThemeLogic {
           ),
         ),
       );
-      return baseTheme.copyWith(
+      return _noInkFlash(baseTheme.copyWith(
         textTheme: fontFamily == 'Karst'
             ? baseTheme.textTheme.apply(fontFamily: 'Karst')
             : GoogleFonts.getTextTheme(fontFamily, baseTheme.textTheme),
-      );
+      ));
     }
   }
 }

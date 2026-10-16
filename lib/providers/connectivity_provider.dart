@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/utils/net_guard.dart';
 
 /// Live connectivity, seeded with the current status so the first value is
 /// available immediately (the raw `onConnectivityChanged` stream only fires
@@ -11,7 +12,10 @@ import 'package:muzo/services/storage_service.dart';
 /// online until the network flaps).
 final connectivityStreamProvider =
     StreamProvider<List<ConnectivityResult>>((ref) async* {
-  yield await Connectivity().checkConnectivity();
+  // Borné (safeConnectivity) : un appel de canal sans réponse laisserait ce
+  // StreamProvider en `loading` éternel et tous les écrans qui en dépendent
+  // penseraient qu'ils sont hors ligne.
+  yield await safeConnectivity();
   yield* Connectivity().onConnectivityChanged;
 });
 
@@ -46,5 +50,9 @@ final isOfflineProvider = Provider<bool>((ref) {
   if (results == null || results.isEmpty) return false;
   return !results.contains(ConnectivityResult.mobile) &&
       !results.contains(ConnectivityResult.wifi) &&
-      !results.contains(ConnectivityResult.ethernet);
+      !results.contains(ConnectivityResult.ethernet) &&
+      // A VPN-only route still carries internet (the test rig tunnels the
+      // phone over USB with no Wi-Fi at all) — treating it as offline froze
+      // every cached surface while the network was working.
+      !results.contains(ConnectivityResult.vpn);
 });

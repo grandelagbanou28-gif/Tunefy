@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -39,40 +40,70 @@ class DownloadNotifier extends StateNotifier<DownloadState> {
 
   DownloadNotifier(this.ref) : super(DownloadState());
 
+  /// Downloads already in flight and the taps waiting for a slot. "Download
+  /// all" on an artist page used to start ~100 simultaneous multi-source
+  /// races, which got the resolvers rate-limited and made most of those
+  /// downloads fail — three at a time keeps the network responsive and every
+  /// track of the list gets its turn.
+  static const int _maxConcurrent = 3;
+  int _running = 0;
+  final List<Completer<void>> _waiters = [];
+
+  Future<void> _acquireSlot() async {
+    while (_running >= _maxConcurrent) {
+      final waiter = Completer<void>();
+      _waiters.add(waiter);
+      await waiter.future;
+    }
+    _running++;
+  }
+
+  void _releaseSlot() {
+    _running--;
+    if (_waiters.isNotEmpty && _running < _maxConcurrent) {
+      _waiters.removeAt(0).complete();
+    }
+  }
+
   Future<bool> startDownload(MuzoItem result) async {
     if (result.videoId == null) return false;
 
-    // Add to active downloads
-    state = state.copyWith(
-      activeDownloads: {...state.activeDownloads, result.videoId!: result},
-      progressMap: {...state.progressMap, result.videoId!: 0.0},
-    );
+    await _acquireSlot();
+    try {
+      // Add to active downloads
+      state = state.copyWith(
+        activeDownloads: {...state.activeDownloads, result.videoId!: result},
+        progressMap: {...state.progressMap, result.videoId!: 0.0},
+      );
 
-    final success = await _downloadService.downloadSong(
-      result,
-      onProgress: (received, total) {
-        if (total != -1) {
-          final progress = received / total;
-          state = state.copyWith(
-            progressMap: {...state.progressMap, result.videoId!: progress},
-          );
-        }
-      },
-    );
+      final success = await _downloadService.downloadSong(
+        result,
+        onProgress: (received, total) {
+          if (total != -1) {
+            final progress = received / total;
+            state = state.copyWith(
+              progressMap: {...state.progressMap, result.videoId!: progress},
+            );
+          }
+        },
+      );
 
-    // Remove from active downloads
-    final newActive = Map<String, MuzoItem>.from(state.activeDownloads);
-    newActive.remove(result.videoId);
+      // Remove from active downloads
+      final newActive = Map<String, MuzoItem>.from(state.activeDownloads);
+      newActive.remove(result.videoId);
 
-    final newProgress = Map<String, double>.from(state.progressMap);
-    newProgress.remove(result.videoId);
+      final newProgress = Map<String, double>.from(state.progressMap);
+      newProgress.remove(result.videoId);
 
-    state = state.copyWith(
-      activeDownloads: newActive,
-      progressMap: newProgress,
-    );
+      state = state.copyWith(
+        activeDownloads: newActive,
+        progressMap: newProgress,
+      );
 
-    return success;
+      return success;
+    } finally {
+      _releaseSlot();
+    }
   }
 
   /// Downloads a clip as a real VIDEO file and saves it to the device

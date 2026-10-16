@@ -62,12 +62,18 @@ final artistConcertsProvider =
       if (ConcertService.geminiQuotaBlocked) {
         await box.put(quotaKey, _today());
       }
-      // An empty list is stored as an empty list on purpose: it is the answer,
-      // not a failure worth retrying five times a minute.
-      await box.put(cacheKey, {
-        'ts': DateTime.now().millisecondsSinceEpoch,
-        'events': events.map((e) => e.toJson()).toList(),
-      });
+      // An empty list is normally stored as the answer, not a failure. The one
+      // exception: when no source was configured (build-time keys absent), an
+      // empty result is meaningless and must NOT be cached, otherwise the
+      // artist stays empty for hours even after the keys are injected.
+      final worthCaching =
+          events.isNotEmpty || ConcertService.isConfigured;
+      if (worthCaching) {
+        await box.put(cacheKey, {
+          'ts': DateTime.now().millisecondsSinceEpoch,
+          'events': events.map((e) => e.toJson()).toList(),
+        });
+      }
     } catch (_) {}
   }
   return events;

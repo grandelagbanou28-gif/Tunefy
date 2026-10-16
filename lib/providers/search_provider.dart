@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:muzo/utils/net_guard.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
@@ -14,6 +15,7 @@ import 'package:muzo/services/genre_catalog.dart';
 import 'package:muzo/services/sub_category_seeds.dart';
 import 'package:muzo/services/jamendo_api_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/strict_category_filter.dart';
 import 'package:muzo/services/category_resolution_service.dart';
 import 'package:muzo/services/category_resolvers.dart';
@@ -79,42 +81,136 @@ class SearchResultsNotifier
   Future<void> _search(String query, String filter) async {
     state = const AsyncValue.loading();
     _continuationToken = null;
+    // ─── CHIEN DE GARDE ───
+    // Mesuré sur l'appareil (2026-10-15) : les 6 rayons répondaient 200 avec
+    // des résultats et l'écran restait malgré tout en rotation des minutes.
+    // Plus AUCUNE étape ne peut laisser `loading` : au bout de 20 s on sort
+    // sur un état affichable au lieu d'une rotation éternelle.
+    // Évolué le même jour : « la barre de recherche ne filtre rien ». Le
+    // watchdog rendait une liste VIDE, donc l'écran « aucun résultat » ; alors
+    // que la dernière réponse réseau de cette requête dort dans le cache
+    // local. Il la sert désormais, et il ne se déclenche plus dès qu'un rayon
+    // a publié (l'état n'est plus `loading`).
+    final watchdog = Timer(const Duration(seconds: 20), () {
+      if (!mounted || !state.isLoading) return;
+      debugPrint('SearchResultsNotifier: WATCHDOG — "$query" ($filter) '
+          'bloquée depuis 20 s, sortie forcée sur le cache local');
+      unawaited(_rescueFromCache(query, filter));
+    });
+    // Offline: never wait on the network. Search the local library plus the
+    // last results this query produced while online, exactly like Spotify's
+    // offline search keeps showing titles instead of an error.
+    if (await ContentCacheService.isOffline()) {
+      watchdog.cancel();
+      state = AsyncValue.data(await _offlineResults(query, filter));
+      return;
+    }
     try {
+      debugPrint('SearchResultsNotifier: en ligne "$query" ($filter)');
       if (filter == 'all') {
+        await _primeFromCache(query, filter);
         // Run each category search independently and NEVER let one failing
         // or slow sibling abort the whole merge (otherwise a flaky
         // videos/channels call could wipe out the artists that were fetched
         // fine). A failed sub-search simply contributes nothing.
         // Each bucket is ranked against the query so weak backend hits for
         // that category never outrank a real title/artist match.
-        Future<List<MuzoItem>> safe(String f, String category) {
-          return _api
-              .search(query, filter: f)
-              .then((res) {
-                final tagged = res.results
-                    .map((x) => x.copyWith(category: category))
-                    .toList();
-                return SearchRelevance.rank(tagged, query, f);
-              })
-              .catchError((Object e, StackTrace st) {
-                debugPrint('search <all> $f failed: $e');
-                return <MuzoItem>[];
-              });
+        // Les six rayons étaient attendus ENSEMBLE (`Future.wait`) : le plus
+        // lent — souvent le worker qui relance un scrape — faisait taire les
+        // cinq autres pendant toute sa latence, et le watchdog de 20 s
+        // transformait cette attente en écran « aucun résultat ». Chaque rayon
+        // publie donc dès qu'il répond, dans un ordre de catégorie fixe pour
+        // que la liste ne saute pas d'une publication à l'autre.
+        const buckets = <(String, String)>[
+          ('songs', 'Songs'),
+          ('videos', 'Videos'),
+          ('albums', 'Albums'),
+          ('artists', 'Artists'),
+          ('playlists', 'Playlists'),
+          ('channels', 'Channels'),
+        ];
+        final byIndex = <int, List<MuzoItem>>{};
+        final clock = Stopwatch()..start();
+        void publishArrived() {
+          if (!mounted) return;
+          // Une frappe plus récente tient l'écran : ne rien publier pour elle.
+          if (ref.read(searchQueryProvider) != query ||
+              ref.read(searchFilterProvider) != filter) {
+            return;
+          }
+          final indices = byIndex.keys.toList()..sort();
+          final arrived = indices.expand((i) => byIndex[i]!).toList();
+          if (arrived.isEmpty) return;
+          state = AsyncValue.data(_dedupeSongs(arrived));
         }
 
-        final futures = [
-          safe('songs', 'Songs'),
-          safe('videos', 'Videos'),
-          safe('albums', 'Albums'),
-          safe('artists', 'Artists'),
-          safe('playlists', 'Playlists'),
-          safe('channels', 'Channels'),
-        ];
-        final resultsArray = await Future.wait(futures);
+        final futures = <Future<void>>[];
+        for (var i = 0; i < buckets.length; i++) {
+          final filterName = buckets[i].$1;
+          final category = buckets[i].$2;
+          futures.add(
+              _api
+                  .search(query, filter: filterName)
+                  .then((res) {
+                    final tagged = res.results
+                        .map((x) => x.copyWith(category: category))
+                        .toList();
+                    byIndex[i] = SearchRelevance.rank(tagged, query, filterName);
+                    debugPrint('SearchResultsNotifier: rayon $filterName = '
+                        '${byIndex[i]!.length} résultat(s) '
+                        'à +${clock.elapsedMilliseconds} ms');
+                    publishArrived();
+                  })
+                  .catchError((Object e) {
+                    debugPrint('search <all> $filter failed: $e');
+                    byIndex[i] = const <MuzoItem>[];
+                  }));
+        }
+        await Future.wait(futures);
+        debugPrint('SearchResultsNotifier: 6 rayons terminés '
+            'en ${clock.elapsedMilliseconds} ms');
         _continuationToken = null;
         // Newest-first re-rank used to run here and buried exact matches;
         // relevance is decided per-category above (age is only a tie-break).
+        final resultsArray = [
+          for (var i = 0; i < buckets.length; i++)
+            byIndex[i] ?? const <MuzoItem>[],
+        ];
         var merged = resultsArray.expand((i) => i).toList();
+
+        // ─── AFFICHE D'ABORD ───
+        // Les 6 rayons contiennent déjà de vrais titres : on les publie tout
+        // de suite. Mesuré sur l'appareil le 2026-10-15 : chaque rayon avait
+        // répondu 200 avec des résultats, mais la rotation continuait des
+        // MINUTES car un `await` de l'enrichissement ci-dessous ne se
+        // terminait jamais — la liste ne doit donc JAMAIS dépendre de ces
+        // extras optionnels.
+        final baseSnapshot = _dedupeSongs(merged);
+        // Une réponse réseau vide ne doit pas effacer ce que le cache venait
+        // de resservir : `publishArrived()` a déjà peint l'écran dès qu'un
+        // rayon a répondu, ici on ne peint que si le merge a des lignes.
+        if (baseSnapshot.isNotEmpty) {
+          state = AsyncValue.data(baseSnapshot);
+          unawaited(ContentCacheService.instance
+              .write('search|$filter|$query', baseSnapshot));
+        }
+        debugPrint('SearchResultsNotifier: ${baseSnapshot.length} titres '
+            'publiés (avant enrichissement)');
+
+        // The backend's album bucket is its weakest one, so real catalog
+        // albums are merged into every "All" answer. Chaque étape est
+        // BORNÉE : une source qui ne répond plus ne peut plus figer le
+        // pipeline (l'état étant déjà peint, le pire cas est l'absence
+        // des extras).
+        try {
+          merged = _withCatalogAlbums(
+            merged,
+            await _catalogAlbums(query).timeout(const Duration(seconds: 10)),
+          );
+          debugPrint('SearchResultsNotifier: catalogue albums -> ${merged.length}');
+        } catch (e) {
+          debugPrint('SearchResultsNotifier: catalogue albums échoué: $e');
+        }
 
         // When the YouTube backend is thin, discover extra titles from the
         // working keyless APIs (MusicBrainz / Spotify / iTunes) and
@@ -122,8 +218,12 @@ class SearchResultsNotifier
         if (merged.length < 20 && query.trim().isNotEmpty) {
           try {
             final multi = ref.read(multiApiServiceProvider);
-            final discovered = await multi.discover(query);
-            final playable = await multi.resolveToPlayable(discovered);
+            final discovered = await multi
+                .discover(query)
+                .timeout(const Duration(seconds: 15));
+            final playable = await multi
+                .resolveToPlayable(discovered)
+                .timeout(const Duration(seconds: 20));
             final known = merged
                 .map((r) => r.title.toLowerCase().trim())
                 .toSet();
@@ -138,51 +238,306 @@ class SearchResultsNotifier
           }
         }
 
-        state = AsyncValue.data(merged);
-      } else if (filter == 'songs') {
-        // Songs chip → the artist's full tracklist (100+ tracks), exactly
-        // like the artist page's "Populaires".
-        final artistSongs =
-            await ref.read(artistSongsProvider(query).future);
-        _continuationToken = null;
-        state = AsyncValue.data(_dedupeSongs(artistSongs));
-      } else if (filter == 'albums') {
-        // Albums chip → only albums of the artist.
-        final albums = await ref.read(artistAlbumsProvider(query).future);
-        _continuationToken = null;
-        state = AsyncValue.data(_dedupeSongs(albums));
-      } else if (filter == 'playlists') {
-        // Playlists chip → only playlists of the artist.
-        final playlists =
-            await ref.read(artistPlaylistsProvider(query).future);
-        _continuationToken = null;
-        state = AsyncValue.data(_dedupeSongs(playlists));
+        // Une frappe plus récente possède désormais l'écran : ne pas
+        // écraser SON état avec celui-ci.
+        if (!mounted ||
+            ref.read(searchQueryProvider) != query ||
+            ref.read(searchFilterProvider) != filter) {
+          return;
+        }
+        if (merged.isNotEmpty) {
+          state = AsyncValue.data(merged);
+        }
       } else if (filter == 'videos') {
-        // Videos chip → viewable videos of the artist.
+        // Videos chip → real video results for the query (NOT an artist's
+        // whole discography).
+        await _primeFromCache(query, filter);
         final response = await _api.search(query, filter: 'videos');
         _continuationToken = response.continuationToken;
         final viewable = response.results
             .where((r) => r.videoId != null && r.videoId!.isNotEmpty)
             .map((r) => r.copyWith(resultType: 'video'))
             .toList();
+        if (!_ownsScreen(query, filter)) return;
         state = AsyncValue.data(SearchRelevance.rank(viewable, query, filter));
       } else {
+        // Songs / Albums / Artists / Playlists chips → a real TYPED search for
+        // the query, gated by relevance. The old behaviour treated the query as
+        // an ARTIST NAME (artistSongs/Albums/Playlists providers): searching a
+        // song title dumped some loosely-matched artist's entire discography
+        // into "Songs" and re-labelled loose rows as Albums/Playlists. This is
+        // the same per-category path the working "All" tab uses.
+        await _primeFromCache(query, filter);
         final response = await _api.search(query, filter: filter);
         _continuationToken = response.continuationToken;
-        // Type-gate + score against the query (age only breaks ties) so
-        // Artists chips never show off-topic backend hits.
+        var results = _normalizeEntityTypes(response.results, filter);
+        if (filter == 'albums') {
+          results = _withCatalogAlbums(results, await _catalogAlbums(query));
+        }
+        // Type-gate + score against the query (age only breaks ties) so a chip
+        // never shows off-topic backend hits.
+        if (!_ownsScreen(query, filter)) return;
         state = AsyncValue.data(
-          SearchRelevance.rank(
-            _normalizeEntityTypes(response.results, filter),
-            query,
-            filter,
-          ),
+          SearchRelevance.rank(results, query, filter),
         );
       }
       state = AsyncValue.data(_dedupeSongs(state.value ?? []));
+      final snapshot = state.value ?? const <MuzoItem>[];
+      if (snapshot.isNotEmpty) {
+        // Remember the answer so this exact query still resolves offline.
+        unawaited(ContentCacheService.instance
+            .write('search|$filter|$query', snapshot));
+      }
     } catch (e, st) {
+      // Network failure with a device that still holds content: show the
+      // local answer instead of a bare error page.
+      List<MuzoItem> fallback = const <MuzoItem>[];
+      try {
+        // Borné : une recherche locale qui ne répond pas ne doit pas non
+        // plus laisser la rotation en place — l'état d'erreur plus bas est
+        // la fin sûre.
+        fallback = await _offlineResults(query, filter)
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {}
+      if (fallback.isNotEmpty) {
+        state = AsyncValue.data(fallback);
+        return;
+      }
+      // Des lignes sont peut-être déjà à l'écran (cache resservi au tap de
+      // puce) : les effacer au profit d'une page d'erreur était pire que
+      // l'absence de réponse réseau.
+      final onScreen = state.value;
+      if (onScreen != null && onScreen.isNotEmpty) return;
       state = AsyncValue.error(e, st);
+    } finally {
+      watchdog.cancel();
     }
+  }
+
+  /// L'écran appartient-il encore à CETTE requête ? Une frappe ou un tap de
+  /// puce parti pendant l'appel réseau a la main, et ses résultats à lui
+  /// arrivent par son propre appel.
+  bool _ownsScreen(String query, String filter) {
+    return mounted &&
+        ref.read(searchQueryProvider) == query &&
+        ref.read(searchFilterProvider) == filter;
+  }
+
+  /// Le tap sur une puce doit tout de suite montrer quelque chose : la
+  /// dernière réponse réseau de ce couple requête/filtre est resservie
+  /// pendant que l'appel en cours répond. Mesuré sur l'appareil le
+  /// 2026-10-15 : le worker met 20-40 s à relancer un scrape, et pendant ce
+  /// temps l'écran affichait « aucun résultat ».
+  Future<void> _primeFromCache(String query, String filter) async {
+    if (!mounted || !state.isLoading) return;
+    List<MuzoItem> cached = const <MuzoItem>[];
+    try {
+      cached = (await ContentCacheService.instance
+              .readStale('search|$filter|$query')) ??
+          const <MuzoItem>[];
+    } catch (_) {}
+    if (cached.isEmpty || !_ownsScreen(query, filter) || !state.isLoading) {
+      return;
+    }
+    debugPrint('SearchResultsNotifier: "$query" ($filter) — ${cached.length} '
+        'résultat(s) du cache servis en attendant le réseau');
+    state = AsyncValue.data(cached);
+  }
+
+  /// Le chien de garde a la parole : 20 s se sont écoulées sans qu'aucun
+  /// rayon n'ait publié. Rendu du cache réseau, puis de la bibliothèque
+  /// locale, et ce n'est qu'au pire une liste vide — plus jamais une
+  /// rotation, et plus jamais « la recherche ne filtre rien ».
+  Future<void> _rescueFromCache(String query, String filter) async {
+    await _primeFromCache(query, filter);
+    if (!mounted || !state.isLoading) return;
+    try {
+      final local = await _offlineResults(query, filter)
+          .timeout(const Duration(seconds: 3));
+      if (local.isNotEmpty && _ownsScreen(query, filter) && state.isLoading) {
+        debugPrint('SearchResultsNotifier: "$query" ($filter) — secours sur '
+            'la bibliothèque locale (${local.length} élément(s))');
+        state = AsyncValue.data(local);
+        return;
+      }
+    } catch (_) {}
+    if (!_ownsScreen(query, filter) || !state.isLoading) return;
+    state = const AsyncValue.data(<MuzoItem>[]);
+  }
+
+  /// Everything already on the device that matches [query]: downloads,
+  /// favourites, playlist songs and history — plus the last online results
+  /// for this exact query/filter, so a title browsed once stays findable
+  /// without a network.
+  /// Real albums for [query] from Deezer's catalogue. The YouTube backend's
+  /// album bucket answers with loose singles, compilations and cover versions
+  /// (or nothing at all), which is why the Albums tab never showed real
+  /// albums — and a `dz:` browseId opens AlbumScreen's Deezer tracklist, so
+  /// these rows are fully browsable, not decoration.
+  Future<List<MuzoItem>> _catalogAlbums(String query) async {
+    if (query.trim().isEmpty) return const <MuzoItem>[];
+    try {
+      final albums = await ref
+          .read(deezerApiServiceProvider)
+          .searchAlbums(query, limit: 12)
+          .timeout(const Duration(seconds: 9));
+      return albums
+          .map((a) => a.copyWith(category: 'Albums'))
+          .toList();
+    } catch (e) {
+      debugPrint('Deezer catalog albums failed for "$query": $e');
+      return const <MuzoItem>[];
+    }
+  }
+
+  /// Append catalog albums to backend albums, dropping catalog duplicates.
+  /// Only real album entities occupy that namespace, so a single that shares
+  /// a name with an album cannot evict the album card.
+  List<MuzoItem> _withCatalogAlbums(
+    List<MuzoItem> results,
+    List<MuzoItem> catalog,
+  ) {
+    final known = results
+        .where((r) => (r.browseId ?? '').isNotEmpty && r.videoId == null)
+        .map(_albumKey)
+        .toSet();
+    return [...results, ...catalog.where((a) => known.add(_albumKey(a)))];
+  }
+
+  Future<List<MuzoItem>> _offlineResults(String query, String filter) async {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const <MuzoItem>[];
+    final storage = ref.read(storageServiceProvider);
+
+    bool matches(MuzoItem item) {
+      final album = item.album?.name ?? '';
+      final hay = '${item.title} ${item.displayArtist} $album'.toLowerCase();
+      return hay.contains(q);
+    }
+
+    final downloaded = <MuzoItem>[];
+    for (final d in storage.getDownloads()) {
+      try {
+        downloaded.add(
+            MuzoItem.fromJson(Map<String, dynamic>.from(d['result'])));
+      } catch (_) {}
+    }
+    final favorites = storage.getFavorites();
+    final history = storage.getHistory();
+    final fromPlaylists = <MuzoItem>[];
+    for (final p in storage.playlistsListenable.value) {
+      fromPlaylists.addAll(p.songs);
+    }
+    final library = <MuzoItem>[...downloaded, ...favorites, ...fromPlaylists];
+    final localSongs = <MuzoItem>[
+      for (final s in library)
+        if (matches(s)) s,
+      for (final s in history)
+        if (matches(s)) s,
+    ];
+
+    final remembered = <MuzoItem>[
+      ...await ContentCacheService.instance.readStale(
+            'search|$filter|$query',
+            maxAge: ContentCacheService.offlineCeiling,
+          ) ??
+          const <MuzoItem>[],
+      // Et au-delà de la recherche exacte : tout ce qui a déjà été affiché
+      // quelque part dans l'app et qui correspond au texte cherché.
+      ...await ContentCacheService.instance.cachedSongsMatching(q),
+    ];
+
+    if (filter == 'artists') {
+      final out = <MuzoItem>[];
+      final seen = <String>{};
+      for (final a in remembered) {
+        if ((a.resultType == 'artist' || a.resultType == 'channel') &&
+            seen.add(a.title.trim().toLowerCase())) {
+          out.add(a);
+        }
+      }
+      // Derive the artists of the local library so an artist the user owns
+      // music from is still reachable offline (the artist page itself has a
+      // 365-day cache + download merge).
+      for (final s in library) {
+        final artist = s.displayArtist.trim();
+        if (artist.isEmpty || artist == 'Unknown') continue;
+        if (!artist.toLowerCase().contains(q)) continue;
+        if (!seen.add(artist.trim().toLowerCase())) continue;
+        out.add(MuzoItem(
+          title: artist,
+          thumbnails: s.thumbnails,
+          resultType: 'artist',
+          isExplicit: false,
+        ));
+      }
+      return out;
+    }
+
+    if (filter == 'albums') {
+      final out = <MuzoItem>[];
+      final seen = <String>{};
+      for (final a in remembered) {
+        if (a.resultType == 'album' && seen.add(a.title.trim().toLowerCase())) {
+          out.add(a);
+        }
+      }
+      for (final s in library) {
+        final album = s.album?.name.trim() ?? '';
+        if (album.isEmpty) continue;
+        if (!album.toLowerCase().contains(q)) continue;
+        if (!seen.add(album.trim().toLowerCase())) continue;
+        out.add(MuzoItem(
+          title: album,
+          thumbnails: s.thumbnails,
+          resultType: 'album',
+          isExplicit: false,
+          artists: s.artists,
+          channelName: s.channelName,
+        ));
+      }
+      return out;
+    }
+
+    if (filter == 'playlists') {
+      final out = <MuzoItem>[];
+      final seen = <String>{};
+      for (final p in remembered) {
+        if (p.resultType == 'playlist' &&
+            seen.add(p.title.trim().toLowerCase())) {
+          out.add(p);
+        }
+      }
+      for (final p in storage.playlistsListenable.value) {
+        if (!p.name.toLowerCase().contains(q)) continue;
+        if (!seen.add(p.name.trim().toLowerCase())) continue;
+        // 'local:' marks a playlist stored on this device: the search screens
+        // route those to the local playlist page instead of a YouTube id.
+        out.add(MuzoItem(
+          title: p.name,
+          thumbnails: const [],
+          resultType: 'playlist',
+          isExplicit: false,
+          browseId: 'local:${p.name}',
+        ));
+      }
+      return out;
+    }
+
+    final out = <MuzoItem>[];
+    if (filter != 'videos') out.addAll(localSongs);
+    for (final r in remembered) {
+      if (filter == 'videos' && r.resultType != 'video') continue;
+      if (filter == 'songs' &&
+          (r.resultType == 'artist' ||
+              r.resultType == 'album' ||
+              r.resultType == 'playlist' ||
+              r.resultType == 'channel')) {
+        continue;
+      }
+      out.add(r);
+    }
+    return _dedupeSongs(out);
   }
 
   Future<void> loadMore() async {
@@ -220,6 +575,33 @@ final searchSuggestionsProvider = FutureProvider.family<List<String>, String>((
   query,
 ) async {
   if (query.isEmpty) return [];
+  // Offline suggestions come from what is actually on the device: history,
+  // favourites and downloads, so the type-ahead keeps working without a net.
+  if (await ContentCacheService.isOffline()) {
+    final storage = ref.read(storageServiceProvider);
+    final seen = <String>{};
+    final out = <String>[];
+    void add(String title) {
+      final t = title.trim();
+      if (t.isEmpty || !t.toLowerCase().contains(query.trim().toLowerCase())) {
+        return;
+      }
+      if (seen.add(t.toLowerCase()) && out.length < 8) out.add(t);
+    }
+
+    for (final h in storage.getHistory()) {
+      add(h.title);
+    }
+    for (final f in storage.getFavorites()) {
+      add(f.title);
+    }
+    for (final d in storage.getDownloads()) {
+      try {
+        add(MuzoItem.fromJson(Map<String, dynamic>.from(d['result'])).title);
+      } catch (_) {}
+    }
+    return out;
+  }
   final apiService = ref.read(muzoApiServiceProvider);
   return await apiService.getSearchSuggestions(query);
 });
@@ -240,15 +622,31 @@ final searchSuggestionsProvider = FutureProvider.family<List<String>, String>((
 final categorySongsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
   if (query.isEmpty) return [];
-
-  // ─── Catalog-first: real artists from the curated catalog ───
-  // When the query maps to a catalog genre (hip-hop, afrobeats, latin, ...)
-  // the shelf is filled with real songs of real verified catalog artists —
-  // searching each artist by exact name — exactly like the Home shelves.
-  // Falls through to the generic pipeline when there is no catalog genre.
-  // Watching the catalog service re-checks the catalog-first branch once the
-  // 72h load finishes, so the shelf upgrades automatically.
+  // Re-check once the 72h catalog load completes so the genre-first shelf
+  // upgrades itself. The watch lives here (before the cache short-circuit) so
+  // [ContentCacheService.shelfCached]'s body stays free of ref.watch-after-await.
   ref.watch(curatedArtistsServiceProvider);
+  return ContentCacheService.shelfCached(
+    // `v2` invalidates the two-day snapshots built from the hand-typed artist
+    // catalog, so the chart-based genre rows appear on this install today
+    // instead of after the old cache expires.
+    'catsongs2|$query',
+    () => _buildCategorySongs(ref, query),
+  );
+});
+
+/// The real song pipeline behind a category's main "songs" strip: the genre
+/// chart first, then the curated catalog artists, then
+/// Jamendo/Audius/ytify. Runs online; offline (or on a
+/// failed/empty fetch) the caller replays the last disk snapshot.
+/// ─── Genre-first: whatever actually charts in that genre right now ───
+/// When the query maps to a genre ([catalogGenreFor]), the shelf is filled from
+/// Apple's per-country most-played charts filtered on each song's own genre
+/// label, so the row is the genre's current hits rather than approximate
+/// matches of a search phrase.
+/// Falls through to the generic pipeline when there is no genre chart nor
+/// catalog bucket for it.
+Future<List<MuzoItem>> _buildCategorySongs(Ref ref, String query) async {
   final genreKey = catalogGenreFor(query);
   if (genreKey != null) {
     final cat = await ref.read(
@@ -385,7 +783,7 @@ final categorySongsProvider =
   }).toList());
 
   return songs.take(15).toList();
-});
+}
 
 /// Loose conformance guard for ytify/iTunes results in a genre section: only
 /// reject a song when its title/artist *explicitly* names a conflicting genre
@@ -705,26 +1103,85 @@ final categorySubSongsProvider =
     // Last-known-good content, bounded to 7 days. Used ONLY when the live
     // attempt produced nothing, so a saturated backend (every Home section
     // firing at launch) can never leave a shelf empty.
-    Future<List<MuzoItem>> lastKnown() async {
+    Future<List<MuzoItem>> lastKnown({Duration? maxAge}) async {
       try {
-        final stale =
-            await ContentCacheService.instance.readStale(cacheKey);
-        if (stale != null && stale.length >= 2) return stale;
+        final stale = await ContentCacheService.instance
+            .readStale(cacheKey, maxAge: maxAge);
+        if (stale != null && (stale.length >= 2 || maxAge != null)) {
+          return stale;
+        }
       } catch (_) {}
       return const <MuzoItem>[];
     }
 
+    // Offline: replay the last snapshot right away instead of starting a
+    // 100-second fetch that can only end on that very same fallback.
+    if (await ContentCacheService.isOffline()) {
+      return await lastKnown(maxAge: ContentCacheService.offlineCeiling);
+    }
+
+    // Le pipeline complet peut légitimement mettre 40-60 s (passes successives
+    // + file d'attente de recherches). L'écran, lui, doit montrer quelque chose
+    // tout de suite : on laisse courir la construction quelques secondes, sinon
+    // on sert le dernier instantané. Le futur abandonné va jusqu'au bout et
+    // écrit dans le cache (~ligne 1770), donc la prochaine visite tombe sur la
+    // version fraîche — page remplie immédiatement ET contenu qui rajeunit,
+    // comme Spotify.
+    final cachedUpFront = await lastKnown();
+    final live = _buildCategorySubSongs(ref, args);
+    // Démarrage à froid : le chart de genre Deezer est le seul flux sans clé
+    // qui répond en ~2 s avec de vraies pochettes. Il remplit le rayon pendant
+    // que le pipeline complet (35-80 s) tourne dans le dos et rafraîchit le
+    // cache pour la visite suivante — un rayon vide n'est jamais acceptable.
+    Future<List<MuzoItem>> coldGenreChart() async {
+      try {
+        final genreId = DeezerApiService.chartGenreFor('${args.sub} ${args.category}');
+        if (genreId == null) return const <MuzoItem>[];
+        final chart = await ref
+            .read(deezerApiServiceProvider)
+            .chartTracksInGenre(genreId, limit: 20)
+            .timeout(const Duration(seconds: 6),
+                onTimeout: () => const <MuzoItem>[]);
+        debugPrint('[ColdChart] ${args.category} > ${args.sub} '
+            'genre=$genreId tracks=${chart.length}');
+        return chart;
+      } catch (_) {
+        return const <MuzoItem>[];
+      }
+    }
+    // Mesuré sur l'appareil (18:16:03→18:16:29) : le worker répond en ~1 s par
+    // requête mais la file de 6 créneaux fait attendre chaque rayon. À 20 s de
+    // budget froid, Charts > Trending TIMEOUT systématiquement et Home reste
+    // vide. Porté à 35 s : assez pour que 6-8 recherches passent (une rangée
+    // visible), et le futur abandonné continue d'écrire le cache pour la
+    // visite suivante. Quand le cache existe déjà, 8 s suffisent — inchangé.
+    final budget = cachedUpFront.isNotEmpty
+        ? const Duration(seconds: 8)
+        : const Duration(seconds: 35);
     try {
-      final live = await _buildCategorySubSongs(ref, args)
-          .timeout(const Duration(seconds: 100));
-      if (live.isNotEmpty) return live;
+      final fast = await live.timeout(budget);
+      if (fast.isNotEmpty) return fast;
       debugPrint('[Pipe] ${args.category} > ${args.sub} EMPTY, using cache');
-      return await lastKnown();
+      if (cachedUpFront.isNotEmpty) return cachedUpFront;
+      // Nothing on disk either: show the genre chart now rather than an empty
+      // row, and only then let the pipeline finish for the cache.
+      final quick = await coldGenreChart();
+      if (quick.isNotEmpty) return quick;
+      return await live
+          .timeout(const Duration(seconds: 80))
+          .catchError((_) => const <MuzoItem>[]);
     } catch (_) {
       debugPrint('[Pipe] ${args.category} > ${args.sub} TIMEOUT');
       // Stale-while-revalidate: only now, with the live fetch having failed,
       // may the last-known content be shown.
-      return await lastKnown();
+      if (cachedUpFront.isNotEmpty) return cachedUpFront;
+      // Première visite, rien sur le disque : le chart de genre remplit le
+      // rayon immédiatement ; la construction continue d'écrire le cache.
+      final quick = await coldGenreChart();
+      if (quick.isNotEmpty) return quick;
+      return await live
+          .timeout(const Duration(seconds: 60))
+          .catchError((_) => const <MuzoItem>[]);
     }
   },
 );
@@ -748,15 +1205,19 @@ Future<List<MuzoItem>> _buildCategorySubSongs(
     // iTunes' podcast directory serves full-length MP3 episodes (user_track)
     // that the player streams natively. These sections exist to surface SHOWS,
     // not songs, so they are served exclusively from iTunes episodes — the
-    // generic 2-day cache below is never allowed to feed them old song lists.
+    // generic 3-day cache below is never allowed to feed them old song lists.
     // A dedicated fresh cache keeps reopen cheap while guaranteeing real
     // episodes (never genre songs).
+    // Rotation offset: refreshBucket porte déjà la graine par installation,
+    // donc deux utilisateurs d'un même genre ne partent pas au même point alors
+    // que le cache, lui, reste partagé.
     final bucket = ContentCacheService.refreshBucket;
     if (isSpokenCat) {
       final podCacheKey = 'podcat|$category|$sub';
       final podAudit = CategoryAudit(category: category, sub: sub);
       try {
-        final pc = await ContentCacheService.instance.readIfFresh(podCacheKey);
+        final pc = await ContentCacheService.instance
+            .readIfFresh(podCacheKey, maxAge: ContentCacheService.browseTtl);
         if (pc != null && pc.length >= 2) {
           podAudit.report('episodes-cache');
           return ContentCacheService.rotate(pc, bucket);
@@ -847,6 +1308,20 @@ Future<List<MuzoItem>> _buildCategorySubSongs(
         podAudit.report('episodes-error');
       }
 
+      // Nothing real from the directory: a hand-verified row from the static
+      // catalog is still real content, so try it before ending the section.
+      try {
+        final statics =
+            await CategoryContentService.instance.loadFor(category, sub);
+        if (statics.isNotEmpty) {
+          podAudit.report('episodes-static');
+          return ContentCacheService.rotate(
+            statics.map((s) => s.copyWith(verified: true)).toList(),
+            bucket,
+          );
+        }
+      } catch (_) {}
+
       // ─── HARD GATE: a spoken-word/podcast sub NEVER shows music tracks ───
       // When iTunes serves <3 real episodes (cache miss included) the section
       // returns empty — it must never fall through to the music pipeline and
@@ -855,14 +1330,15 @@ Future<List<MuzoItem>> _buildCategorySubSongs(
       return const <MuzoItem>[];
     }
 
-    // ─── Refresh cache (strict TTL) ───
+    // ─── Refresh cache (3-day browse window) ───
     // Only a FRESH entry may short-circuit the network: serving an expired one
     // here would pin the shelf to the same snapshot forever, which is exactly
     // what made a row look unchanged for days. The stale fallback now lives in
     // the provider wrapper and only kicks in if the live fetch fails.
     final cacheKey = 'catsub|$category|$sub';
     try {
-      final cached = await ContentCacheService.instance.readIfFresh(cacheKey);
+      final cached = await ContentCacheService.instance
+          .readIfFresh(cacheKey, maxAge: ContentCacheService.browseTtl);
       if (cached != null && cached.length >= 2) {
         return ContentCacheService.rotate(cached, bucket);
       }
@@ -1002,6 +1478,16 @@ Future<List<MuzoItem>> _buildCategorySubSongs(
     final seenIds = <String>{};
     final result = <MuzoItem>[];
 
+    /// Items that passed every rule except "this artist already leads another
+    /// section of the same page". The cross-section exclusion is what keeps a
+    /// category free of repeats, but in a 15-section category the last rows
+    /// (observed: Rap 90s, Trap FR) find all their artists already claimed and
+    /// come back empty. Sharing an artist with one other row is the lesser
+    /// evil; the salvage is only read when the section cannot reach the
+    /// 3-items minimum on its own.
+    final salvage = <MuzoItem>[];
+    final salvageArtists = <String>{};
+
     /// MusicBrainz-confirmed artists (geo/genre evidence) that may bypass the
     /// text gate — the ONLY exception to the strict rule, backed by real
     /// database records, never a guess.
@@ -1056,10 +1542,13 @@ Future<List<MuzoItem>> _buildCategorySubSongs(
           audit.rejectedBecause(CategoryRejectReason.artistLimit);
           continue;
         }
-        if (maxPerArtist <= 1 &&
-            artistKey.isNotEmpty &&
-            excluded.contains(artistKey)) {
+        if (artistKey.isNotEmpty && excluded.contains(artistKey)) {
           audit.rejectedBecause(CategoryRejectReason.excludedArtist);
+          if (artistKey.isNotEmpty &&
+              salvageArtists.add(artistKey) &&
+              salvage.length < 10) {
+            salvage.add(song);
+          }
           continue;
         }
 
@@ -1125,8 +1614,10 @@ audit.onAccepted();
         final countries = catLower == 'hit benin'
             ? const ['bj']
             : TrendingService.countriesForSub(sub);
+        ts('before-pools');
         final pools =
             await Future.wait(countries.map(TrendingService.topSongs));
+        ts('after-pools');
         final seenTrends = <String>{};
         final trends = <TrendSong>[];
         for (final pool in pools) {
@@ -1138,22 +1629,47 @@ audit.onAccepted();
           }
         }
         final api = ref.read(muzoApiServiceProvider);
-        for (final t in trends.take(16)) {
-          if (result.length >= 15) break;
-          try {
-            final resp = await api
+        // Une recherche par tendance, L'UNE APRÈS L'AUTRE : 16 × 8 s = 130 s
+        // avant le premier affichage (mesuré sur l'appareil, log
+        // « service-ready @130014ms »). Toutes sont lancées d'un coup — le
+        // plafond de 4 requêtes simultanées est déjà dans MuzoApiService — et
+        // on consomme les réponses AU FIL DE L'EAU : la file d'attente ne doit
+        // jamais faire perdre un lot déjà revenu. Pas de deadline ici : le
+        // provider sert le cache au bout de 20 s et ce qui suit ne bloque
+        // plus l'écran, il remplit juste le cache pour la prochaine visite.
+        final wantedTrends = trends.take(6).toList();
+        var trendsFetched = 0;
+        final trendStream = Stream<MuzoSearchResponse>.fromFutures([
+          for (final t in wantedTrends)
+            api
                 .search('${t.title} ${t.artist}', filter: 'songs')
-                .timeout(const Duration(seconds: 8));
-            addUnique(
-              resp.results.take(2).toList(),
-              applyConstraint: false,
-              sourceVerified: true,
-              maxPerArtist: 1,
-            );
-          } catch (_) {}
+                .timeout(const Duration(seconds: 15),
+                    onTimeout: () => MuzoSearchResponse(results: const []))
+                .catchError((_) => MuzoSearchResponse(results: const [])),
+        ]);
+        await for (final resp in trendStream) {
+          trendsFetched += resp.results.length;
+          addUnique(
+            resp.results.take(2).toList(),
+            applyConstraint: false,
+            sourceVerified: true,
+            maxPerArtist: 1,
+          );
+          if (result.length >= 15) break;
+          // Le provider, lui, abandonne à 20 s. Sans plafond ici la passe reste
+          // assise sur TOUTES les recherches : mesuré sur l'appareil
+          // (17:18:20 → 17:20:59), 10 recherches espacées de ~6 s = 3 minutes,
+          // donc Home affichait des rayons vides jusqu'à la visite d'après. Dès
+          // 3 titres et le budget d'affichage passé, ce qui est déjà revenu est
+          // rendu et écrit au cache — la règle du reste du pipeline.
+          if (result.length >= 3 &&
+              stopwatch.elapsed > const Duration(seconds: 13)) {
+            break;
+          }
         }
+        ts('after-trends');
         debugPrint(
-            '[Charts] "$category > $sub" trends=${trends.length} result=${result.length}');
+            '[Charts] "$category > $sub" trends=${trends.length} fetched=$trendsFetched result=${result.length}');
         if (result.length >= 3) {
           audit.report('charts');
           final chartList = result.take(15).toList();
@@ -1170,18 +1686,22 @@ audit.onAccepted();
     ts('service-ready');
 
     if (useCuratedFirst) {
-      // Curated seeds open the section: rotate per 2-day bucket so each
+      // Curated seeds open the section: rotate per 3-day bucket so each
       // refresh leads with different artists → genuinely different songs.
       final off = subSeeds.length > 1 ? bucket % subSeeds.length : 0;
       final orderedSeeds = ContentCacheService.rotate(subSeeds, off);
       final seedFutures = <Future<List<MuzoItem>>>[
-        for (final seed in orderedSeeds.take(10))
-          ref.watch(categorySongsProvider(seed).future)
+        for (final seed in orderedSeeds.take(6))
+          ref
+              .watch(categorySongsProvider(seed).future)
+              .timeout(const Duration(seconds: 22),
+                  onTimeout: () => const <MuzoItem>[])
               .catchError((_) => const <MuzoItem>[]),
       ];
       ts('before-seed-wait');
-      final batches = await Future.wait(seedFutures)
-          .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+      // Timeout PAR SEED : un `Future.wait` coupé à 15 s jetait aussi les
+      // graines déjà revenues — la section entière repartait à zéro.
+      final batches = await Future.wait(seedFutures);
       ts('after-seed-wait');
       for (final batch in batches) {
         addUnique(batch, maxPerArtist: 1);
@@ -1250,18 +1770,20 @@ audit.onAccepted();
       // primary authority.
       ts('else-branch: before-fallback-seeds, subSeeds=${subSeeds.length}');
       if (subSeeds.isNotEmpty) {
-        // Rotate the seed order per 2-day bucket so each refresh leads with
+        // Rotate the seed list on the 3-day bucket so each refresh leads with
         // different artists → genuinely different songs, not the same top hits.
         final off = subSeeds.length > 1 ? bucket % subSeeds.length : 0;
         final orderedSeeds = ContentCacheService.rotate(subSeeds, off);
         final seedFutures = <Future<List<MuzoItem>>>[
-          for (final seed in orderedSeeds.take(10))
-            ref.watch(categorySongsProvider(seed).future)
+          for (final seed in orderedSeeds.take(6))
+            ref
+                .watch(categorySongsProvider(seed).future)
+                .timeout(const Duration(seconds: 22),
+                    onTimeout: () => const <MuzoItem>[])
                 .catchError((_) => const <MuzoItem>[]),
         ];
         ts('fallback: before-seed-wait');
-        final batches = await Future.wait(seedFutures)
-            .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+        final batches = await Future.wait(seedFutures);
         ts('fallback: after-seed-wait');
         for (final batch in batches) {
           try {
@@ -1360,8 +1882,7 @@ audit.onAccepted();
       }
     }
 
-    // Last resort: genre batch from real keyless sources, then Dezeer catalog
-    // metadata resolved to full-length playable tracks.
+    // Last resort: genre batch from real keyless sources, then a plain search.
     if (result.isEmpty) {
       final plan = genrePlanFor(category, sub);
       if (!plan.isEmpty) {
@@ -1383,23 +1904,27 @@ audit.onAccepted();
           addUnique(_prioritizeWestern(resp.results));
         } catch (_) {}
       }
-      if (result.isEmpty) {
-        // Dezeer: real catalog metadata (title/artist/album/cover) resolved
-        // through the main search to playable YouTube tracks — the same
-        // contract as chart seeds.
+    }
+
+    // ─── Deezer genre-chart rescue ───
+    // Deezer's `/chart/{genreId}/tracks` is the one keyless feed that answers
+    // genuinely in-genre songs (its `/genre/{id}/…` sub-feeds ignore the id),
+    // so a thin section is finished from that chart instead of staying a
+    // keyword grab-bag. Seeds are metadata only; they are resolved to
+    // full-length YouTube tracks before they reach the shelf.
+    if (result.length < 7) {
+      final genreId = DeezerApiService.chartGenreFor('$sub $category');
+      if (genreId != null) {
         try {
-          final dzTerm = !plan.isEmpty
-              ? plan.ytifyTerm
-              : (isAll ? category : queryForSubCategory(category, sub));
-          final discovered =
-              await ref.read(deezerApiServiceProvider).searchTracks(dzTerm,
-                  limit: 8);
+          final chart = await ref
+              .read(deezerApiServiceProvider)
+              .chartTracksInGenre(genreId, limit: 25);
           final playable = await ref
               .read(multiApiServiceProvider)
-              .resolveToPlayable(discovered, max: 6);
-          addUnique(playable);
-          debugPrint(
-              '[Fallback-Deezer] "$category > $sub" resolved=${playable.length}');
+              .resolveToPlayable(chart, max: 14);
+          addUnique(playable, applyConstraint: false, maxPerArtist: 3);
+          debugPrint('[GenreChart] "$category > $sub" genre=$genreId '
+              'chart=${chart.length} resolved=${playable.length}');
         } catch (_) {}
       }
     }
@@ -1472,18 +1997,38 @@ audit.onAccepted();
           : 0;
       final rotatedSeeds = ContentCacheService.rotate(seedOrder, off);
       final fillFutures = <Future<List<MuzoItem>>>[
-        for (final seed in rotatedSeeds.take(14))
-          ref.watch(categorySongsProvider(seed).future)
+        for (final seed in rotatedSeeds.take(6))
+          ref
+              .watch(categorySongsProvider(seed).future)
+              .timeout(const Duration(seconds: 22),
+                  onTimeout: () => const <MuzoItem>[])
               .catchError((_) => const <MuzoItem>[]),
       ];
-      final fillBatches = await Future.wait(fillFutures)
-          .timeout(const Duration(seconds: 15), onTimeout: () => const []);
+      final fillBatches = await Future.wait(fillFutures);
       for (final batch in fillBatches) {
         addUnique(batch, maxPerArtist: 1);
         if (result.length >= minSongs) break;
       }
       if (result.isNotEmpty && result.length < minSongs) {
         debugPrint('[Pipe] "$category > $sub" min-fill final=${result.length}');
+      }
+    }
+
+    // Last resort, and the only way an artist can appear in two rows of the
+    // same page: an empty section is what the user reads as "no content".
+    if (result.length < 3 && salvage.isNotEmpty) {
+      final had = result.length;
+      for (final song in salvage) {
+        if (result.length >= 6) break;
+        result.add(song.copyWith(
+          verified: true,
+          relevanceScore:
+              song.relevanceScore ?? categoryMatchScore(song, constraint),
+        ));
+      }
+      if (result.length > had) {
+        debugPrint(
+            '[Pipe] $category > $sub SALVAGE=${result.length - had} (artistes déjà vus)');
       }
     }
 
@@ -1527,37 +2072,75 @@ audit.onAccepted();
 /// budget is spent).
 const int kMinArtistTracks = 100;
 
-/// Merges downloaded tracks matching [artistQuery] into [songs] (deduped by
-/// videoId, same artist-token matching as the network top-up). Offline
-/// backbone of the artist page: downloads always show, with or without
-/// network or cache.
+/// Merges downloaded tracks matching [artistQuery] into [songs], matching on
+/// the artist tokens like the network top-up does. Offline backbone of the
+/// artist page: downloads always show, with or without network or cache, and a
+/// row that already lists the same song under a non-downloaded identity is
+/// rebound onto the copy whose bytes are on disk.
 void _mergeDownloadedSongs(List<MuzoItem> songs, String artistQuery) {
   final seen = <String>{
     for (final s in songs) (s.videoId ?? '').toLowerCase(),
   }..remove('');
+  // Le même morceau vit souvent sous deux identités : la graine Deezer `dz_…`
+  // dans la liste réseau, le fichier `<videoId>.m4a` au registre. On ne veut ni
+  // un doublon, ni garder l'identité sans octets — celle-là repart sur YouTube
+  // et se prend le géo-blocage alors que le son est déjà sur l'appareil.
+  final titleIndex = <String, int>{
+    for (var i = 0; i < songs.length; i++)
+      '${compactSongTitle(songs[i].title)}|${compactArtistName(songs[i].displayArtist)}': i,
+  }..remove('|');
   final tokens = _artistTokens(primaryArtistName(artistQuery));
+  var merged = 0;
+  var rebound = 0;
   try {
     final box = Hive.box('downloads');
-    for (final raw in box.values) {
-      try {
-        final m = Map<String, dynamic>.from(raw as Map);
-        final r = m['result'];
-        if (r is! Map) continue;
-        final item = MuzoItem.fromJson(Map<String, dynamic>.from(r));
-        final vid = item.videoId;
-        if (vid == null || vid.isEmpty) continue;
-        final names = (item.artists ?? const <MuzoArtist>[])
-            .map((a) => a.name)
-            .join(' ');
-        final haystack = '${item.displayArtist} $names'.toLowerCase();
-        if (!tokens.any(haystack.contains)) continue;
-        final key = vid.toLowerCase();
-        if (seen.contains(key)) continue;
-        seen.add(key);
-        songs.add(item);
-      } catch (_) {}
+    // Toute la liste tient sous UNE clé ('list'), il n'y a pas une entrée par
+    // téléchargement : parcourir `box.values` rendait la List elle-même, le
+    // `as Map` levait, et le `catch (_) {}` avalait l'erreur — cette fusion n'a
+    // donc jamais rien ajouté, et un son téléchargé restait invisible (et
+    // injouable) sur la page artiste tant que la liste réseau ne le portait pas.
+    final raw = box.get('list');
+    if (raw is List) {
+      for (final e in raw) {
+        try {
+          final m = Map<String, dynamic>.from(e as Map);
+          final r = m['result'];
+          if (r is! Map) continue;
+          final item = MuzoItem.fromJson(Map<String, dynamic>.from(r));
+          final vid = item.videoId;
+          if (vid == null || vid.isEmpty) continue;
+          final names = (item.artists ?? const <MuzoArtist>[])
+              .map((a) => a.name)
+              .join(' ');
+          final haystack = '${item.displayArtist} $names'.toLowerCase();
+          if (!tokens.any(haystack.contains)) continue;
+          final key = vid.toLowerCase();
+          final titleKey =
+              '${compactSongTitle(item.title)}|${compactArtistName(item.displayArtist)}';
+          final at = titleKey == '|' ? null : titleIndex[titleKey];
+          if (at != null) {
+            // Déjà affiché sous une autre identité : on rebascule la ligne sur
+            // l'exemplaire téléchargé, qui lui a un fichier à lire.
+            if (songs[at].videoId?.toLowerCase() != key) {
+              songs[at] = item;
+              seen.add(key);
+              rebound++;
+            }
+            continue;
+          }
+          if (seen.contains(key)) continue;
+          seen.add(key);
+          if (titleKey != '|') titleIndex[titleKey] = songs.length;
+          songs.add(item);
+          merged++;
+        } catch (_) {}
+      }
     }
   } catch (_) {}
+  // Visible à dessein : c'est la seule trace qui prouve qu'un téléchargement a
+  // bien été rattaché à la page artiste.
+  debugPrint('ArtistSongs: "$artistQuery" merged $merged downloaded track(s), '
+      '$rebound rebound onto an existing row (${songs.length} total)');
 }
 
 final artistSongsProvider =
@@ -1570,10 +2153,11 @@ final artistSongsProvider =
   // still served (up to a year) instead of an empty page.
   var offline = false;
   try {
-    final conn = await Connectivity().checkConnectivity();
+    final conn = await safeConnectivity();
     offline = !conn.contains(ConnectivityResult.mobile) &&
         !conn.contains(ConnectivityResult.wifi) &&
-        !conn.contains(ConnectivityResult.ethernet);
+        !conn.contains(ConnectivityResult.ethernet) &&
+        !conn.contains(ConnectivityResult.vpn);
   } catch (_) {}
   try {
     final box = Hive.box('artist_songs_cache');
@@ -1581,14 +2165,12 @@ final artistSongsProvider =
     if (cached != null) {
       final ts = cached['ts'] as int? ?? 0;
       final jsonList = (cached['songs'] as List?) ?? [];
-      // A cache that missed the 100-track goal is not worth keeping for 3
-      // days: it would freeze a thin page. Those expire in 3 hours instead.
-      final thin = jsonList.length < kMinArtistTracks;
-      final maxAge = offline
-          ? const Duration(days: 365)
-          : thin
-              ? const Duration(hours: 3)
-              : const Duration(hours: 72);
+      // Un instantané — même en dessous de l'objectif de 100 titres — est
+      // TOUJOURS servi tout de suite : la page se peint, et c'est
+      // [artistSongsTopUpProvider] qui la fait grandir en arrière-plan et
+      // réécrit ce même cache. Expirer un cache « mince » au bout de 3 h
+      // re-plaquait le pipeline complet à chaque visite (25 s de squelettes).
+      final maxAge = offline ? const Duration(days: 365) : const Duration(hours: 72);
       if (DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ts)) <
           maxAge) {
         final cachedSongs =
@@ -1614,10 +2196,11 @@ final artistSongsProvider =
 
   final seen = <String>{};
   final songs = <MuzoItem>[];
+  String dedupeKey(MuzoItem song) =>
+      (song.videoId ?? '${song.title}|${song.displayArtist}').toLowerCase();
   void addUnique(List<MuzoItem> batch) {
     for (final song in batch) {
-      final key = (song.videoId ?? '${song.title}|${song.displayArtist}')
-          .toLowerCase();
+      final key = dedupeKey(song);
       if (key.isEmpty || seen.contains(key)) continue;
       if (song.videoId == null && song.title.isEmpty) continue;
       seen.add(key);
@@ -1643,11 +2226,18 @@ final artistSongsProvider =
   final searchQuery = primaryArtistName(artist);
 
   // Primary: artist browse playlist (~100 tracks).
-  try {
-    final artistSearch =
-        await apiService.search(searchQuery, filter: 'artists');
-    final results = _prioritizeWestern(artistSearch.results);
-    if (results.isNotEmpty) {
+  // Sauté quand le worker a déjà annoncé son amont mort dans cette session.
+  // Lancé SANS être attendu : mesuré, `search(filter: artists)` coûte 3,7 s et
+  // l'appel artiste 0,55 s de 500 — payés avant la recherche paginée qui, elle,
+  // répond en 1,2 s pour 20 titres. En parallèle, ce chemin mort ne coûte plus
+  // rien au premier affichage, et le jour où l'amont repart il arrive à temps
+  // pour mener la liste (les titres sont insérés devant).
+  Future<List<MuzoItem>> browseTracks() async {
+    if (MuzoApiService.artistBrowseEndpointDown) return const <MuzoItem>[];
+    try {
+      final artistSearch = await apiService.search(searchQuery, filter: 'artists');
+      final results = _prioritizeWestern(artistSearch.results);
+      if (results.isEmpty) return const <MuzoItem>[];
       final match = results.firstWhere(
         (r) =>
             (r.browseId != null && r.browseId!.isNotEmpty) &&
@@ -1658,20 +2248,19 @@ final artistSongsProvider =
         ),
       );
       final browseId = match.browseId;
-      if (browseId != null && browseId.isNotEmpty) {
-        final details = await apiService.getArtistDetails(browseId);
-        final playlistId = details?.playlistId ?? '';
-        if (playlistId.isNotEmpty) {
-          final playlist = await apiService.getPlaylistDetails(playlistId);
-          if (playlist != null && playlist.tracks.isNotEmpty) {
-            addUnique(playlist.tracks);
-          }
-        }
-      }
+      if (browseId == null || browseId.isEmpty) return const <MuzoItem>[];
+      final details = await apiService.getArtistDetails(browseId);
+      final playlistId = details?.playlistId ?? '';
+      if (playlistId.isEmpty) return const <MuzoItem>[];
+      final playlist = await apiService.getPlaylistDetails(playlistId);
+      return playlist?.tracks ?? const <MuzoItem>[];
+    } catch (e) {
+      debugPrint('Artist playlist path failed for "$artist": $e');
+      return const <MuzoItem>[];
     }
-  } catch (e) {
-    debugPrint('Artist playlist path failed for "$artist": $e');
   }
+
+  final browseFuture = browseTracks();
 
   // Supplement / fallback: paged plain search. Only keep songs that are
   // actually by the artist (search is fuzzy and would otherwise mix in
@@ -1679,13 +2268,28 @@ final artistSongsProvider =
   // comma-joined string.
   final tokens = _artistTokens(searchQuery);
   String? token;
-  // The artist page is expected to list 100+ tracks. Page deep until that
-  // goal is met or the budget runs out — a 60-track page felt thin.
+  var searchStalled = false;
+  // The 100+ track goal is carried by [artistSongsTopUpProvider], NOT by this
+  // path: here we stop as soon as the page has something real to show. Paging
+  // up to 6 times waiting for 100 tracks cost 25 s of skeletons on every cold
+  // visit (each page is a 1,5-15 s round trip through the worker, sequential).
+  const firstPaintGoal = 25;
+  const firstPaintBudget = Duration(seconds: 10);
   try {
-    for (var page = 0; page < 6 && songs.length < kMinArtistTracks; page++) {
-      if (outOfTime()) break;
-      final response = await apiService.search(searchQuery, filter: 'songs',
-          continuationToken: token);
+    for (var page = 0; page < 3 && songs.length < firstPaintGoal; page++) {
+      if (outOfTime() || stopwatch.elapsed > firstPaintBudget) break;
+      // Une seule page peut coûter 24 s (2 essais × 12 s dans `search`) : le
+      // test `elapsed > firstPaintBudget` ne s'évaluait qu'ENTRE deux appels,
+      // donc un worker lent laissait ce futur en `isLoading` pendant plus
+      // d'une minute — la page restait sur ses squelettes et se lisait comme
+      // « cet artiste n'a aucun titre ». Le budget est maintenant une vraie
+      // deadline sur l'appel lui-même.
+      final remaining = firstPaintBudget - stopwatch.elapsed;
+      final response = await apiService
+          .search(searchQuery, filter: 'songs', continuationToken: token)
+          .timeout(remaining > Duration.zero
+              ? remaining
+              : const Duration(milliseconds: 500));
       final batch = _prioritizeWestern(response.results)
           .where((s) {
             final names = (s.artists ?? const <MuzoArtist>[])
@@ -1702,33 +2306,100 @@ final artistSongsProvider =
       if (response.results.isEmpty) break;
     }
   } catch (e) {
+    if (e.toString().contains('TimeoutException')) searchStalled = true;
     debugPrint('Artist paged search failed for "$artist": $e');
   }
 
+  // Discographie Deezer lancée EN PARALLÈLE du browse, et plus seulement quand
+  // la page est nue. Mesuré sur l'appareil (2026-10-15, « Fally Ipupa ») : le
+  // browse rend 20 titres en 22 s, puis le top-up passe ~100 s à les compléter
+  // UN PAR UN à travers un worker qui timeout — la page reste à 20 sons pendant
+  // deux minutes alors que Deezer a déjà les 164 titres du même artiste en ~11 s
+  // (« Tiakola -> 90 titles »). On les prend donc dès que la liste est sous la
+  // cible, sans attendre le worker.
+  final deezerFill = ref
+      .read(deezerApiServiceProvider)
+      .tracksForArtist(searchQuery)
+      .timeout(const Duration(seconds: 15))
+      .catchError((Object _) => const <MuzoItem>[]);
+
+  // La page a déjà sa liste : le playlist-browse ne peut plus que l'enrichir,
+  // et ses titres passent devant (ce sont les « top songs » de l'artiste).
+  // Borné quand même : un futur gelé ici (canal méthode ou amont sans
+  // réponse) laissait le provider en `isLoading` éternel et la page sur ses
+  // squelettes — mesuré le 2026-10-13 : zéro `painted` en log pour toutes
+  // les pages ouvertes, alors que chaque requête répondait en 1-2 s.
+  // Les 20 s complètes ne sont accordées que si RIEN d'autre n'a abouti :
+  // sinon ce chemin ne ferait que repousser un premier affichage déjà prêt.
+  // 12 s quand la page est encore nue : au-delà, le plancher Deezer est prêt
+  // et plus fourni que ce que le browse rendra.
+  final browseWait = songs.isEmpty
+      ? const Duration(seconds: 12)
+      : const Duration(seconds: 15) - stopwatch.elapsed;
+  final browse = await browseFuture.timeout(
+      browseWait > const Duration(milliseconds: 300)
+          ? browseWait
+          : const Duration(milliseconds: 300),
+      onTimeout: () => const <MuzoItem>[]);
+  if (browse.isNotEmpty) {
+    final head = <MuzoItem>[];
+    for (final song in browse) {
+      final key = dedupeKey(song);
+      if (key.isEmpty || !seen.add(key)) continue;
+      if (song.videoId == null && song.title.isEmpty) continue;
+      head.add(song);
+    }
+    songs.insertAll(0, head);
+  }
+
+  // ─── Catalogue Deezer : la discographie réelle de l'artiste ───
+  // Le worker YouTube peut tout rater (amont mort, quota, artiste non indexé)
+  // alors que l'artiste a une vraie discographie. Ces lignes portent un id
+  // `dz_` : la page les affiche et le lecteur les résout par titre, avec
+  // l'extrait Deezer en dernier recours — jamais une ligne morte, et jamais un
+  // artiste qui s'ouvre sans titres, téléchargé ou non.
+  final deezerSeeds = await deezerFill;
+
   // Last resort: never return an empty page. A plain (unfiltered) search for
   // the artist name gives the page real content even when the artist is not
-  // indexed as a browsable artist.
-  if (songs.isEmpty) {
+  // indexed as a browsable artist. Sauté dès que Deezer a de quoi remplir :
+  // cet appel coûte 12 s de plus et, mesuré, il timeout comme les autres.
+  if (songs.isEmpty && deezerSeeds.isEmpty) {
     try {
-      final response = await apiService.search(searchQuery, filter: 'songs');
+      final response = await apiService
+          .search(searchQuery, filter: 'songs')
+          .timeout(const Duration(seconds: 12));
       addUnique(_prioritizeWestern(response.results));
     } catch (e) {
       debugPrint('Artist fallback search failed for "$artist": $e');
     }
   }
 
+  // Complément jusqu'à la cible : les titres YouTube déjà trouvés passent
+  // devant, la discographie Deezer suit. Sans ça la page s'arrête à ce que le
+  // browse veut bien rendre (20 titres) et met deux minutes à grandir.
+  if (songs.length < kMinArtistTracks && deezerSeeds.isNotEmpty) {
+    final before = songs.length;
+    addUnique(deezerSeeds);
+    debugPrint('ArtistSongs: "$artist" completed from the Deezer catalogue '
+        '$before -> ${songs.length} titles');
+  }
+
   // ─── External API fallbacks — top up to the 100-track goal ───
-  // The iTunes catalogue discovers titles the YouTube backend missed, then
-  // each one is resolved to a FULL track. This is the last step of the
-  // top-up, so it gets the whole remaining budget.
-  if (songs.length < kMinArtistTracks) {
+  // Seulement quand RIEN n'a été trouvé : dès qu'une liste tient, elle part au
+  // page et c'est [artistSongsTopUpProvider] qui découvre la suite (Deezer +
+  // iTunes) PENDANT que la page est déjà lisible. Faire ce travail ici aussi
+  // faisait patienter l'utilisateur 25 secondes devant des squelettes avec un
+  // compteur à « 0 chansons » — l'écran avait l'air planté.
+  if (songs.isEmpty) {
     await cacheNow();
     final discovered = <String>[];
     // Discover titles from the iTunes catalog (fast, parallel). Resolved to
     // FULL YouTube tracks below (never 30s previews).
     try {
-      final itunes =
-          await ItunesApiService().searchSongsFrUs(searchQuery, limit: 200);
+      final itunes = await ItunesApiService()
+          .searchSongsFrUs(searchQuery, limit: 200)
+          .timeout(const Duration(seconds: 15));
       for (final it in itunes) {
         final key = it.title.toLowerCase();
         if (!seen.contains(key) && it.title.isNotEmpty) {
@@ -1744,25 +2415,26 @@ final artistSongsProvider =
     // worker, and a batch that hangs would freeze the whole page. Three
     // batches of 12 is the most we spend on a top-up.
     if (discovered.isNotEmpty && !outOfTime()) {
-      final pending = discovered.take(36).toList();
+      final pending = discovered.take(24).toList();
       for (var start = 0; start < pending.length; start += 12) {
         if (outOfTime() || songs.length >= kMinArtistTracks) break;
         final chunk = pending.skip(start).take(12).toList();
-        final batchFutures = <Future<List<MuzoItem>>>[];
+        // Each search writes its own rows in as it lands, so the deadline
+        // below abandons the stragglers without throwing away what already
+        // arrived. `Future.wait` used to be awaited with no deadline at all:
+        // one stalled worker call parked the whole artist page on skeletons.
+        final batchFutures = <Future<void>>[];
         for (final q in chunk) {
           batchFutures.add(
             apiService
                 .search(q, filter: 'songs')
-                .then((r) => r.results)
-                .catchError((_) => <MuzoItem>[]),
+                .then((r) => addUnique(r.results.take(2).toList()))
+                .catchError((_) {}),
           );
         }
         try {
-          final batchResults = await Future.wait(batchFutures);
-          for (final batch in batchResults) {
-            addUnique(batch.take(2).toList());
-            if (songs.length >= kMinArtistTracks) break;
-          }
+          await Future.wait(batchFutures)
+              .timeout(const Duration(seconds: 15), onTimeout: () => []);
         } catch (e) {
           debugPrint('Artist ytify resolve failed for "$artist": $e');
         }
@@ -1786,6 +2458,27 @@ final artistSongsProvider =
     } catch (_) {}
   }
 
+  // ─── Never an empty page ───
+  // Network and cache both came up short: fall back to everything this artist
+  // already has on the device (downloads, favourites, playlists, history).
+  // Deliberately AFTER the cache write, so local titles are never persisted
+  // as if they were a fetched catalogue.
+  if (songs.isEmpty) {
+    songs.addAll(
+        localLibraryForArtist(ref.read(storageServiceProvider), artist));
+  }
+
+  // Une page artiste vide doit dire POURQUOI : sans cette ligne on ne peut pas
+  // distinguer « worker mort », « recherche hors délai » et « artiste absent ».
+  final whyEmpty = songs.isEmpty
+      ? ' — VIDE: browse=${browse.length}, recherche paginée '
+          '${searchStalled ? 'hors délai' : 'sans résultat'}, worker artiste '
+          '${MuzoApiService.artistBrowseEndpointDown ? 'mort' : 'vivant'}'
+      : '';
+  debugPrint(
+    'ArtistSongs: "$artist" painted ${songs.length} tracks in '
+    '${(stopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1)}s$whyEmpty',
+  );
   return songs;
   } catch (e) {
     debugPrint('artistSongsProvider crashed for "$artist": $e');
@@ -1793,23 +2486,222 @@ final artistSongsProvider =
   }
 });
 
+/// Phase 2 of the artist page: grow the track list to the 100+ goal.
+///
+/// [artistSongsProvider] tops out around 40-60 tracks because the YouTube
+/// backend answers ~40 results per query and then stops handing out
+/// continuation tokens. This provider waits for that first list, then
+/// discovers the artist's real titles (Deezer discography + iTunes catalogue)
+/// and resolves them to full YouTube tracks in wide parallel batches, and
+/// returns only the extras. The page renders the core list immediately and
+/// grows as this future completes.
+///
+/// Writes the merged snapshot back to the same 72h cache key, so the next
+/// visit gets the full list from [artistSongsProvider] and this returns [].
+final artistSongsTopUpProvider =
+    FutureProvider.family<List<MuzoItem>, String>((ref, artist) async {
+  final core = await ref.watch(artistSongsProvider(artist).future);
+  if (core.length >= kMinArtistTracks) return const <MuzoItem>[];
+
+  var offline = false;
+  try {
+    final conn = await safeConnectivity();
+    offline = !conn.contains(ConnectivityResult.mobile) &&
+        !conn.contains(ConnectivityResult.wifi) &&
+        !conn.contains(ConnectivityResult.ethernet) &&
+        !conn.contains(ConnectivityResult.vpn);
+  } catch (_) {}
+  if (offline) return const <MuzoItem>[];
+
+  final name = primaryArtistName(artist);
+  final tokens = _artistTokens(name);
+  final seenIds = <String>{
+    for (final c in core) (c.videoId ?? '').toLowerCase(),
+  }..remove('');
+  final seenTitles = <String>{
+    for (final c in core) c.title.toLowerCase().trim(),
+  }..remove('');
+  final discovered = <String>[];
+  void addTitle(String title, String artistLabel) {
+    // "(Remix)", "[Live]" suffixes only pollute the lookup query.
+    final clean = title.split(' (').first.split(' [').first.trim();
+    if (clean.isEmpty) return;
+    final key = clean.toLowerCase();
+    if (!seenTitles.add(key)) return;
+    final q = artistLabel.trim();
+    discovered.add(q.isEmpty ? '$clean $name' : '$clean $q');
+  }
+
+  // Deezer first: it is the artist's own discography, so every title is real.
+  // Borné + capté : ces découvertes ne doivent JAMAIS empêcher ce futur de se
+  // résoudre, sinon les extras n'arrivent jamais et le compteur de titres
+  // reste figé sous les 100.
+  final seeds = await ref
+      .read(deezerApiServiceProvider)
+      .tracksForArtist(name)
+      .timeout(const Duration(seconds: 15), onTimeout: () => const [])
+      .catchError((_) => <MuzoItem>[]);
+
+  final extras = <MuzoItem>[];
+
+  // Complément IMMÉDIAT depuis la discographie Deezer, avant toute résolution
+  // YouTube. Le worker rend ~2 titres par requête et rate souvent l'artiste :
+  // mesuré sur l'appareil (2026-10-15) « core=20 +extras=80 » après ~105 s,
+  // alors que Deezer avait déjà 164 titres du même artiste en main. Ces seeds
+  // portent un id `dz_` : la lecture les résout par titre et retombe sur
+  // l'extrait Deezer, donc jamais une ligne muette — et la cible de 100 est
+  // atteinte en une fois au lieu de deux minutes.
+  if (core.length + extras.length < kMinArtistTracks && seeds.isNotEmpty) {
+    final coreIds = <String>{
+      for (final c in core) (c.videoId ?? '').toLowerCase(),
+    }..remove('');
+    final coreTitles = <String>{
+      for (final c in core) c.title.toLowerCase().trim(),
+    }..remove('');
+    for (final s in seeds) {
+      if (core.length + extras.length >= kMinArtistTracks) break;
+      final id = (s.videoId ?? '').toLowerCase();
+      final title = s.title.toLowerCase().trim();
+      if (id.isEmpty || title.isEmpty) continue;
+      if (coreIds.contains(id) || coreTitles.contains(title)) continue;
+      coreTitles.add(title);
+      extras.add(s);
+    }
+  }
+
+  // La découverte YouTube ne sert plus qu'à combler un Deezer insuffisant.
+  if (core.length + extras.length < kMinArtistTracks) {
+    for (final s in seeds) {
+      addTitle(s.title, primaryArtistName(s.displayArtist));
+    }
+    try {
+      final itunes = await ItunesApiService()
+          .searchSongsFrUs(name, limit: 200)
+          .timeout(const Duration(seconds: 15));
+      for (final it in itunes) {
+        addTitle(it.title, primaryArtistName(it.displayArtist));
+      }
+    } catch (e) {
+      debugPrint('Artist top-up iTunes discovery failed for "$artist": $e');
+    }
+  }
+
+  final apiService = ref.read(muzoApiServiceProvider);
+  final stopwatch = Stopwatch()..start();
+  // Generous: this runs behind an already-rendered page, and the user asked
+  // for 100+ titles. Two usable tracks land per lookup, so ~30-40 lookups
+  // are enough — the budget only matters on a slow network.
+  const budget = Duration(seconds: 100);
+  final pending = discovered.take(80).toList();
+  for (var start = 0; start < pending.length; start += 12) {
+    if (stopwatch.elapsed > budget) break;
+    if (core.length + extras.length >= kMinArtistTracks) break;
+    final chunk = pending.skip(start).take(12).toList();
+    final futures = chunk
+        .map((q) => apiService
+            .search(q, filter: 'songs')
+            .then((r) => r.results)
+            .catchError((_) => <MuzoItem>[]))
+        .toList();
+    List<List<MuzoItem>> batchResults;
+    try {
+      batchResults = await Future.wait(futures)
+          .timeout(const Duration(seconds: 25), onTimeout: () => const []);
+    } catch (e) {
+      debugPrint('Artist top-up resolve failed for "$artist": $e');
+      continue;
+    }
+    for (final batch in batchResults) {
+      for (final s in batch.take(2)) {
+        if (s.videoId == null || s.videoId!.isEmpty) continue;
+        if (seenIds.contains(s.videoId!.toLowerCase())) continue;
+        final names = (s.artists ?? const <MuzoArtist>[])
+            .map((a) => a.name)
+            .join(' ')
+            .toLowerCase();
+        final haystack = '${s.displayArtist} $names'.toLowerCase();
+        if (!tokens.any(haystack.contains)) continue;
+        seenIds.add(s.videoId!.toLowerCase());
+        seenTitles.add(s.title.toLowerCase().trim());
+        extras.add(s);
+        if (core.length + extras.length >= kMinArtistTracks) break;
+      }
+    }
+  }
+
+  if (extras.isNotEmpty) {
+    try {
+      final box = Hive.box('artist_songs_cache');
+      await box.put('artist_songs_${artist.trim().toLowerCase()}', {
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'songs': [...core, ...extras].map((s) => s.toJson()).toList(),
+      });
+    } catch (_) {}
+  }
+  debugPrint(
+      'Artist top-up "$artist": core=${core.length} +extras=${extras.length}');
+  return extras;
+});
+
+/// Every song already on this device performed by [artist] — downloads,
+/// favourites, playlist songs and history, fuzzy-matched on the artist
+/// tokens. Last resort for pages that would otherwise open empty: an artist
+/// the user already owns music from must always show it, online or not.
+List<MuzoItem> localLibraryForArtist(StorageService storage, String artist) {
+  final tokens = _artistTokens(primaryArtistName(artist));
+  if (tokens.isEmpty) return const <MuzoItem>[];
+  final out = <MuzoItem>[];
+  final seen = <String>{};
+
+  void consider(MuzoItem item) {
+    final names =
+        (item.artists ?? const <MuzoArtist>[]).map((a) => a.name).join(' ');
+    final haystack = '${item.displayArtist} $names'.toLowerCase();
+    if (!tokens.any(haystack.contains)) return;
+    final key =
+        (item.videoId ?? '${item.title}|${item.displayArtist}').toLowerCase();
+    if (key.isEmpty || !seen.add(key)) return;
+    out.add(item);
+  }
+
+  for (final d in storage.getDownloads()) {
+    try {
+      consider(MuzoItem.fromJson(Map<String, dynamic>.from(d['result'])));
+    } catch (_) {}
+  }
+  for (final f in storage.getFavorites()) {
+    consider(f);
+  }
+  for (final h in storage.getHistory()) {
+    consider(h);
+  }
+  for (final p in storage.playlistsListenable.value) {
+    for (final s in p.songs) {
+      consider(s);
+    }
+  }
+  return out;
+}
+
 /// Related artists for the artist page's "Fans also like" row: the backend
 /// artist search for the same query, minus the artist himself.
 final relatedArtistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artist) async {
   final q = primaryArtistName(artist);
   if (q.trim().isEmpty) return [];
-  final apiService = ref.read(muzoApiServiceProvider);
-  try {
-    final response = await apiService.search(q, filter: 'artists');
-    final self = q.trim().toLowerCase();
-    return response.results
-        .where((r) => r.title.trim().toLowerCase() != self)
-        .toList();
-  } catch (e) {
-    debugPrint('Related artists failed for "$artist": $e');
-    return [];
-  }
+  return ContentCacheService.shelfCached('artrel|$artist', () async {
+    final apiService = ref.read(muzoApiServiceProvider);
+    try {
+      final response = await apiService.search(q, filter: 'artists');
+      final self = q.trim().toLowerCase();
+      return response.results
+          .where((r) => r.title.trim().toLowerCase() != self)
+          .toList();
+    } catch (e) {
+      debugPrint('Related artists failed for "$artist": $e');
+      return <MuzoItem>[];
+    }
+  });
 });
 
 /// Albums of the searched artist for the "Albums" chip: query the backend
@@ -1817,28 +2709,30 @@ final relatedArtistsProvider =
 final artistAlbumsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
   if (artistName.trim().isEmpty) return const <MuzoItem>[];
-  final api = ref.read(muzoApiServiceProvider);
-  // Le worker ne renvoie des browseId (MPREb_…) que lorsqu'on lui demande
-  // explicitement un type : sans filtre il ne répond qu'avec des morceaux, et
-  // le garde-fou _isEntityOfType rejetait alors toute la page → chip vide.
-  for (final q in [artistName, '$artistName album']) {
-    try {
-      final res = await api.search(q, filter: 'albums');
-      // The worker tags loosely, so a type is also inferred from the query it
-      // answered. Items are re-stamped with the type the chip asked for:
-      // without it the search screen type gate rejects them and the chip looks
-      // like a no-op.
-      final albums = res.results
-          .where((i) => _isEntityOfType(i, 'album'))
-          .take(30)
-          .map((i) => i.copyWith(resultType: 'album'))
-          .toList();
-      if (albums.isNotEmpty) return albums;
-    } catch (e) {
-      debugPrint('artistAlbumsProvider failed for "$q": $e');
+  return ContentCacheService.shelfCached('artalb|$artistName', () async {
+    final api = ref.read(muzoApiServiceProvider);
+    // Le worker ne renvoie des browseId (MPREb_…) que lorsqu'on lui demande
+    // explicitement un type : sans filtre il ne répond qu'avec des morceaux, et
+    // le garde-fou _isEntityOfType rejetait alors toute la page → chip vide.
+    for (final q in [artistName, '$artistName album']) {
+      try {
+        final res = await api.search(q, filter: 'albums');
+        // The worker tags loosely, so a type is also inferred from the query it
+        // answered. Items are re-stamped with the type the chip asked for:
+        // without it the search screen type gate rejects them and the chip looks
+        // like a no-op.
+        final albums = res.results
+            .where((i) => _isEntityOfType(i, 'album'))
+            .take(30)
+            .map((i) => i.copyWith(resultType: 'album'))
+            .toList();
+        if (albums.isNotEmpty) return albums;
+      } catch (e) {
+        debugPrint('artistAlbumsProvider failed for "$q": $e');
+      }
     }
-  }
-  return const <MuzoItem>[];
+    return const <MuzoItem>[];
+  });
 });
 
 /// Playlists of the searched artist for the "Playlists" chip: the backend
@@ -1847,51 +2741,76 @@ final artistAlbumsProvider =
 final artistPlaylistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
   if (artistName.trim().isEmpty) return const <MuzoItem>[];
-  final api = ref.read(muzoApiServiceProvider);
-  for (final q in [artistName, '$artistName playlist']) {
-    try {
-      final res = await api.search(q, filter: 'playlists');
-      final playlists = res.results
-          .where((i) => _isEntityOfType(i, 'playlist'))
-          .take(30)
-          .map((i) => i.copyWith(resultType: 'playlist'))
-          .toList();
-      if (playlists.isNotEmpty) return playlists;
-    } catch (e) {
-      debugPrint('artistPlaylistsProvider failed for "$q": $e');
+  return ContentCacheService.shelfCached('artpl|$artistName', () async {
+    final api = ref.read(muzoApiServiceProvider);
+    for (final q in [artistName, '$artistName playlist']) {
+      try {
+        final res = await api.search(q, filter: 'playlists');
+        final playlists = res.results
+            .where((i) => _isEntityOfType(i, 'playlist'))
+            .take(30)
+            .map((i) => i.copyWith(resultType: 'playlist'))
+            .toList();
+        if (playlists.isNotEmpty) return playlists;
+      } catch (e) {
+        debugPrint('artistPlaylistsProvider failed for "$q": $e');
+      }
     }
-  }
-  return const <MuzoItem>[];
+    return const <MuzoItem>[];
+  });
 });
 
 /// True when [item] is a browse entity (album / playlist / artist) that the
 /// search worker either typed correctly or left untagged. Untagged entities
 /// are accepted because the backend only sets a type on some of them.
 bool _isEntityOfType(MuzoItem item, String type) {
-  final hasBrowseId = item.browseId?.isNotEmpty ?? false;
-  if (!hasBrowseId) return false;
+  final browseId = item.browseId;
+  if (browseId == null || browseId.isEmpty) return false;
+  // An entity is never a playable track.
+  if (item.videoId != null && item.videoId!.isNotEmpty) return false;
   final declared = item.resultType;
   if (declared == type) return true;
-  return declared.isEmpty;
+  if (declared.isNotEmpty) return false;
+  // Untyped: only accept it as this entity type when the browseId prefix says
+  // so (MPREb_ = album, PL/VL/OL/RD = playlist, UC = artist/channel). This
+  // stops a loose song/channel row from being re-labelled as an album etc.
+  return _browseIdMatchesType(browseId, type);
+}
+
+bool _browseIdMatchesType(String browseId, String type) {
+  switch (type) {
+    case 'album':
+      return browseId.startsWith('MPREb_');
+    case 'playlist':
+      return browseId.startsWith('PL') ||
+          browseId.startsWith('VL') ||
+          browseId.startsWith('OL') ||
+          browseId.startsWith('RD');
+    case 'artist':
+    case 'channel':
+      return browseId.startsWith('UC');
+    default:
+      return false;
+  }
 }
 
 /// The worker sometimes answers an entity filter with rows tagged as songs.
-/// Re-stamping the playable-free browse entities lets the chip show the right
-/// kind of entity instead of falling back to the unfiltered page.
+/// Re-stamping is safe ONLY when the browseId prefix proves the entity kind;
+/// anything ambiguous is left untouched so [SearchRelevance.rank] can drop it
+/// instead of forcing it into the wrong chip.
 List<MuzoItem> _normalizeEntityTypes(List<MuzoItem> items, String filter) {
   const entityFilters = {'albums', 'album', 'playlists', 'playlist', 'artists', 'artist', 'channels'};
-  if (!entityFilters.contains(filter.toLowerCase())) return items;
+  final f = filter.toLowerCase();
+  if (!entityFilters.contains(f)) return items;
+  final target = switch (f) {
+    'albums' || 'album' => 'album',
+    'playlists' || 'playlist' => 'playlist',
+    _ => 'artist',
+  };
   return items.map((item) {
-    if (_isEntityOfType(item, item.resultType)) return item;
-    if (item.resultType.isNotEmpty && item.resultType != 'song') return item;
-    final hasBrowseId = item.browseId?.isNotEmpty ?? false;
-    if (!hasBrowseId) return item;
-    final normalized = switch (filter.toLowerCase()) {
-      'albums' || 'album' => 'album',
-      'playlists' || 'playlist' => 'playlist',
-      _ => 'artist',
-    };
-    return item.copyWith(resultType: normalized);
+    if (item.resultType == target) return item;
+    if (_isEntityOfType(item, target)) return item.copyWith(resultType: target);
+    return item;
   }).toList();
 }
 
@@ -1910,9 +2829,79 @@ typedef CollectionKey = ({
 /// browse id is missing or the endpoints fail — never an empty page.
 final collectionTracksProvider =
     FutureProvider.family<List<MuzoItem>, CollectionKey>((ref, key) async {
+  final cacheKey = 'coll|${key.browseId}|${key.isAlbum}|${key.title}';
+
+  // Nothing on the wire? Fall back to the matching songs already on the
+  // device so an album/playlist the user owns never opens empty.
+  Future<List<MuzoItem>> localTracks() async {
+    final storage = ref.read(storageServiceProvider);
+    // 'local:<name>' = a playlist stored on this device: its songs are already
+    // in hand, no search required.
+    if (key.browseId.startsWith('local:')) {
+      final songs = storage.getPlaylistSongs(key.browseId.substring(6));
+      if (songs.isNotEmpty) return songs;
+    }
+    final q = key.title.trim().toLowerCase();
+    if (q.isEmpty) return const <MuzoItem>[];
+    bool matches(MuzoItem s) {
+      final album = s.album?.name ?? '';
+      return s.title.toLowerCase().contains(q) ||
+          album.toLowerCase().contains(q) ||
+          key.artist.isNotEmpty &&
+              s.displayArtist.toLowerCase() ==
+                  key.artist.trim().toLowerCase();
+    }
+
+    final out = <MuzoItem>[];
+    for (final d in storage.getDownloads()) {
+      try {
+        final m = MuzoItem.fromJson(Map<String, dynamic>.from(d['result']));
+        if (matches(m)) out.add(m);
+      } catch (_) {}
+    }
+    for (final s in storage.getFavorites()) {
+      if (matches(s)) out.add(s);
+    }
+    for (final p in storage.playlistsListenable.value) {
+      for (final s in p.songs) {
+        if (matches(s)) out.add(s);
+      }
+    }
+    return _dedupeSongs(out);
+  }
+
+  // Offline: replay the exact track list fetched last time, else the local
+  // library. The network is never touched, so the page opens instantly.
+  if (key.browseId.startsWith('local:') || await ContentCacheService.isOffline()) {
+    if (!key.browseId.startsWith('local:')) {
+      final stale = await ContentCacheService.instance.readStale(cacheKey,
+          maxAge: ContentCacheService.offlineCeiling);
+      if (stale != null && stale.isNotEmpty) return stale;
+    }
+    return await localTracks();
+  }
+
+  try {
+    final fresh = await _fetchCollectionTracks(ref, key);
+    if (fresh.isNotEmpty) {
+      unawaited(ContentCacheService.instance.write(cacheKey, fresh));
+      return fresh;
+    }
+  } catch (e) {
+    debugPrint('Collection "${key.title}" fetch failed: $e');
+  }
+  final stale =
+      await ContentCacheService.instance.readStale(cacheKey);
+  if (stale != null && stale.isNotEmpty) return stale;
+  return await localTracks();
+});
+
+/// Network half of [collectionTracksProvider]: browse id straight into the
+/// album/playlist endpoints, then an exact-name song search as a last resort.
+Future<List<MuzoItem>> _fetchCollectionTracks(Ref ref, CollectionKey key) async {
   final apiService = ref.read(muzoApiServiceProvider);
   final id = key.browseId.trim();
-  if (id.isNotEmpty) {
+  if (id.isNotEmpty && !id.startsWith('local:')) {
     try {
       if (key.isAlbum) {
         final album = await apiService.getAlbumDetails(id);
@@ -1929,15 +2918,15 @@ final collectionTracksProvider =
     }
   }
   // Fallback: exact-name search keeps the page on-topic.
-  try {
-    final q = '${key.title} ${key.artist}'.trim();
-    final response = await apiService.search(q, filter: 'songs');
-    return response.results.take(40).toList();
-  } catch (e) {
-    debugPrint('Collection fallback search failed for "${key.title}": $e');
-    return [];
-  }
-});
+  final q = '${key.title} ${key.artist}'.trim();
+  final response = await apiService.search(q, filter: 'songs');
+  return response.results.take(40).toList();
+}
+
+/// Identity of an album card: title + lead artist, so the same album served by
+/// two catalogues is shown once.
+String _albumKey(MuzoItem a) =>
+    '${a.title.trim().toLowerCase()}|${a.displayArtist.trim().toLowerCase()}';
 
 /// Best-guess primary artist from a display string like "Ninho, Niska" or
 /// "Sécu - Franglish, Ninho" -> the first real artist name.
@@ -2060,6 +3049,13 @@ List<MuzoItem> _dedupeSongs(List<MuzoItem> items) {
     }
     if (key.isEmpty || seen.contains(key)) continue;
     seen.add(key);
+    // Same song, second upload. The worker answers one search with re-uploads
+    // and speed/version variants that each carry their own videoId, so the key
+    // above cannot see them and the list shows the same track twice. Collapse
+    // on the normalized title+artist identity, scoped to the result type so an
+    // album or playlist can never vanish behind a song of the same name.
+    final content = normalizeContentKey(song);
+    if (content != null && !seen.add('${song.resultType}:$content')) continue;
     out.add(song);
   }
   return out;
@@ -2152,6 +3148,21 @@ Future<String?> _iTunesCover(String query) async {
   if (art == null || art.isEmpty) return null;
   return art.replaceFirst('100x100bb', '300x300bb');
 }
+
+/// Fast single-lookup real cover for a Search "Browse All" tile: one iTunes
+/// album request (not the 8-source [categoryImageProvider] chain), so the lazy
+/// grid can afford to resolve the on-screen tiles. Returns null on any failure
+/// or when offline -> the tile falls back to its bundled genre cover.
+final categoryTileCoverProvider =
+    FutureProvider.family<String?, String>((ref, query) async {
+  if (query.isEmpty) return null;
+  if (await ContentCacheService.isOffline()) return null;
+  try {
+    return await _iTunesCover(query);
+  } catch (_) {
+    return null;
+  }
+});
 
 Future<String?> _musicBrainzCover(String query) async {
   final mbUri = Uri.parse('https://musicbrainz.org/ws/2/release/').replace(

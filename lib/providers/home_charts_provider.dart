@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/content_cache_service.dart';
@@ -76,26 +77,37 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
     return const [];
   }
 
+  /// One entry per wanted entity: [query] is the string sent to the worker,
+  /// [title]/[artist] are what the source feed actually named. The worker
+  /// answers with the closest match it has, never with a guarantee, so the
+  /// answer is checked against them instead of being trusted — see
+  /// [matchesNamedEntity].
   Future<List<MuzoItem>> resolveInBatches(
-    List<String> queries,
+    List<({String query, String title, String artist})> wanted,
     String filter, {
     bool song = false,
   }) async {
     final out = <MuzoItem>[];
     final seenIds = <String>{};
-    for (var i = 0; i < queries.length; i += 5) {
-      final chunk = queries.skip(i).take(5).toList();
-      final results = await Future.wait(chunk.map((q) async {
+    var rejected = 0;
+    for (var i = 0; i < wanted.length; i += 5) {
+      final chunk = wanted.skip(i).take(5).toList();
+      final results = await Future.wait(chunk.map((w) async {
         try {
           final resp = await api
-              .search(q, filter: filter)
+              .search(w.query, filter: filter)
               .timeout(const Duration(seconds: 9));
           for (final r in resp.results) {
             if (song) {
-              if (r.videoId != null) return r;
-            } else if ((r.browseId ?? r.videoId) != null) {
-              return r;
+              if (r.videoId == null) continue;
+            } else if ((r.browseId ?? r.videoId) == null) {
+              continue;
             }
+            if (!matchesNamedEntity(r, w.title, w.artist)) {
+              rejected++;
+              continue;
+            }
+            return r;
           }
         } catch (_) {}
         return null;
@@ -109,87 +121,162 @@ final homeChartsProvider = FutureProvider<HomeCharts>((ref) async {
       }
       if (out.length >= 20) break;
     }
+    if (rejected > 0) {
+      debugPrint('HomeCharts/$filter: $rejected look-alike results rejected '
+          '(${out.length} kept)');
+    }
     return out;
   }
 
-  // ─── Tracks (top songs FR + US → YouTube) ───
-  var tracks = await fromCache('tracks');
-  if (tracks == null) {
-    final pool = await Future.wait(
-        [TrendingService.topSongs('fr'), TrendingService.topSongs('us')]);
-    final seen = <String>{};
-    final queries = <String>[];
-    for (final list in pool) {
-      for (final t in list) {
-        final k = '${t.title}|${t.artist}'.toLowerCase();
-        if (seen.contains(k)) continue;
-        seen.add(k);
-        queries.add('${t.title} ${t.artist}');
-        if (queries.length >= 24) break;
-      }
+  // Offline: replay today's snapshot (or the newest previous bucket) and
+  // never reach for Apple RSS / muzoapi, which cannot answer right now.
+  if (await ContentCacheService.isOffline()) {
+    Future<List<MuzoItem>> offlineBucket(String name) async {
+      try {
+        final today = await ContentCacheService.instance.readJsonIfFresh(
+          'homecharts|$name|d$day',
+          maxAge: ContentCacheService.offlineCeiling,
+        );
+        if (today != null && today.isNotEmpty) {
+          return today
+              .whereType<Map>()
+              .map((m) => MuzoItem.fromJson(Map<String, dynamic>.from(m)))
+              .toList();
+        }
+      } catch (_) {}
+      return await fromRecentBuckets(name);
     }
-    tracks = await resolveInBatches(queries, 'songs', song: true);
-    if (tracks.isNotEmpty) {
-      await persist('tracks', tracks);
-    } else {
-      tracks = await fromRecentBuckets('tracks');
-    }
-  }
 
-  // ─── Albums (RSS top albums → YouTube albums) ───
-  var albums = await fromCache('albums');
-  if (albums == null) {
-    final pool = await Future.wait(
-        [TrendingService.topAlbums('fr'), TrendingService.topAlbums('us')]);
-    final seen = <String>{};
-    final queries = <String>[];
-    for (final list in pool) {
-      for (final a in list) {
-        final k = '${a.title}|${a.artist}'.toLowerCase();
-        if (seen.contains(k)) continue;
-        seen.add(k);
-        queries.add('${a.title} ${a.artist}');
-        if (queries.length >= 12) break;
-      }
-    }
-    albums = await resolveInBatches(queries, 'albums');
-    if (albums.isNotEmpty) {
-      await persist('albums', albums);
-    } else {
-      albums = await fromRecentBuckets('albums');
-    }
-  }
-
-  // ─── Playlists (RSS top playlists → YouTube playlists) ───
-  var playlists = await fromCache('playlists');
-  if (playlists == null) {
-    final pool = await Future.wait([
-      TrendingService.topPlaylists('fr'),
-      TrendingService.topPlaylists('us'),
+    final buckets = await Future.wait([
+      offlineBucket('tracks'),
+      offlineBucket('albums'),
+      offlineBucket('playlists'),
     ]);
-    final seen = <String>{};
-    final queries = <String>[];
-    for (final list in pool) {
-      for (final p in list) {
-        final k = p.title.toLowerCase();
-        if (seen.contains(k)) continue;
-        seen.add(k);
-        queries.add(p.title);
-        if (queries.length >= 12) break;
-      }
-    }
-    playlists = await resolveInBatches(queries, 'playlists');
-    if (playlists.isNotEmpty) {
-      await persist('playlists', playlists);
-    } else {
-      playlists = await fromRecentBuckets('playlists');
-    }
+    return HomeCharts(
+      tracks: buckets[0],
+      albums: buckets[1],
+      playlists: buckets[2],
+    );
   }
+
+  // ─── Tracks / Albums / Playlists — resolved in parallel so one slow
+  // section never blocks the others. Each section has its own deadline. ───
+  Future<List<MuzoItem>> resolveTracks() async {
+    var cached = await fromCache('tracks');
+    if (cached != null) return cached;
+    try {
+      final pool = await Future.wait(
+              [TrendingService.topSongs('fr'), TrendingService.topSongs('us')])
+          .timeout(const Duration(seconds: 12));
+      final seen = <String>{};
+      final wanted = <({String query, String title, String artist})>[];
+      for (final list in pool) {
+        for (final t in list) {
+          final k = '${t.title}|${t.artist}'.toLowerCase();
+          if (seen.contains(k)) continue;
+          seen.add(k);
+          wanted.add(
+              (query: '${t.title} ${t.artist}', title: t.title, artist: t.artist));
+          if (wanted.length >= 24) break;
+        }
+      }
+      final result = await resolveInBatches(wanted, 'songs', song: true);
+      if (result.isNotEmpty) {
+        await persist('tracks', result);
+        return result;
+      }
+    } catch (_) {}
+    return await fromRecentBuckets('tracks');
+  }
+
+  Future<List<MuzoItem>> resolveAlbums() async {
+    var cached = await fromCache('albums');
+    if (cached != null) return cached;
+    try {
+      final pool = await Future.wait([
+        TrendingService.topAlbums('fr'),
+        TrendingService.topAlbums('us')
+      ]).timeout(const Duration(seconds: 12));
+      // Ce rayon s'intitule « Nouveaux albums » alors qu'Apple RSS donne ici le
+      // TOP des ventes, pas les sorties : mesuré sur l'appareil (2026-10-15),
+      // « Deux frères » (PNL, 2019) et « Dans la légende » (PNL, 2016) y
+      // passaient pour des nouveautés. La fenêtre de 30 jours est la même que
+      // celle du rayon Nouveaux albums de l'accueil, et une sortie sans date
+      // réelle n'est pas une nouveauté vérifiable → elle est écartée.
+      final cutoff = DateTime.now().subtract(const Duration(days: 30));
+      final horizon = DateTime.now().add(const Duration(days: 7));
+      final seen = <String>{};
+      final wanted = <({String query, String title, String artist})>[];
+      var undated = 0;
+      for (final list in pool) {
+        for (final a in list) {
+          if (!TrendingService.isUrbanGenre(a.genre)) continue;
+          final rel = a.releaseDate;
+          if (rel == null || rel.isBefore(cutoff) || rel.isAfter(horizon)) {
+            undated++;
+            continue;
+          }
+          final k = '${a.title}|${a.artist}'.toLowerCase();
+          if (seen.contains(k)) continue;
+          seen.add(k);
+          wanted.add(
+              (query: '${a.title} ${a.artist}', title: a.title, artist: a.artist));
+          if (wanted.length >= 12) break;
+        }
+      }
+      debugPrint('HomeCharts/albums: ${wanted.length} dated in the 30d window, '
+          '$undated dropped (old or undated)');
+      final result = await resolveInBatches(wanted, 'albums');
+      if (result.isNotEmpty) {
+        await persist('albums', result);
+        return result;
+      }
+    } catch (_) {}
+    return await fromRecentBuckets('albums');
+  }
+
+  Future<List<MuzoItem>> resolvePlaylists() async {
+    var cached = await fromCache('playlists');
+    if (cached != null) return cached;
+    try {
+      final pool = await Future.wait([
+        TrendingService.topPlaylists('fr'),
+        TrendingService.topPlaylists('us'),
+      ]).timeout(const Duration(seconds: 12));
+      final seen = <String>{};
+      final wanted = <({String query, String title, String artist})>[];
+      for (final list in pool) {
+        for (final p in list) {
+          final k = p.title.toLowerCase();
+          if (seen.contains(k)) continue;
+          seen.add(k);
+          wanted.add((query: p.title, title: p.title, artist: ''));
+          if (wanted.length >= 12) break;
+        }
+      }
+      final result = await resolveInBatches(wanted, 'playlists');
+      if (result.isNotEmpty) {
+        await persist('playlists', result);
+        return result;
+      }
+    } catch (_) {}
+    return await fromRecentBuckets('playlists');
+  }
+
+  final results = await Future.wait([
+    resolveTracks(),
+    resolveAlbums(),
+    resolvePlaylists(),
+  ]).timeout(const Duration(seconds: 35), onTimeout: () => const [
+    <MuzoItem>[],
+    <MuzoItem>[],
+    <MuzoItem>[],
+  ]);
 
   final rotated = ContentCacheService.rotate;
   return HomeCharts(
-    tracks: rotated(tracks, bucket),
-    albums: rotated(albums, bucket),
-    playlists: rotated(playlists, bucket),
+    tracks: rotated(results[0], bucket),
+    albums: rotated(results[1], bucket),
+    playlists: rotated(results[2], bucket),
   );
 });

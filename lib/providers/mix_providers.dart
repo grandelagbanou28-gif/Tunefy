@@ -7,6 +7,7 @@ import 'package:muzo/providers/content_identity.dart';
 import 'package:muzo/services/multi_api_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/services/taste_signals_service.dart';
 
 /// Days elapsed since the Unix epoch — the seed behind every daily rotation.
 /// Same day → same mix for every launch, next day → a genuinely new one.
@@ -15,7 +16,14 @@ import 'package:muzo/services/storage_service.dart';
 /// Favourites count double: liking a track is a stronger signal than playing
 /// it once. `listening_stats_service` is deliberately not used here — it
 /// aggregates asynchronously and this has to stay synchronous for a provider.
-List<String> _tasteArtists(StorageService storage, {int limit = 10}) {
+///
+/// [searched] comes first on purpose: what the listener types into Search is a
+/// deliberate, recent signal, while a played artist can be a one-off.
+List<String> _tasteArtists(
+  StorageService storage, {
+  int limit = 10,
+  List<String> searched = const [],
+}) {
   final counts = <String, int>{};
   void add(String? artist, int weight) {
     final name = (artist ?? '').trim();
@@ -32,7 +40,20 @@ List<String> _tasteArtists(StorageService storage, {int limit = 10}) {
 
   final ranked = counts.entries.toList()
     ..sort((a, b) => b.value.compareTo(a.value));
-  return ranked.take(limit).map((e) => e.key).toList();
+  final out = <String>[];
+  for (final s in searched) {
+    final t = s.trim();
+    if (t.isEmpty) continue;
+    if (out.any((e) => e.toLowerCase() == t.toLowerCase())) continue;
+    out.add(t);
+    if (out.length >= limit) break;
+  }
+  for (final e in ranked) {
+    if (out.any((s) => s.toLowerCase() == e.key.toLowerCase())) continue;
+    out.add(e.key);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 /// Recent tracks for [artist], cheapest source first. Returns an empty list
@@ -64,9 +85,19 @@ Future<List<MuzoItem>> _tracksForArtist(
 /// stays empty rather than pretending: an empty shelf is honest, a shelf of
 /// random hits is not.
 final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|releaseRadar', () async {
+  return ContentCacheService.shelfCachedDaily('shelf|releaseRadar', () async {
   final storage = ref.read(storageServiceProvider);
-  final artists = _tasteArtists(storage, limit: 8);
+  // What the listener searches for leads the radar, then the artists they
+  // actually play. Rotating the searched terms per installation keeps two
+  // phones with the same favourite artist from getting the identical shelf.
+  final artists = _tasteArtists(
+    storage,
+    limit: 8,
+    searched: ContentCacheService.rotate(
+      ref.read(tasteSignalsProvider).searchTerms(max: 4),
+      ContentCacheService.deviceSeed,
+    ),
+  );
   if (artists.isEmpty) return const [];
 
   try {
@@ -109,9 +140,13 @@ final releaseRadarProvider = FutureProvider<List<MuzoItem>>((ref) async {
 /// listener has no history yet: a brand-new user still gets a playable shelf,
 /// because a mix is an onboarding surface, not a personalised report.
 final dailyMixProvider = FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|dailyMix', () async {
+  return ContentCacheService.shelfCachedDaily('shelf|dailyMix', () async {
   final storage = ref.read(storageServiceProvider);
-  final artists = _tasteArtists(storage, limit: 12);
+  final artists = _tasteArtists(
+    storage,
+    limit: 12,
+    searched: ref.read(tasteSignalsProvider).searchTerms(max: 5),
+  );
   // Per-user daily seed: identical for a given user on a given day, different
   // for every user. A calendar-only seed gave the whole planet the same mix on
   // the same day, which is not a "Daily Mix" so much as a "Daily Mix for
