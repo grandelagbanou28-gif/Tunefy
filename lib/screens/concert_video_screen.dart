@@ -98,7 +98,7 @@ void initState() {
       }
       final vc = VideoPlayerController.networkUrl(Uri.parse(url));
       _controller = vc;
-      await vc.initialize();
+      await vc.initialize().timeout(const Duration(seconds: 20));
       if (!mounted) {
         await vc.dispose();
         return;

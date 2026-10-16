@@ -32,6 +32,7 @@ class LyricsSwitch extends ConsumerWidget {
                         artist: mediaItem.artist ?? '',
                         thumbnailUrl: mediaItem.artUri?.toString(),
                         durationSeconds: mediaItem.duration?.inSeconds ?? 0,
+                        videoId: mediaItem.id,
                       ),
                     ),
                   );

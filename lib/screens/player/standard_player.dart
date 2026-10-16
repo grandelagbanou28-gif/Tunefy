@@ -811,15 +811,10 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                           size: 20,
                         ),
                         isActive: isRepeatEnabled,
-                        onPressed: () async {
-                          if (loopMode == LoopMode.off) {
-                            await player.setLoopMode(LoopMode.all);
-                          } else if (loopMode == LoopMode.all) {
-                            await player.setLoopMode(LoopMode.one);
-                          } else {
-                            await player.setLoopMode(LoopMode.off);
-                          }
-                        },
+                        // Through the handler: setLoopMode on the raw player
+                        // changes the icon without persisting, so the next
+                        // session restored a mode the user thought was off.
+                        onPressed: () => audioHandler.cycleRepeatMode(),
                       ),
                       // Auto-queue / Infinity
                       _buildQueuePillButton(
@@ -832,7 +827,7 @@ class _StandardPlayerState extends ConsumerState<StandardPlayer> {
                         isActive: storage.isAutoQueueEnabled,
                         onPressed: () async {
                           await storage.setAutoQueueEnabled(!storage.isAutoQueueEnabled);
-                          setState(() {});
+                          if (mounted) setState(() {});
                         },
                       ),
                       // Lofi mode

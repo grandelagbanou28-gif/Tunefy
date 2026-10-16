@@ -48,6 +48,7 @@ class _SpotifyCodeScannerScreenState
   late stt.SpeechToText _speech;
   bool _shazamListening = false;
   bool _shazamProcessing = false;
+  Timer? _shazamTimer;
   String? _shazamError;
   late AnimationController _pulseController;
 
@@ -68,6 +69,7 @@ class _SpotifyCodeScannerScreenState
 
   @override
   void dispose() {
+    _shazamTimer?.cancel();
     _cameraController?.dispose();
     _pulseController.dispose();
     _speech.stop();
@@ -100,15 +102,50 @@ class _SpotifyCodeScannerScreenState
         _isProcessing = true;
         HapticFeedback.selectionClick();
         _cameraController?.stop();
+        final query = _searchableText(raw);
         _saveQrHistory(raw.trim(), 'camera');
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => GlobalSearchScreen(initialQuery: raw.trim()),
-          ),
-        );
+        _openSearch(query);
         break;
       }
     }
+  }
+
+  /// Pushes the search and re-arms the camera once the user comes back, so the
+  /// scanner stays usable for the whole session instead of dying after one hit.
+  Future<void> _openSearch(String query) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GlobalSearchScreen(initialQuery: query),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+    if (_mode == _ScanMode.camera) _cameraController?.start();
+  }
+
+  /// Turns arbitrary QR / Spotify-Code text into something the search API can
+  /// actually answer. A `spotify:track:ID` / `open.spotify.com/track/ID` string
+  /// searched verbatim returns junk, so those are reduced to a searchable hint;
+  /// `spotify:search:<q>` and plain text pass through as the query.
+  String _searchableText(String raw) {
+    final v = raw.trim();
+    final sp = RegExp(r'^spotify:(\w+):(.+)$').firstMatch(v);
+    if (sp != null) {
+      final type = sp.group(1)!.toLowerCase();
+      final tail = sp.group(2)!.trim();
+      if (type == 'search') return Uri.decodeQueryComponent(tail);
+      // Track/album/artist IDs are opaque — no offline name lookup exists.
+      return tail;
+    }
+    final url = Uri.tryParse(v);
+    if (url != null && url.host.endsWith('spotify.com')) {
+      final seg = url.pathSegments;
+      final i = seg.indexWhere((s) =>
+          const {'track', 'album', 'artist', 'playlist'}.contains(s));
+      if (i >= 0 && i + 1 < seg.length) return seg[i + 1];
+      if (url.queryParameters['q'] != null) return url.queryParameters['q']!;
+    }
+    return v;
   }
 
   void _saveQrHistory(String value, String source) {
@@ -208,11 +245,8 @@ class _SpotifyCodeScannerScreenState
       if (mounted) {
         if (raw != null) {
           _saveQrHistory(raw, 'gallery');
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => GlobalSearchScreen(initialQuery: raw),
-            ),
-          );
+          setState(() => _scanningQr = false);
+          _openSearch(_searchableText(raw));
         } else {
           final l10n = AppLocalizations.of(context);
           setState(() {
@@ -291,12 +325,12 @@ class _SpotifyCodeScannerScreenState
         listenMode: stt.ListenMode.dictation,
         cancelOnError: false,
         partialResults: true,
-        localeId: 'en_US',
       ),
     );
 
-    Timer(const Duration(seconds: 8), () {
-      if (_shazamListening) {
+    _shazamTimer?.cancel();
+    _shazamTimer = Timer(const Duration(seconds: 8), () {
+      if (_shazamListening && mounted) {
         _processShazamAudio();
       }
     });
@@ -307,6 +341,7 @@ class _SpotifyCodeScannerScreenState
     _speech.stop();
 
     final recognized = _speech.lastRecognizedWords;
+    if (!mounted) return;
     setState(() {
       _shazamListening = false;
       _shazamProcessing = true;
@@ -323,14 +358,9 @@ class _SpotifyCodeScannerScreenState
       return;
     }
 
+    if (!mounted) return;
     setState(() => _shazamProcessing = false);
-    if (mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => GlobalSearchScreen(initialQuery: recognized.trim()),
-        ),
-      );
-    }
+    _openSearch(recognized.trim());
   }
 
   void _stopShazam() {
@@ -495,8 +525,8 @@ class _SpotifyCodeScannerScreenState
                     child: _compactPill(
                       icon: _shazamListening
                           ? Icons.stop_rounded
-                          : Icons.bolt_rounded,
-                      label: 'Shazam',
+                          : Icons.mic_rounded,
+                      label: 'Recherche vocale',
                       onTap: _startShazam,
                       active: _shazamListening,
                       emphasized: _shazamProcessing,

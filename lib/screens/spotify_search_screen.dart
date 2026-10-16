@@ -1,13 +1,18 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/providers/search_provider.dart';
 import 'package:muzo/screens/spotify_code_scanner_screen.dart';
 import 'package:muzo/screens/global_search_screen.dart';
 import 'package:muzo/screens/category_screen.dart';
+import 'package:muzo/screens/radio_screen.dart';
+import 'package:muzo/services/content_cache_service.dart';
 
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/spotify_chips.dart';
+import 'package:muzo/widgets/main_layout.dart' show kBottomChromeHeight;
 
 /// Spotify-style Search page: a search bar and a user-editable "Browse All"
 /// genre grid.
@@ -20,13 +25,24 @@ class SpotifySearchScreen extends ConsumerWidget {
     final storage = ref.watch(storageServiceProvider);
     final chosen = storage.chosenCategories.toSet();
     const hiddenTitles = <String>{};
-    final ordered = [..._kBrowseCards.where((c) => !hiddenTitles.contains(c.title))]
+    final listed = [..._kBrowseCards.where((c) => !hiddenTitles.contains(c.title))]
       ..sort((a, b) {
         final ai = chosen.contains(a.title) ? 0 : 1;
         final bi = chosen.contains(b.title) ? 0 : 1;
         if (ai != bi) return ai - bi;
         return 0;
       });
+    // Rotation par installation, doucement déplacée chaque jour : deux
+    // téléphones ne montrent pas la grille dans le même ordre, sans que les
+    // catégories choisies perdent leur place en tête.
+    final off =
+        ContentCacheService.dayBucket + ContentCacheService.deviceSeed;
+    final ordered = [
+      ...ContentCacheService.rotate(
+          listed.where((c) => chosen.contains(c.title)).toList(), off),
+      ...ContentCacheService.rotate(
+          listed.where((c) => !chosen.contains(c.title)).toList(), off),
+    ];
 
     return Scaffold(
       backgroundColor: spotifyBlack,
@@ -135,14 +151,16 @@ class SpotifySearchScreen extends ConsumerWidget {
                         crossAxisSpacing: 14,
                         childAspectRatio: 1.6,
                       ),
-                      delegate: SliverChildListDelegate(
-                        ordered.map((c) => _buildCard(context, c, chosen.contains(c.title))).toList(),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) => _buildCard(
+                            context, ordered[i], chosen.contains(ordered[i].title)),
+                        childCount: ordered.length,
                       ),
                     ),
                   ),
 
                   const SliverPadding(
-                    padding: EdgeInsets.only(bottom: 130),
+                    padding: EdgeInsets.only(bottom: kBottomChromeHeight),
                   ),
                 ],
               ),
@@ -163,18 +181,20 @@ class SpotifySearchScreen extends ConsumerWidget {
       selected: selected,
       onTap: () {
         HapticFeedback.selectionClick();
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => CategoryScreen(
-              title: c.title,
-              query: c.query,
-              color: c.color,
-              asset: c.asset,
-              icon: c.icon,
-              subs: c.subs,
-            ),
-          ),
-        );
+        Navigator.of(context).push(MaterialPageRoute(
+          // "Radio" carries no genre subs: it opens its own station screen
+          // (Radio Browser streams) instead of the category pipeline.
+          builder: (_) => c.query == 'radio'
+              ? const RadioScreen()
+              : CategoryScreen(
+                  title: c.title,
+                  query: c.query,
+                  color: c.color,
+                  asset: c.asset,
+                  icon: c.icon,
+                  subs: c.subs,
+                ),
+        ));
       },
     );
   }
@@ -1221,6 +1241,15 @@ final List<_BrowseCardData> _kBrowseCards = [
       'Irish Drill',
     ],
   ),
+  // Radios: not a music category — Radio Browser streams, playable without
+  // YouTube, without a relay and without any server of ours. Opens its own
+  // screen (see the `radio` branch in _buildCard).
+  const _BrowseCardData(
+    title: 'Radio',
+    color: Color(0xFF1E3264),
+    icon: Icons.radio_rounded,
+    query: 'radio',
+  ),
 ];
 
 class _AssetCategoryCard extends ConsumerWidget {
@@ -1244,8 +1273,13 @@ class _AssetCategoryCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Static bundled artwork ONLY: the card image must never change between
-    // visits, so no network image is fetched here.
+    // Real genre artwork from iTunes (single fast lookup) so the tile depicts
+    // its own category; the bundled cover is the placeholder / offline / error
+    // fallback, so the card never goes blank.
+    final realCover =
+        (query != null && query!.isNotEmpty)
+            ? ref.watch(categoryTileCoverProvider(query!)).valueOrNull
+            : null;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1286,7 +1320,7 @@ class _AssetCategoryCard extends ConsumerWidget {
                   ),
                 ),
               ),
-            if (asset != null)
+            if (asset != null || realCover != null)
               Positioned(
                 bottom: -14,
                 right: -16,
@@ -1306,15 +1340,7 @@ class _AssetCategoryCard extends ConsumerWidget {
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.asset(
-                        asset!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Icon(
-                          icon ?? Icons.music_note,
-                          color: Colors.white.withValues(alpha: 0.5),
-                          size: 28,
-                        ),
-                      ),
+                      child: _thumbnail(realCover, asset, icon),
                     ),
                   ),
                 ),
@@ -1341,6 +1367,33 @@ class _AssetCategoryCard extends ConsumerWidget {
       ),
     );
   }
+
+  /// The corner artwork: real iTunes cover when available, otherwise the
+  /// bundled genre cover, otherwise the category icon.
+  Widget _thumbnail(String? url, String? asset, IconData? icon) {
+    final fallback = (asset != null)
+        ? Image.asset(
+            asset,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _iconFallback(icon),
+          )
+        : _iconFallback(icon);
+    if (url == null) return fallback;
+    return CachedNetworkImage(
+      imageUrl: url,
+      fit: BoxFit.cover,
+      width: 80,
+      height: 80,
+      placeholder: (_, __) => fallback,
+      errorWidget: (_, __, ___) => fallback,
+    );
+  }
+
+  Widget _iconFallback(IconData? icon) => Icon(
+        icon ?? Icons.music_note,
+        color: Colors.white.withValues(alpha: 0.5),
+        size: 28,
+      );
 }
 
 // Clips/Discover sections moved to discover_all_section.dart

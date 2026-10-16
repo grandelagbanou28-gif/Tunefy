@@ -15,6 +15,7 @@ import 'package:muzo/providers/theme_provider.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
+import 'package:muzo/widgets/song_video_backdrop.dart';
 
 class AlbumArtNLyrics extends ConsumerStatefulWidget {
   final double playerArtImageSize;
@@ -24,7 +25,8 @@ class AlbumArtNLyrics extends ConsumerStatefulWidget {
   ConsumerState<AlbumArtNLyrics> createState() => _AlbumArtNLyricsState();
 }
 
-class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
+class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics>
+    with WidgetsBindingObserver {
   bool _showLyrics = false;
   bool _isLoadingLyrics = false;
   Lyrics? _lyrics;
@@ -34,15 +36,94 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
   /// on track change / unmount. Null = static artwork.
   VideoPlayerController? _canvasController;
   String? _canvasKey;
+  ModalRoute? _overlayRoute;
+  AnimationStatusListener? _overlayListener;
+
   @override
   void initState() {
     super.initState();
+    lyricsVideoBackdropOpen.addListener(_onLyricsBackdropChanged);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    lyricsVideoBackdropOpen.removeListener(_onLyricsBackdropChanged);
+    _detachOverlayListener();
     _canvasController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _watchOverlayRoutes();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_restoreCanvas());
+    } else {
+      _yieldCanvas();
+    }
+  }
+
+  /// Le décodeur vidéo d'Android est une ressource unique : la pochette animée
+  /// le rend dès qu'une page est passée par-dessus le player (clips, concert,
+  /// paroles) et le reprend quand elle disparaît. Deux décodeurs simultanés
+  /// tuent le processus, mini-player compris.
+  void _watchOverlayRoutes() {
+    final route = ModalRoute.of(context);
+    if (identical(route, _overlayRoute)) return;
+    _detachOverlayListener();
+    _overlayRoute = route;
+    final animation = route?.secondaryAnimation;
+    if (animation == null) return;
+    _overlayListener = (status) {
+      if (status == AnimationStatus.completed) {
+        _yieldCanvas();
+      } else if (status == AnimationStatus.dismissed) {
+        unawaited(_restoreCanvas());
+      }
+    };
+    animation.addStatusListener(_overlayListener!);
+  }
+
+  void _detachOverlayListener() {
+    final listener = _overlayListener;
+    final animation = _overlayRoute?.secondaryAnimation;
+    if (listener != null && animation != null) {
+      animation.removeStatusListener(listener);
+    }
+    _overlayListener = null;
+  }
+
+  void _yieldCanvas() {
+    if (_canvasController == null) return;
+    _disposeCanvas();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _restoreCanvas() async {
+    final media = ref.read(currentMediaItemProvider).valueOrNull;
+    if (media == null) return;
+    if (_canvasController != null || _canvasKey == null) return;
+    final storage = ref.read(storageServiceProvider);
+    if (!storage.canvasEnabled || lyricsVideoBackdropOpen.value) return;
+    _canvasKey = media.id;
+    await _loadCanvas(media);
+  }
+
+  /// L'écran des paroles a sa propre vidéo : la pochette ne se contente pas de
+  /// la mettre en pause, elle rend le décodeur.
+  void _onLyricsBackdropChanged() {
+    if (lyricsVideoBackdropOpen.value) {
+      _yieldCanvas();
+    } else {
+      unawaited(_restoreCanvas());
+    }
   }
 
   /// Starts (or restarts) the Canvas loop for [mediaItem]. The caller owns
@@ -53,25 +134,41 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
     if (videoId.isEmpty) return;
     final storage = ref.read(storageServiceProvider);
     if (!storage.canvasEnabled) return;
+    // Un autre écran tient déjà le décodeur : ne jamais empiler deux vidéos.
+    if (lyricsVideoBackdropOpen.value) return;
+    VideoPlayerController? probe;
+    var keep = false;
     try {
       final url = await StreamExtractionService.getVideoStreamUrl(videoId)
           .timeout(const Duration(seconds: 45));
       if (!mounted || _canvasKey != videoId) return;
       if (url == null || url.isEmpty) return;
-      final vc = VideoPlayerController.networkUrl(Uri.parse(url));
-      _canvasController = vc;
-      await vc.initialize();
-      if (!mounted || _canvasKey != videoId) {
-        await vc.dispose();
-        if (identical(_canvasController, vc)) _canvasController = null;
-        return;
-      }
-      await vc.setVolume(0);
-      await vc.setLooping(true);
-      if (!_showLyrics) await vc.play();
+      probe = VideoPlayerController.networkUrl(Uri.parse(url));
+      _canvasController = probe;
+      await probe.initialize().timeout(const Duration(seconds: 12));
+      if (!mounted || _canvasKey != videoId) return;
+      // Une vidéo dont la trame n'a pas de taille connue ne peut pas être
+      // mise à l'échelle : le FittedBox en dessous diviserait par zéro.
+      final size = probe.value.size;
+      if (size.width <= 0 || size.height <= 0) return;
+      keep = true;
+      await probe.setVolume(0);
+      await probe.setLooping(true);
+      if (!_showLyrics && !lyricsVideoBackdropOpen.value) await probe.play();
       if (mounted) setState(() {});
     } catch (_) {
       // No canvas for this track: the static cover stays. Silent by design.
+    } finally {
+      // Lâcher un contrôleur sans le fermer retient un décodeur MediaCodec.
+      // Un par titre raté, et c'est tout le processus qui tombe — mini-player
+      // compris, parce que lui ne meurt pas seul.
+      if (!keep) {
+        final dead = probe;
+        if (dead != null) {
+          if (identical(_canvasController, dead)) _canvasController = null;
+          await dead.dispose();
+        }
+      }
     }
   }
 
@@ -120,6 +217,10 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
           _lastFetchedTitle = mediaItem.title;
           _isLoadingLyrics = false;
         });
+        if (!_isLoadingLyrics && (_lyrics == null || (_lyrics!.plainLyrics.isEmpty && _lyrics!.syncedLyrics.isEmpty))) {
+          // If no valid lyrics, hide the lyrics view
+          if (_showLyrics) _setLyricsVisible(false);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -128,6 +229,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
           _lastFetchedTitle = mediaItem.title;
           _isLoadingLyrics = false;
         });
+        if (_showLyrics) _setLyricsVisible(false);
       }
     }
   }
@@ -146,13 +248,21 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
     final mediaItemAsync = ref.watch(currentMediaItemProvider);
     final audioHandler = ref.watch(audioHandlerProvider);
 
-    // Canvas follows the track: a new id disposes the old loop and starts a
-    // fresh resolve. Disposal during build is safe (no setState involved).
+    // Canvas follows the track. Neither the release nor the new decode happens
+    // inside build: disposing a controller there leaves the frame's Texture
+    // pointing at a dead surface, and starting the next loop before the
+    // previous one is freed means two decoders at once — both crash the app.
     final currentMedia = mediaItemAsync.valueOrNull;
     if (currentMedia != null && currentMedia.id != _canvasKey) {
-      _disposeCanvas();
       _canvasKey = currentMedia.id;
-      unawaited(_loadCanvas(currentMedia));
+      final stale = _canvasController;
+      _canvasController = null;
+      final media = currentMedia;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await stale?.dispose();
+        if (!mounted || _canvasKey != media.id) return;
+        await _loadCanvas(media);
+      });
     }
 
     final safeSize = widget.playerArtImageSize.clamp(10.0, double.infinity);
@@ -185,7 +295,10 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                     return Container(color: Colors.grey[900]);
                   }
                   final canvas = _canvasController;
-                  if (canvas != null && canvas.value.isInitialized) {
+                  if (canvas != null &&
+                      canvas.value.isInitialized &&
+                      canvas.value.size.width > 0 &&
+                      canvas.value.size.height > 0) {
                     return SizedBox(
                       width: widget.playerArtImageSize,
                       height: widget.playerArtImageSize,
@@ -242,7 +355,7 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                                   ).colorScheme.onSurface,
                                 ),
                               )
-                            : _lyrics == null
+                            : (_lyrics == null || _lyrics!.plainLyrics.isEmpty && _lyrics!.syncedLyrics.isEmpty)
                             ? Center(
                                 child: Text(
                                   AppLocalizations.of(context).noLyricsFound,
@@ -371,13 +484,17 @@ class _AlbumArtNLyricsState extends ConsumerState<AlbumArtNLyrics> {
                               _disposeCanvas();
                               setState(() {});
                             } else {
-                              final media =
-                                  mediaItemAsync.valueOrNull;
-                              _canvasKey = null;
+                              final media = mediaItemAsync.valueOrNull;
                               if (media != null) {
-                                _disposeCanvas();
+                                final stale = _canvasController;
+                                _canvasController = null;
                                 _canvasKey = media.id;
-                                unawaited(_loadCanvas(media));
+                                WidgetsBinding.instance.addPostFrameCallback(
+                                    (_) async {
+                                  await stale?.dispose();
+                                  if (!mounted || _canvasKey != media.id) return;
+                                  await _loadCanvas(media);
+                                });
                               }
                               setState(() {});
                             }

@@ -17,10 +17,12 @@ import 'package:muzo/services/dj_mix_tips.dart';
 import 'package:muzo/services/dj_mood_bot.dart';
 import 'package:muzo/services/dj_radio_service.dart';
 import 'package:muzo/services/dj_smart_playlist.dart';
+import 'package:muzo/services/dj_smalltalk.dart';
 import 'package:muzo/services/gemini_service.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/utils/app_colors.dart';
 import 'package:muzo/utils/page_routes.dart';
+import 'package:muzo/widgets/dj_deck_animation.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
 
@@ -50,6 +52,9 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   bool _historyLoaded = false;
   int _durationMinutes = 60;
   DjMood? _activeMood;
+  String? _greetedSlot;
+  String? _lastRequest;
+  DjMood? _lastMixMood;
   StreamSubscription<Duration>? _posSub;
   String? _prevMediaKey;
   bool _radioRefillScheduled = false;
@@ -60,6 +65,10 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   List<DjGeneratedMix> _recentMixes = [];
 
   final TextEditingController _chatController = TextEditingController();
+  // Le clavier remonte par-dessus la page : sans défilement automatique, on
+  // tape le message sans voir le champ ni la dernière réponse du DJ.
+  final FocusNode _chatFocus = FocusNode();
+  final GlobalKey _composerKey = GlobalKey();
   final ScrollController _chatScroll = ScrollController();
   final ScrollController _mainScroll = ScrollController();
 
@@ -68,12 +77,26 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   @override
   void initState() {
     super.initState();
+    _chatFocus.addListener(_revealComposer);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(_loadHistory());
       _attachPlayerHooks();
       final media = ref.read(currentMediaItemProvider).valueOrNull;
       if (media == null && widget.seed != null) _startFromSeed();
+    });
+  }
+
+  /// Amène le champ de saisie juste au-dessus du clavier.
+  void _revealComposer() {
+    if (!_chatFocus.hasFocus) return;
+    _chatScrollToBottom();
+    Future.delayed(const Duration(milliseconds: 280), () {
+      if (!mounted) return;
+      final ctx = _composerKey.currentContext;
+      if (ctx == null || !ctx.mounted) return;
+      Scrollable.ensureVisible(ctx,
+          alignment: 0.92, duration: const Duration(milliseconds: 200));
     });
   }
 
@@ -114,6 +137,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       final dur = (session['durationMinutes'] as num?)?.toInt();
       if (dur != null && dur > 0) _durationMinutes = dur;
       _activeMood = _moodFromName(session['activeMood'] as String?);
+      _greetedSlot = session['greetedSlot'] as String?;
       _radio.setEnabled(session['radioEnabled'] == true);
       if (_activeMood != null) {
         _radio.setMood(_activeMood);
@@ -121,6 +145,23 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       }
     });
     if (_chat.isNotEmpty) _chatScrollToBottom();
+    await _maybeGreet();
+  }
+
+  /// Le DJ accueille l'utilisateur selon l'heure et demande comment se passe
+  /// la journée. Une salutation par créneau (matinée, après-midi, soirée,
+  /// nuit) : ouvrir et refermer la page ne doit pas la répéter.
+  Future<void> _maybeGreet() async {
+    final slot = DjSmallTalk.slotKey(DateTime.now());
+    if (_greetedSlot == slot || !mounted) return;
+    final greeting = DjSmallTalk.greeting(AppLocalizations.of(context));
+    setState(() {
+      _greetedSlot = slot;
+      _chat.add(DjChatMessage.bot(greeting));
+    });
+    _chatScrollToBottom();
+    unawaited(_persistChat());
+    unawaited(_persistSession());
   }
 
   Future<void> _persistChat() async {
@@ -133,6 +174,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       'durationMinutes': _durationMinutes,
       'radioEnabled': _radio.enabled,
       'activeMood': _activeMood?.name,
+      'greetedSlot': _greetedSlot,
     });
   }
 
@@ -148,6 +190,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   void dispose() {
     _posSub?.cancel();
     _chatController.dispose();
+    _chatFocus.dispose();
     _chatScroll.dispose();
     _mainScroll.dispose();
     super.dispose();
@@ -277,10 +320,16 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     final text = _chatController.text.trim();
     if (text.isEmpty || _typing || _busy) return;
     _chatController.clear();
+    _sendText(text);
+  }
+
+  /// Envoie un message dans le chat (saisie libre ou pastille d'humeur).
+  void _sendText(String text, {DjMood? mood}) {
+    if (text.isEmpty || _typing || _busy) return;
     setState(() => _chat.add(DjChatMessage.user(text)));
     _chatScrollToBottom();
     unawaited(_persistChat());
-    unawaited(_runMoodChat(text));
+    unawaited(_runMoodChat(text, preDetected: mood));
   }
 
   Future<void> _runMoodChat(String raw, {DjMood? preDetected}) async {
@@ -332,6 +381,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       await _publishMix(
         picks: picks,
         mood: mood,
+        request: raw,
         mixTitle: '${_moodName(l10n, mood)} · ${l10n.tunefyDj}',
         reply: '${_moodReply(l10n, mood)}\n\n'
             '${l10n.djMoodReady.replaceAll('{count}', '${picks.length}')}',
@@ -374,13 +424,24 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       final recentSlices = _chat
           .skip(_chat.length > 8 ? _chat.length - 8 : 0)
           .map((m) => '${m.fromUser ? 'User' : 'DJ'}: ${m.text}');
+      final hour = DateTime.now().hour;
+      final partOfDay = hour >= 5 && hour < 12
+          ? 'morning'
+          : hour >= 12 && hour < 18
+              ? 'afternoon'
+              : hour >= 18 && hour < 23
+                  ? 'evening'
+                  : 'night';
       final prompt = 'You are Tunefy DJ, the DJ assistant of a music app. '
+          'It is the $partOfDay for this user. '
           'Reply in the ${l10n.locale.languageCode} language, like a warm, '
-          'professional DJ. Keep it under 3 short sentences. If the user '
-          'shares a mood or feeling, acknowledge it and invite them to let '
-          'you spin a real mix. If the message is off-topic, steer gently '
-          'back to music. Never invent specific song titles, artists or '
-          'links.\n\n'
+          'professional DJ having a real conversation: react to what the user '
+          'actually said, then ask ONE short follow-up question (how their '
+          'day went, what they are doing, how they want to feel). Keep it to '
+          '2 or 3 short sentences, plain text, no list. If the user shares a '
+          'mood or feeling, acknowledge it and invite them to let you spin a '
+          'real mix. If the message is off-topic, steer gently back to music. '
+          'Never invent specific song titles, artists or links.\n\n'
           'Recent conversation:\n${recentSlices.join('\n')}\n\n'
           'User: $raw\nDJ:';
       final reply = await gemini.completeProse(prompt);
@@ -389,7 +450,8 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         _typing = false;
         _busy = false;
         _typingLabel = null;
-        _chat.add(DjChatMessage.bot(reply ?? l10n.djChatFallback));
+        _chat.add(DjChatMessage.bot(
+            reply ?? DjSmallTalk.reply(l10n, raw)));
       });
       _chatScrollToBottom();
       unawaited(_persistChat());
@@ -400,7 +462,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         _typing = false;
         _busy = false;
         _typingLabel = null;
-        _chat.add(DjChatMessage.bot(l10n.djChatFallback));
+        _chat.add(DjChatMessage.bot(DjSmallTalk.reply(l10n, raw)));
       });
       _chatScrollToBottom();
       unawaited(_persistChat());
@@ -455,6 +517,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       await _publishMix(
         picks: picks,
         mood: null,
+        request: prompt,
         mixTitle: prompt.length > 48 ? '${prompt.substring(0, 48)}…' : prompt,
         reply:
             l10n.djSmartPlaylistReady.replaceAll('{count}', '${picks.length}'),
@@ -485,11 +548,14 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   Future<void> _publishMix({
     required List<MuzoItem> picks,
     required DjMood? mood,
+    required String request,
     required String mixTitle,
     required String reply,
   }) async {
     if (!mounted) return;
     final l10n = AppLocalizations.of(context);
+    _lastRequest = request;
+    _lastMixMood = mood;
 
     // Enrich only the head for instant playback; keep the full list
     // (50–60 tracks) for the mix page — audio_handler resolves the rest
@@ -515,7 +581,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       title: mixTitle,
       createdAt: DateTime.now(),
       durationMinutes: _durationMinutes,
-      tracks: List.of(picks),
+      tracks: List.of(playable),
     );
     await _history.saveMix(mix);
 
@@ -561,6 +627,15 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     } else {
       await handler.playAll(playable, startIndex: 0);
     }
+
+    // Un mix généré ouvre sa propre page (tout lire, aléatoire, tout
+    // télécharger) — mais seulement si la page DJ est encore au premier plan,
+    // sinon on empilerait une page sur un écran que l'utilisateur a quitté.
+    if (!mounted) return;
+    if (ModalRoute.of(context)?.isCurrent ?? false) {
+      unawaited(Navigator.of(context)
+          .push(SlidePageRoute(page: DjMixScreen(mix: mix))));
+    }
   }
 
   Future<void> _refreshMixes() async {
@@ -586,13 +661,34 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       _recentMixes = [];
       _activeMood = null;
       _durationMinutes = 60;
+      _greetedSlot = null;
+      _lastRequest = null;
+      _lastMixMood = null;
     });
     final l10n = AppLocalizations.of(context);
     showGlassSnackBar(context, l10n.djAllCleared);
+    await _maybeGreet();
   }
 
-  Future<void> _openMix(String mixId) async {
-    final mix = await _history.loadMix(mixId);
+  /// « Nouveau mix » : relance la demande qui a donné le set courant. Les
+  /// titres déjà dans la file sont écartés par le moteur, donc le nouveau mix
+  /// est réellement différent.
+  void _regenerateMix() {
+    if (_typing || _busy) return;
+    HapticFeedback.selectionClick();
+    final mood = _lastMixMood;
+    if (mood != null) {
+      unawaited(_runMoodChat(
+          _moodName(AppLocalizations.of(context), mood), preDetected: mood));
+      return;
+    }
+    final request = _lastRequest;
+    if (request != null && request.isNotEmpty) {
+      unawaited(_runMoodChat(request));
+    }
+  }
+
+  Future<void> _openMix(String mixId) async {    final mix = await _history.loadMix(mixId);
     if (!mounted) return;
     if (mix == null) {
       showGlassSnackBar(context, AppLocalizations.of(context).djMoodEmpty);
@@ -712,6 +808,9 @@ class _DjScreenState extends ConsumerState<DjScreen> {
       _onMediaChanged(next.valueOrNull);
     });
 
+    final nowPlaying = ref.watch(currentMediaItemProvider).valueOrNull;
+    final deckActive = nowPlaying != null || _typing;
+
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       body: SafeArea(
@@ -766,10 +865,17 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                 controller: _mainScroll,
                 child: Column(
                   children: [
+                    _buildDeck(l10n, active: deckActive),
+                    _buildControls(l10n),
                     _buildChat(l10n),
-                    const SizedBox(height: 4),
-                    if (_generated.isNotEmpty) _buildMoodSongs(l10n),
-                    const SizedBox(height: 24),
+                    if (_generated.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      _buildMoodSongs(l10n),
+                    ],
+                    // Le mini-player (84 + safe area) et la barre de navigation
+                    // flottent PAR-DESSUS cette page : sans cette réserve, le
+                    // dernier bloc de titres est écrasé et le tap ne répond plus.
+                    const SizedBox(height: 210),
                   ],
                 ),
               ),
@@ -780,11 +886,142 @@ class _DjScreenState extends ConsumerState<DjScreen> {
     );
   }
 
+  /// Hero de la page : platine vinyle et égaliseur animés. Une page DJ sans
+  /// disque qui tourne ressemblait à un panneau de réglages.
+  Widget _buildDeck(AppLocalizations l10n, {required bool active}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: Column(
+        children: [
+          DjDeckAnimation(size: 152, active: active),
+          const SizedBox(height: 14),
+          Text(
+            l10n.djMoodAsk,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: Colors.white70, fontSize: 12.5, height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Réglages du set : durée et radio sans fin. L'état et les services
+  /// existaient déjà, mais rien sur la page ne permettait d'y toucher.
+  Widget _buildControls(AppLocalizations l10n) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 18, 14, 0),
+      padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: AppColors.cardTranslucent,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.cardBorder),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.timelapse_rounded,
+                  color: Colors.white54, size: 16),
+              const SizedBox(width: 6),
+              Text(l10n.djDurationLabel,
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 28,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: DjMoodBot.durationChoices.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 7),
+                    itemBuilder: (context, i) {
+                      final minutes = DjMoodBot.durationChoices[i];
+                      final selected = minutes == _durationMinutes;
+                      return GestureDetector(
+                        onTap: () => _pickDuration(minutes),
+                        child: Container(
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(horizontal: 11),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? const Color(0xFF1DB954)
+                                : Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: selected
+                                  ? const Color(0xFF1DB954)
+                                  : Colors.white.withValues(alpha: 0.16),
+                            ),
+                          ),
+                          child: Text(
+                            l10n.djMixDuration
+                                .replaceAll('{minutes}', '$minutes'),
+                            style: TextStyle(
+                              color: selected ? Colors.black : Colors.white70,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            height: 1,
+            color: Colors.white.withValues(alpha: 0.07),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.radio_rounded,
+                  color: Colors.white54, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(l10n.djRadioToggle,
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ),
+              Switch(
+                value: _radio.enabled,
+                activeTrackColor: const Color(0xFF1DB954),
+                activeThumbColor: const Color(0xFF121212),
+                onChanged: _toggleRadio,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _pickDuration(int minutes) {
+    if (_durationMinutes == minutes) return;
+    HapticFeedback.selectionClick();
+    setState(() => _durationMinutes = minutes);
+    unawaited(_persistSession());
+  }
+
+  void _toggleRadio(bool value) {
+    HapticFeedback.selectionClick();
+    setState(() => _radio.setEnabled(value, mood: _activeMood));
+    unawaited(_persistSession());
+  }
+
   // ── Chat d'humeur avec le DJ ──────────────────────────────────────────────
 
   Widget _buildChat(AppLocalizations l10n) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: const EdgeInsets.fromLTRB(14, 18, 14, 0),
       decoration: BoxDecoration(
         color: AppColors.cardTranslucent,
         borderRadius: BorderRadius.circular(24),
@@ -794,7 +1031,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
               children: [
                 Container(
@@ -850,21 +1087,21 @@ class _DjScreenState extends ConsumerState<DjScreen> {
             ),
           ),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240),
+            constraints: const BoxConstraints(maxHeight: 340),
             child: ListView.builder(
               controller: _chatScroll,
               shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
               itemCount: _chat.length + (_typing ? 1 : 0),
               itemBuilder: (context, index) {
                 if (_typing && index == _chat.length) {
                   return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _bubbleAvatar(bot: true),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 10),
                         Flexible(
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -914,12 +1151,14 @@ class _DjScreenState extends ConsumerState<DjScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            key: _composerKey,
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
             child: Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _chatController,
+                    focusNode: _chatFocus,
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                     cursorColor: const Color(0xFF1DB954),
                     decoration: InputDecoration(
@@ -949,7 +1188,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                     onSubmitted: (_) => _sendMood(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 GestureDetector(
                   onTap: (_typing || _busy) ? null : _sendMood,
                   child: Container(
@@ -966,7 +1205,60 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               ],
             ),
           ),
+          _buildMoodChips(l10n),
         ],
+      ),
+    );
+  }
+
+  /// Répondre par une humeur sans la taper : les pages de chat sérieuses
+  /// proposent des choix, pas seulement un champ vide.
+  Widget _buildMoodChips(AppLocalizations l10n) {
+    return SizedBox(
+      height: 46,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(14, 6, 14, 10),
+        itemCount: DjMood.values.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final mood = DjMood.values[i];
+          final label = _moodName(l10n, mood);
+          final selected = _activeMood == mood;
+          return Opacity(
+            opacity: (_typing || _busy) ? 0.4 : 1,
+            child: GestureDetector(
+              onTap: () {
+                if (_typing || _busy) return;
+                HapticFeedback.selectionClick();
+                _sendText(label, mood: mood);
+              },
+              child: Container(
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 13),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? const Color(0xFF1DB954)
+                      : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: selected
+                        ? const Color(0xFF1DB954)
+                        : Colors.white.withValues(alpha: 0.16),
+                  ),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? Colors.black : Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1002,7 +1294,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   Widget _bubble(DjChatMessage m, AppLocalizations l10n) {
     final fromUser = m.fromUser;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment:
@@ -1010,7 +1302,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
         children: [
           if (!fromUser) ...[
             _bubbleAvatar(bot: true),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
           ],
           Flexible(
             child: Column(
@@ -1020,7 +1312,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               children: [
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                   constraints: BoxConstraints(
                       maxWidth: MediaQuery.of(context).size.width * 0.68),
                   decoration: BoxDecoration(
@@ -1105,7 +1397,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 6),
                 Text(_timeLabel(m.createdAt),
                     style: const TextStyle(
                         color: Colors.white24, fontSize: 10)),
@@ -1113,7 +1405,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
             ),
           ),
           if (fromUser) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             _bubbleAvatar(bot: false),
           ],
         ],
@@ -1158,13 +1450,14 @@ class _DjScreenState extends ConsumerState<DjScreen> {
 
   Widget _buildMoodSongs(AppLocalizations l10n) {
     final preview = _generated.take(8).toList();
+    // 14 px = l'alignement des cartes « plateau » et « chat » plus haut.
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(14, 18, 14, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            padding: const EdgeInsets.fromLTRB(10, 0, 0, 10),
             child: Row(
               children: [
                 const Icon(Icons.auto_awesome,
@@ -1180,6 +1473,35 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                         fontWeight: FontWeight.w700),
                   ),
                 ),
+                if (_activeMixId != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: GestureDetector(
+                      onTap: _regenerateMix,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 9, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.refresh_rounded,
+                                color: Colors.white70, size: 14),
+                            const SizedBox(width: 5),
+                            Text(l10n.djNewMix,
+                                style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 if (_activeMixId != null)
                   GestureDetector(
                     onTap: () {
@@ -1209,7 +1531,7 @@ class _DjScreenState extends ConsumerState<DjScreen> {
             _songCard(i, preview[i]),
           if (_generated.length > preview.length)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.fromLTRB(10, 10, 10, 2),
               child: GestureDetector(
                 onTap: () {
                   if (_activeMixId == null) return;
@@ -1227,9 +1549,9 @@ class _DjScreenState extends ConsumerState<DjScreen> {
               ),
             ),
           if (_recentMixes.isNotEmpty) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 20),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.only(left: 10),
               child: Text(
                 l10n.djRecentMixes,
                 style: const TextStyle(
@@ -1238,10 +1560,11 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                     fontWeight: FontWeight.w700),
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
             SizedBox(
-              height: 72,
+              height: 76,
               child: ListView.separated(
+                padding: const EdgeInsets.only(bottom: 4),
                 scrollDirection: Axis.horizontal,
                 itemCount: _recentMixes.length.clamp(0, 12),
                 separatorBuilder: (_, __) => const SizedBox(width: 10),
@@ -1258,7 +1581,9 @@ class _DjScreenState extends ConsumerState<DjScreen> {
                     },
                     child: Container(
                       width: 140,
-                      padding: const EdgeInsets.all(8),
+                      height: 68,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(12),
@@ -1327,40 +1652,51 @@ class _DjScreenState extends ConsumerState<DjScreen> {
   Widget _songCard(int index, MuzoItem song) {
     final handler = ref.read(audioHandlerProvider);
     final img = song.thumbnails.isNotEmpty ? song.thumbnails.last.url : '';
-    return ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: CachedNetworkImage(
-          imageUrl: img,
-          width: 44,
-          height: 44,
-          fit: BoxFit.cover,
-          errorWidget: (_, __, ___) => Container(
+    // Une vraie carte par titre : sans marge ni fond, les lignes se collaient
+    // les unes aux autres et le texte touchait le bord.
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: CachedNetworkImage(
+            imageUrl: img,
             width: 44,
             height: 44,
-            color: Colors.grey[850],
-            child: const Icon(Icons.music_note,
-                color: Colors.white38, size: 18),
+            fit: BoxFit.cover,
+            errorWidget: (_, __, ___) => Container(
+              width: 44,
+              height: 44,
+              color: Colors.grey[850],
+              child: const Icon(Icons.music_note,
+                  color: Colors.white38, size: 18),
+            ),
           ),
         ),
+        title: Text(song.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500)),
+        subtitle: Text(song.displayArtist,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white54, fontSize: 11)),
+        onTap: () {
+          if (_typing || _busy) return;
+          unawaited(handler.playAll(List.of(_generated), startIndex: index));
+        },
       ),
-      title: Text(song.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w500)),
-      subtitle: Text(song.displayArtist,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Colors.white54, fontSize: 11)),
-      onTap: () {
-        if (_typing || _busy) return;
-        unawaited(handler.playAll(List.of(_generated), startIndex: index));
-      },
     );
   }
 }

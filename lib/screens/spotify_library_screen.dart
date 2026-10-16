@@ -20,7 +20,6 @@ import 'package:muzo/screens/library_artists_screen.dart';
 import 'package:muzo/screens/library_albums_screen.dart';
 import 'package:muzo/screens/library_podcasts_screen.dart';
 import 'package:muzo/screens/library_songs_screen.dart';
-import 'package:muzo/screens/library_downloads_screen.dart';
 
 class SpotifyLibraryScreen extends ConsumerStatefulWidget {
   const SpotifyLibraryScreen({super.key});
@@ -606,18 +605,10 @@ class _SpotifyLibraryScreenState extends ConsumerState<SpotifyLibraryScreen> {
       imageUrl: '',
     ));
 
-    // Downloads (always visible: this is where offline tracks live).
-    items.add(_LibItem(
-      id: 'downloaded_songs',
-      type: _LibType.downloads,
-      title: l10n.downloads,
-      subtitle: l10n.songsCountFiles(storage.getDownloads().length),
-      imageUrl: '',
-      onTap: () => Navigator.push(
-        context,
-        SlidePageRoute(page: const LibraryDownloadsScreen()),
-      ),
-    ));
+    // « Téléchargements » n'est plus une tuile de la Library : un titre
+    // téléchargé s'écoute depuis la page de l'artiste qui le porte, et la
+    // liste des fichiers reste atteignable hors ligne (bouton de l'écran
+    // artiste) et par les Réglages.
 
     // Folders
     final folders = storage.getFolders();
@@ -1152,9 +1143,6 @@ class _SpotifyLibraryScreenState extends ConsumerState<SpotifyLibraryScreen> {
       case _LibType.podcast:
         icon = Icons.podcasts;
         break;
-      case _LibType.downloads:
-        icon = Icons.download_for_offline_outlined;
-        break;
       default:
         icon = Icons.music_note;
     }
@@ -1322,7 +1310,7 @@ class _SpotifyLibraryScreenState extends ConsumerState<SpotifyLibraryScreen> {
 }
 
 // ─── Data model ───
-enum _LibType { likedSongs, folder, playlist, artist, album, podcast, downloads }
+enum _LibType { likedSongs, folder, playlist, artist, album, podcast }
 
 class _LibItem {
   const _LibItem({

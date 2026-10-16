@@ -88,7 +88,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   Color get _color => const Color(0xFF1DDA63);
 
-  Future<AlbumDetails?> _loadAlbum() {
+  /// Hard deadline: a page must never stay on skeletons forever. Whatever
+  /// takes longer than this is reported as a failed load, which renders the
+  /// retry screen instead of a dead spinner.
+  Future<AlbumDetails?> _loadAlbum() => _fetchAlbum().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          debugPrint('AlbumScreen: load deadline hit for ${widget.albumId}');
+          return null;
+        },
+      );
+
+  Future<AlbumDetails?> _fetchAlbum() async {
     if (_isDeezer) {
       return ref.read(deezerApiServiceProvider).albumDetails(
             widget.albumId.substring(3),
@@ -96,7 +107,41 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             fallbackThumb: widget.thumbnailUrl,
           );
     }
-    return ref.read(muzoApiServiceProvider).getAlbumDetails(widget.albumId);
+    final name = widget.albumName?.trim() ?? '';
+    // Les deux sources partent EN PARALLÈLE. Le worker /api/album répond
+    // « No contents found » pour presque tous les id MPREb_ : l'attendre avant
+    // de tenter Deezer ajoutait 2-15 s à chaque ouverture d'album pour rien.
+    final workerFuture =
+        ref.read(muzoApiServiceProvider).getAlbumDetails(widget.albumId);
+    final deezerFuture =
+        name.isEmpty ? Future<AlbumDetails?>.value(null) : _deezerByTitle(name);
+    final worker = await workerFuture;
+    if (worker != null && worker.tracks.isNotEmpty) return worker;
+
+    // The deployed worker's endpoint being dead for these ids, Deezer carries
+    // the same catalogue with a complete tracklist.
+    final fromDeezer = await deezerFuture;
+    if (fromDeezer != null && fromDeezer.tracks.isNotEmpty) return fromDeezer;
+    debugPrint('AlbumScreen: no tracklist for "$name"');
+    return worker;
+  }
+
+  /// Deezer album looked up by exact (normalized) title match.
+  Future<AlbumDetails?> _deezerByTitle(String name) async {
+    final deezer = ref.read(deezerApiServiceProvider);
+    String clean(String s) =>
+        s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+    for (final seed in await deezer.searchAlbums(name, limit: 6)) {
+      final id = seed.browseId ?? '';
+      if (!id.startsWith('dz:') || clean(seed.title) != clean(name)) continue;
+      final details = await deezer.albumDetails(
+        id.substring(3),
+        fallbackTitle: widget.albumName,
+        fallbackThumb: widget.thumbnailUrl,
+      );
+      if (details != null && details.tracks.isNotEmpty) return details;
+    }
+    return null;
   }
 
   /// Deezer tracks are metadata seeds (`dz_` ids); resolve once to real
@@ -116,6 +161,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// Pre-resolves stream URLs in the background (2 at a time) so Play starts
   /// instantly — same pattern as ArtistPageScreen._enrichSongs.
   Future<void> _enrichSongs(List<MuzoItem> songs) async {
+    // Pré-résoudre 40 streams YouTube sert à un démarrage instantané du
+    // streaming ; avec la règle « seuls les téléchargés se lisent » ils ne
+    // seront jamais joués et chaque résolution consomme l'IP de l'appareil.
+    if (StorageService().playDownloadedOnly) return;
     final target = songs.take(40).toList();
     for (int i = 0; i < target.length; i += 2) {
       final end = i + 2 < target.length ? i + 2 : target.length;
@@ -225,12 +274,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       resolved = await _ensureResolved(playable);
       if (!mounted) return;
       if (resolved.isEmpty) {
-        showGlassSnackBar(context, l10n.albumTrackLoadFailed, error: true);
-        return;
+        // No YouTube match for this seed. Keep the tap: the handler can still
+        // stream it by title, and it is the one that reports a real failure.
+        if (tapped.title.trim().isEmpty) {
+          showGlassSnackBar(context, l10n.albumTrackLoadFailed, error: true);
+          return;
+        }
+      } else {
+        final i = resolved.indexWhere(
+            (s) => s.title.toLowerCase() == tapped.title.toLowerCase());
+        target = i >= 0 ? resolved[i] : resolved.first;
       }
-      final i = resolved.indexWhere(
-          (s) => s.title.toLowerCase() == tapped.title.toLowerCase());
-      target = i >= 0 ? resolved[i] : resolved.first;
     }
     final index = playable.indexWhere((s) => s.videoId == tapped.videoId);
     if (mounted) {
@@ -270,10 +324,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 if (mounted) _enrichSongs(snapshot);
               });
             }
-            final playable = tracks
+            // La tracklist s'affiche ENTIERE tout de suite. Filtrer sur
+            // `videoId != null` ne laissait apparaître que les 4-6 titres déjà
+            // passés par l'enrichissement : l'utilisateur voyait un album de 16
+            // titres en compter 5, puis 0 tant que le réseau traînait. Un titre
+            // sans videoId s'appuie sur la résolution à la demande du tap
+            // (_playTitle → _ensureResolved → playSongAndOpenNowPlaying).
+            final listed = tracks
                 .map((s) => _enrichedByVideoId[s.videoId ?? ''] ?? s)
-                .where((s) => s.videoId != null)
                 .toList();
+            final playable =
+                listed.where((s) => s.videoId != null).toList();
 
             return CustomScrollView(
               controller: _scrollController,
@@ -282,7 +343,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 SliverToBoxAdapter(
                   child: _buildActionBar(context, album, playable),
                 ),
-                if (playable.isEmpty)
+                if (listed.isEmpty)
                   SliverFillRemaining(
                     hasScrollBody: false,
                     child: _EmptyTracks(l10n),
@@ -291,7 +352,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                      child: _albumStats(l10n, playable),
+                      child: _albumStats(l10n, listed),
                     ),
                   ),
                   SliverPadding(
@@ -299,7 +360,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     sliver: SliverList(
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
-                          final song = playable[index];
+                          final song = listed[index];
 final img = song.thumbnails.isNotEmpty
                             ? song.thumbnails.last.url
                             : album.thumbnail;
@@ -322,11 +383,11 @@ final img = song.thumbnails.isNotEmpty
                             },
                             onTap: () {
                               HapticFeedback.selectionClick();
-                              _playTitle(playable, song);
+                              _playTitle(listed, song);
                             },
                           );
                         },
-                        childCount: playable.length,
+                        childCount: listed.length,
                       ),
                     ),
                   ),

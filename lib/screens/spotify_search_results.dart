@@ -8,6 +8,7 @@ import 'package:muzo/screens/album_screen.dart';
 import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/channel_screen.dart';
 import 'package:muzo/screens/playlist_screen.dart';
+import 'package:muzo/screens/playlist_details_screen.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/utils/song_navigation.dart';
@@ -233,13 +234,28 @@ class _SpotifySearchResultsScreenState
                         },
                 );
               case 'playlist':
+                final localPlaylist = (bId ?? '').startsWith('local:');
                 return SpotifyAlbumChip(
                   imageUrl: img,
                   albumName: r.title,
                   artistName: AppLocalizations.of(context).playlistType,
                   size: 47,
                   onTap: (bId != null && bId.isNotEmpty)
-                      ? () => nav.push(
+                      ? () {
+                          HapticFeedback.selectionClick();
+                          // 'local:' playlists live in app storage, not on
+                          // YouTube — open the local playlist page instead.
+                          if (localPlaylist) {
+                            nav.push(
+                              SlidePageRoute(
+                                page: PlaylistDetailsScreen(
+                                  playlistName: bId.substring(6),
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          nav.push(
                             SlidePageRoute(
                               page: PlaylistScreen(
                                 playlistId: bId,
@@ -247,7 +263,8 @@ class _SpotifySearchResultsScreenState
                                 thumbnailUrl: img,
                               ),
                             ),
-                          )
+                          );
+                        }
                       : null,
                 );
               case 'channel':
@@ -271,20 +288,30 @@ class _SpotifySearchResultsScreenState
                       : null,
                 );
               default:
-                return SpotifySongChip(
-                  imageUrl: img,
-                  songTitle: r.title,
-                  singerName: r.displayArtist,
-                  size: 47,
-                  videoId: r.videoId,
-                  result: r,
-                  onSingerTap: () {
-                    HapticFeedback.selectionClick();
-                    openArtistForSong(context, r);
-                  },
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    openArtistForSong(context, r);
+                return ValueListenableBuilder(
+                  valueListenable:
+                      ref.read(storageServiceProvider).downloadsListenable,
+                  builder: (context, _, __) {
+                    final downloaded = r.videoId != null &&
+                        ref.read(storageServiceProvider)
+                            .isDownloaded(r.videoId!);
+                    return SpotifySongChip(
+                      imageUrl: img,
+                      songTitle: r.title,
+                      singerName: r.displayArtist,
+                      size: 47,
+                      videoId: r.videoId,
+                      result: r,
+                      downloaded: downloaded,
+                      onSingerTap: () {
+                        HapticFeedback.selectionClick();
+                        openArtistForSong(context, r);
+                      },
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        openArtistForSong(context, r);
+                      },
+                    );
                   },
                 );
             }

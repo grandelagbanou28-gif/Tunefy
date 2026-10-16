@@ -288,7 +288,15 @@ class ClipPageController {
     final vc = VideoPlayerController.networkUrl(url);
     _player = vc;
     _backdrop = backdrop;
-    await vc.initialize();
+    try {
+      // Un flux YouTube expiré ne répond jamais : sans borne, la page reste
+      // figée sur son spinner et le décodeur est retenu pour rien.
+      await vc.initialize().timeout(const Duration(seconds: 20));
+    } catch (_) {
+      await vc.dispose();
+      if (_player == vc) _player = null;
+      rethrow;
+    }
     if (disposed) {
       await vc.dispose();
       return;
@@ -572,7 +580,9 @@ class _ClipPageState extends ConsumerState<_ClipPage> {
                 onTap: () async {
                   HapticFeedback.selectionClick();
                   await ClipReactions.toggleLike(item.videoId!);
+                  if (!mounted) return;
                   _liked = await ClipReactions.isLiked(item.videoId!);
+                  if (!mounted) return;
                   setState(() {});
                   if (_liked ?? false) {
                     try {

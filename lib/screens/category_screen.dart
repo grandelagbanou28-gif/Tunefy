@@ -304,7 +304,11 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
   /// the back chevron lives in the pinned bar (always visible, no duplicates),
   /// and the search / more buttons ride on top of the banner.
   Widget _buildHeader() {
-    return _buildHeaderWithCover(_staticCover ?? _asset);
+    // Prefer the category's real artwork (iTunes/MusicBrainz chain) so the
+    // banner always depicts the genre; fall back to the bundled cover, which
+    // is also what shows while loading and when offline.
+    final remote = ref.watch(categoryImageProvider(_query)).valueOrNull;
+    return _buildHeaderWithCover(remote ?? _staticCover ?? _asset);
   }
 
   Widget _buildHeaderWithCover(String? cover) {
@@ -1403,7 +1407,6 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
           artistName: artist.name,
           imageUrl: artist.imageUrl,
           color: _color,
-          showConcerts: false,
         ),
       ),
     );
@@ -1433,7 +1436,6 @@ class _CategoryScreenState extends ConsumerState<CategoryScreen> {
           artistName: track.artist,
           imageUrl: track.coverUrl,
           color: _color,
-          showConcerts: false,
         ),
       ),
     );
@@ -1576,26 +1578,31 @@ class _SubCategoryRow extends ConsumerWidget {
             final artist =
                 primaryArtistName(song.displayArtist).trim().toLowerCase();
             final displayLower = song.displayArtist.toLowerCase();
-            // Soft cross-section dedupe: skip an artist only while the rack
-            // already holds at least five songs. Guarantees every sub shows
-            // ≥5 real titles (the user requirement), reserving the "one artist
-            // once per page" rule for sections with plenty of content.
+            // Strict cross-section dedupe: an artist appears at most once per
+            // page. The old rule only skipped repeats once a section held ≥5
+            // songs, which is exactly what produced the "same artist repeated
+            // for no reason" the user reported in thin sections.
             final repeated = artist.isNotEmpty &&
                 (usedArtists.contains(artist) ||
                     staged.contains(artist) ||
                     usedArtists.any((a) => displayLower.contains(a)) ||
                     staged.any((a) => displayLower.contains(a)));
-            if (repeated && pending.length >= 5) continue;
+            if (repeated) continue;
             if (artist.isNotEmpty) staged.add(artist);
             pending.add(song);
             if (pending.length >= 18) break;
           }
           if (pending.isEmpty) {
-            return const SizedBox.shrink();
+            // Une ligne entièrement doublonnée par une section plus haut sur la
+            // page ne doit pas devenir invisible — surtout hors-ligne, où ces
+            // titres sont les seuls disponibles. On la rend avec son propre
+            // contenu, sans la revendiquer pour les suivantes.
+            visible = songs.take(18).toList();
+          } else {
+            usedArtists.addAll(staged);
+            claimed[cacheKey] = pending;
+            visible = pending;
           }
-          usedArtists.addAll(staged);
-          claimed[cacheKey] = pending;
-          visible = pending;
         }
         // Section header lives here so it only renders once the 3-song
         // minimum is guaranteed — masked subs never leave an orphan title.
@@ -1656,7 +1663,6 @@ class _SubCategoryRow extends ConsumerWidget {
                             artistName: name,
                             imageUrl: img,
                             color: color,
-                            showConcerts: false,
                           ),
                         ),
                       );
@@ -1693,7 +1699,6 @@ class _SubCategoryRow extends ConsumerWidget {
                                     artistName: name,
                                     imageUrl: img,
                                     color: color,
-                                    showConcerts: false,
                                   ),
                                 ),
                               );

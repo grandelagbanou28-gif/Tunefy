@@ -293,6 +293,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         await ref
                             .read(usernameProvider.notifier)
                             .update(_nameController.text);
+                        if (!mounted) return;
                         _username = ref.read(usernameProvider);
                         _isEditingName = false;
                         setState(() {});

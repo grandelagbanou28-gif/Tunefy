@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +10,6 @@ import 'package:muzo/models/user_data.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/providers/download_provider.dart';
-import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/global_background.dart';
 import 'package:muzo/widgets/app_alert_dialog.dart';
@@ -51,14 +51,25 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                     ),
                     actions: [
                       TextButton(
-                        onPressed: () => Navigator.pop(context),
+                        // The dialog now shares the tab's nested navigator with
+                        // this screen, so popping the nearest navigator closes
+                        // the dialog.
+                        onPressed: () {
+                          if (context.mounted && Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                          }
+                        },
                         child: const Text('Cancel'),
                       ),
                       TextButton(
                         onPressed: () {
+                          final nav = Navigator.of(context);
+                          // 1) Close the confirm dialog (top route).
+                          if (nav.canPop()) nav.pop();
+                          // 2) Remove the playlist.
                           storage.deletePlaylist(playlistName);
-                          Navigator.pop(context); // Close dialog
-                          Navigator.pop(context); // Go back to library
+                          // 3) Leave the details screen (now the top route).
+                          if (nav.canPop()) nav.pop();
                         },
                         child: Text(
                           'Delete',
@@ -90,16 +101,38 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                       .toList();
 
                   final downloads = storage.getDownloads();
-                  final storedSongs = downloads
-                      .map(
-                        (d) => MuzoItem.fromJson(
-                          Map<String, dynamic>.from(d['result']),
-                        ),
-                      )
-                      .toList();
+                  // One unreadable record must not blank the whole page, and a
+                  // record whose file is gone is not a download: it would show
+                  // as a silent row.
+                  final storedSongs = <MuzoItem>[];
+                  for (final d in downloads) {
+                    final result = d['result'];
+                    final path = d['path'];
+                    if (result is! Map || path is! String || path.isEmpty) {
+                      continue;
+                    }
+                    if (!File(path).existsSync()) continue;
+                    try {
+                      storedSongs.add(MuzoItem.fromJson(
+                        Map<String, dynamic>.from(result),
+                      ));
+                    } catch (_) {}
+                  }
 
                   // Combine active first.
                   final allSongs = [...activeSongs, ...storedSongs];
+                  debugPrint('DownloadsPage: records=${downloads.length} '
+                      'shown=${storedSongs.length} '
+                      'hidden=${downloads.length - storedSongs.length}');
+                  // Structure Spotify : la page « Téléchargements » n'est pas
+                  // une salade plate — les titres d'un même artiste (et d'un
+                  // même album à l'intérieur) se suivent, et un en-tête les
+                  // annonce. Télécharger « tous les titres » d'une page artiste
+                  // donne donc un bloc reconnaissable au lieu de 100 lignes
+                  // mélangées.
+                  if (allSongs.length > 1) {
+                    allSongs.sort(_byArtistThenAlbum);
+                  }
 
                   return _buildSongList(
                     context,
@@ -107,6 +140,7 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                     allSongs,
                     storage,
                     progressMap: downloadState.progressMap,
+                    grouped: true,
                   );
                 },
               );
@@ -131,6 +165,7 @@ class PlaylistDetailsScreen extends ConsumerWidget {
     List<MuzoItem> songs,
     StorageService storage, {
     Map<String, double>? progressMap,
+    bool grouped = false,
   }) {
     if (songs.isEmpty) {
       return const Center(
@@ -220,8 +255,12 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                   final song = songs[index];
                   final progress = progressMap?[song.videoId];
                   final isDownloading = progress != null;
+                  final startsGroup = grouped &&
+                      (index == 0 ||
+                          _downloadGroupKey(songs[index - 1]) !=
+                              _downloadGroupKey(song));
 
-                  return ListTile(
+                  final row = ListTile(
                     key: ValueKey(song.videoId ?? 'playlist_idx_$index'),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
                 leading: ClipRRect(
@@ -269,7 +308,13 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                         ),
                       )
                     : Text(
-                        song.displayArtist,
+                        // Le nom de l'artiste est déjà dans la tête de groupe :
+                        // la ligne porte donc l'album, comme Spotify.
+                        grouped
+                            ? ((song.album?.name ?? '').trim().isEmpty
+                                ? song.displayArtist
+                                : song.album!.name.trim())
+                            : song.displayArtist,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -298,12 +343,14 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                         if (playlistName == 'Favorites') {
                           storage.toggleFavorite(song);
                         } else if (playlistName == 'Downloads') {
+                          final vid = song.videoId ?? '';
+                          if (vid.isEmpty) return;
                           if (isDownloading) {
                             ref
                                 .read(downloadProvider.notifier)
-                                .deleteDownload(song.videoId!);
+                                .deleteDownload(vid);
                           } else {
-                            storage.removeDownload(song.videoId!);
+                            storage.removeDownload(vid);
                           }
                         } else {
                           storage.removeFromPlaylist(
@@ -338,7 +385,11 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                 ),
                 onTap: () {
                   HapticFeedback.selectionClick();
-                  openArtistForSong(context, song);
+                  // Tap plays the track in context (from this position), it
+                  // must never jump to an artist page — the user's core ask.
+                  ref
+                      .read(audioHandlerProvider)
+                      .playAll(songs, startIndex: index);
                 },
                 onLongPress: () {
                   if (!isDownloading) {
@@ -346,12 +397,88 @@ class PlaylistDetailsScreen extends ConsumerWidget {
                   }
                 },
               );
+                  if (!startsGroup) return row;
+                  // Une colonne par tête de groupe : ReorderableListView exige
+                  // une clé unique par enfant, et la clé du titre reste celle
+                  // de la ligne elle-même.
+                  return Column(
+                    key: ValueKey('dlgrp_${_downloadGroupKey(song)}_$index'),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _downloadGroupHeader(context, song, songs, index),
+                      row,
+                    ],
+                  );
                 },
               );
             },
           ),
         ),
       ],
+    );
+  }
+
+  /// Lead artist of a downloaded track — the key that makes its downloads sit
+  /// together in the Downloads view.
+  static String _downloadGroupKey(MuzoItem s) {
+    final lead = s.displayArtist.split(RegExp(r'[,&#]')).first.trim();
+    return (lead.isEmpty ? s.title : lead).toLowerCase();
+  }
+
+  /// Grouped sort: one artist's tracks contiguous, an album's inside it.
+  static int _byArtistThenAlbum(MuzoItem a, MuzoItem b) {
+    final ga = _downloadGroupKey(a), gb = _downloadGroupKey(b);
+    if (ga != gb) return ga.compareTo(gb);
+    final aa = (a.album?.name ?? '').toLowerCase();
+    final ab = (b.album?.name ?? '').toLowerCase();
+    if (aa != ab) return aa.compareTo(ab);
+    return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+  }
+
+  /// Header line above each artist block: the artist, and how many of its
+  /// tracks were downloaded — so "download all" reads as one block instead of
+  /// a hundred anonymous rows.
+  Widget _downloadGroupHeader(
+    BuildContext context,
+    MuzoItem song,
+    List<MuzoItem> songs,
+    int index,
+  ) {
+    final key = _downloadGroupKey(song);
+    var count = 0;
+    for (var i = index; i < songs.length; i++) {
+      if (_downloadGroupKey(songs[i]) != key) break;
+      count++;
+    }
+    final lead = song.displayArtist.split(RegExp(r'[,&#]')).first.trim();
+    final tint = Theme.of(context).colorScheme.onSurface;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+      child: Row(
+        children: [
+          Icon(FluentIcons.arrow_download_24_regular,
+              size: 15, color: tint.withValues(alpha: 0.45)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              lead.isEmpty ? song.title : lead,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: tint,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count titre${count > 1 ? 's' : ''}',
+            style: TextStyle(
+                color: tint.withValues(alpha: 0.5), fontSize: 12),
+          ),
+        ],
+      ),
     );
   }
 }

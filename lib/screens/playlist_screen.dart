@@ -4,6 +4,7 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/artist_details.dart';
 import 'package:muzo/services/muzo_api_service.dart';
+import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/widgets/result_tile.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/providers/player_provider.dart';
@@ -42,8 +43,17 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen> {
       _isLoading = true;
     });
 
+    final id = widget.playlistId;
     try {
-      final details = await _apiService.getPlaylistDetails(widget.playlistId);
+      // Les listes Deezer (`dzpl:`) n'existent pas sur YouTube : leur tracklist
+      // vient du catalogue, comme AlbumScreen le fait déjà pour les albums `dz:`.
+      final details = id.startsWith('dzpl:')
+          ? await ref.read(deezerApiServiceProvider).playlistDetails(
+                id.substring('dzpl:'.length),
+                fallbackTitle: widget.title,
+                fallbackThumb: widget.thumbnailUrl,
+              )
+          : await _apiService.getPlaylistDetails(id);
       if (details != null) {
         _playlistDetails = details;
       }

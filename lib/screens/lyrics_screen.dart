@@ -6,7 +6,7 @@ import 'package:muzo/widgets/lyrics_view.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/providers/theme_provider.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
-import 'dart:ui';
+import 'package:muzo/widgets/song_video_backdrop.dart';
 
 class LyricsScreen extends ConsumerStatefulWidget {
   final String title;
@@ -14,12 +14,16 @@ class LyricsScreen extends ConsumerStatefulWidget {
   final String? thumbnailUrl;
   final int durationSeconds;
 
+  /// Vidéo du titre, utilisée comme arrière-plan animé des paroles.
+  final String videoId;
+
   const LyricsScreen({
     super.key,
     required this.title,
     required this.artist,
     this.thumbnailUrl,
     required this.durationSeconds,
+    this.videoId = '',
   });
 
   @override
@@ -118,24 +122,16 @@ class _LyricsScreenState extends ConsumerState<LyricsScreen> {
       ),
       body: Stack(
         children: [
-          // Background Blur
+          // Fond : la vidéo du titre, muette et en boucle, floutée ; la
+          // pochette prend le relais si rien n'est lisible (hors-ligne, vidéo
+          // trop lourde, ou titre sans identifiant YouTube).
           Positioned.fill(
-            child: thumbnailUrl != null
-                ? Image.network(
-                    thumbnailUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        Container(color: Colors.black),
-                  )
-                : Container(color: Colors.black),
-          ),
-          Positioned.fill(
-            child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30), // Reduced for 60fps scrolling
-                    child: Container(
-                      color: Colors.black.withValues(alpha: 0.6), // Darkened for text contrast
-                    ),
-                  ),
+            child: SongVideoBackdrop(
+              videoId: media?.id ?? widget.videoId,
+              fallbackImageUrl: thumbnailUrl,
+              blurSigma: 24,
+              dimAlpha: 0.6,
+            ),
           ),
 
           // Content

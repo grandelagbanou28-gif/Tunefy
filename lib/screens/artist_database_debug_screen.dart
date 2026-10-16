@@ -54,6 +54,7 @@ class _ArtistDatabaseDebugScreenState
       _allArtists = EmbeddedSeedData.artists;
       _filteredArtists = List.from(_allArtists);
     }
+    if (!mounted) return;
     setState(() => _isLoading = false);
   }
 

@@ -15,7 +15,7 @@ import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/providers/theme_provider.dart';
 import 'package:muzo/providers/artist_bio_provider.dart';
 import 'package:muzo/providers/download_provider.dart';
-import 'package:muzo/widgets/audio_device_badge.dart';
+import 'package:muzo/widgets/audio_device_button.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/screens/dj_screen.dart';
@@ -41,7 +41,15 @@ class HivefyFullPlayer extends ConsumerStatefulWidget {
 }
 
 class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
-  final PageController _pageController = PageController();
+  /// Created with the queue's CURRENT index as its initial page. A controller
+  /// without an initialPage mounts on page 0, and `onPageChanged` then fires
+  /// immediately, which seeked the player to track 0 — that was the
+  /// "opening Now Playing restarts the song (or starts another one)".
+  PageController? _pageController;
+
+  /// Page we moved to ourselves (to follow the player). `onPageChanged` must
+  /// not treat that as a user swipe and re-seek the track it just came from.
+  int _programmaticPage = -1;
   ArtistDetails? _artistDetails;
   bool _loadingArtist = false;
   bool _biographyExpanded = false;
@@ -63,7 +71,7 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
   @override
   void dispose() {
     _currentIndexSub?.cancel();
-    _pageController.dispose();
+    _pageController?.dispose();
     _lyricsScrollController.dispose();
     super.dispose();
   }
@@ -76,16 +84,24 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
     _currentIndexSub = player.currentIndexStream.listen((index) {
       if (!mounted || index == null) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_pageController.hasClients) return;
-        final current = _pageController.page?.round();
+        final controller = _pageController;
+        if (!mounted || controller == null || !controller.hasClients) return;
+        final current = controller.page?.round();
         if (current != index) {
           try {
-            _pageController.animateToPage(
+            _programmaticPage = index;
+            controller
+                .animateToPage(
               index,
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeOut,
-            );
-          } catch (_) {}
+            )
+                .whenComplete(() {
+              _programmaticPage = -1;
+            });
+          } catch (_) {
+            _programmaticPage = -1;
+          }
         }
       });
     });
@@ -269,42 +285,51 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      // Flexible, not plain children: the three labels are localized and
+      // "Smart shuffle" is already wide enough in French to exceed a narrow
+      // phone, which overflowed the row by ~28px.
       child: Row(
         children: [
-          ValueListenableBuilder<bool>(
-            valueListenable: audioHandler.isShuffleModeNotifier,
-            builder: (context, shuffleOn, _) {
-              return _QueueToggle(
-                icon: Icons.shuffle,
-                label: l10n.shuffle,
-                active: shuffleOn,
-                onTap: () => audioHandler.toggleShuffle(),
-              );
-            },
+          Flexible(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: audioHandler.isShuffleModeNotifier,
+              builder: (context, shuffleOn, _) {
+                return _QueueToggle(
+                  icon: Icons.shuffle,
+                  label: l10n.shuffle,
+                  active: shuffleOn,
+                  onTap: () => audioHandler.toggleShuffle(),
+                );
+              },
+            ),
           ),
           const SizedBox(width: 8),
-          ValueListenableBuilder<bool>(
-            valueListenable: audioHandler.isSmartShuffleNotifier,
-            builder: (context, smartOn, _) {
-              return _QueueToggle(
-                icon: Icons.auto_awesome,
-                label: l10n.smartShuffle,
-                active: smartOn,
-                onTap: () => audioHandler.toggleSmartShuffle(),
-              );
-            },
+          Flexible(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: audioHandler.isSmartShuffleNotifier,
+              builder: (context, smartOn, _) {
+                return _QueueToggle(
+                  icon: Icons.auto_awesome,
+                  label: l10n.smartShuffle,
+                  active: smartOn,
+                  onTap: () => audioHandler.toggleSmartShuffle(),
+                );
+              },
+            ),
           ),
           const SizedBox(width: 8),
-          ValueListenableBuilder<bool>(
-            valueListenable: audioHandler.isAutoplayNotifier,
-            builder: (context, autoplayOn, _) {
-              return _QueueToggle(
-                icon: Icons.radio,
-                label: l10n.autoplay,
-                active: autoplayOn,
-                onTap: () => audioHandler.toggleAutoplay(),
-              );
-            },
+          Flexible(
+            child: ValueListenableBuilder<bool>(
+              valueListenable: audioHandler.isAutoplayNotifier,
+              builder: (context, autoplayOn, _) {
+                return _QueueToggle(
+                  icon: Icons.radio,
+                  label: l10n.autoplay,
+                  active: autoplayOn,
+                  onTap: () => audioHandler.toggleAutoplay(),
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -569,10 +594,16 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
             );
           }
 
+          // Created on first build with the track that is actually playing, so
+          // the pager never lands on page 0 and drags the player with it.
+          _pageController ??= PageController(initialPage: curIdx);
+          final pageController = _pageController!;
+
           return PageView.builder(
-            controller: _pageController,
+            controller: pageController,
             itemCount: queue.length,
             onPageChanged: (index) async {
+              if (_programmaticPage == index) return;
               if (index != curIdx) {
                 await player.seek(Duration.zero, index: index);
                 await player.play();
@@ -867,6 +898,9 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
               ),
             ),
           ),
+          // Device selector sits before the favourite "+".
+          const AudioDeviceButton(
+              size: 24, color: Colors.white70, showName: true),
           // Favorite (add/liked) — placed next to the download button.
           GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -889,7 +923,6 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
             ),
           ),
           const Spacer(),
-          const AudioDeviceBadge(size: 20, color: Colors.white70),
           // Share
           GestureDetector(
             onTap: () async {
@@ -1074,15 +1107,20 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
       );
     }
 
+    // The bio comes from French Wikipedia; translate it into the app's
+    // selected language so the description follows the chosen language.
+    final translatedBio =
+        ref.watch(translatedTextProvider((text: bio))).valueOrNull ?? bio;
+
     const maxLines = 2;
-    final isLong = bio.length > 160;
+    final isLong = translatedBio.length > 160;
     final needsEllipsis = isLong && !_biographyExpanded;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          needsEllipsis ? bio : bio,
+          translatedBio,
           maxLines: needsEllipsis ? maxLines : null,
           overflow: needsEllipsis ? TextOverflow.ellipsis : null,
           style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
@@ -1097,7 +1135,11 @@ class _HivefyFullPlayerState extends ConsumerState<HivefyFullPlayer> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    _biographyExpanded ? l10n.reduce : 'Lire le tout',
+                    _biographyExpanded
+                        ? l10n.reduce
+                        : (ref.watch(translatedTextProvider((text: 'Read more')))
+                                .valueOrNull ??
+                            'Read more'),
                     style: const TextStyle(
                       color: Color(0xFF1DDA63),
                       fontSize: 14,
@@ -1378,12 +1420,16 @@ class _QueueToggle extends StatelessWidget {
               color: active ? const Color(0xFF1DB954) : Colors.white70,
             ),
             const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: active ? Colors.white : Colors.white70,
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: active ? Colors.white : Colors.white70,
+                ),
               ),
             ),
           ],

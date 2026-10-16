@@ -45,11 +45,13 @@ class _UserTracksScreenState extends ConsumerState<UserTracksScreen> {
     try {
       final api = ref.read(muzoApiServiceProvider);
       final tracks = await api.getUserTracks();
+      if (!mounted) return;
       setState(() {
         _tracks = tracks;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;
@@ -465,6 +467,7 @@ class _UploadTrackDialogState extends ConsumerState<UploadTrackDialog> {
       );
 
       if (result != null && result.files.single.path != null) {
+        if (!mounted) return;
         setState(() {
           _audioPath = result.files.single.path;
           _audioFileName = result.files.single.name;
@@ -491,6 +494,7 @@ class _UploadTrackDialogState extends ConsumerState<UploadTrackDialog> {
       );
 
       if (result != null && result.files.single.path != null) {
+        if (!mounted) return;
         setState(() {
           _thumbnailPath = result.files.single.path;
           _thumbnailFileName = result.files.single.name;

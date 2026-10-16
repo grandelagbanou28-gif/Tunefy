@@ -2,26 +2,24 @@ import 'package:disk_space_plus/disk_space_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/providers/player_provider.dart';
 import 'package:muzo/providers/settings_provider.dart';
 import 'package:muzo/providers/theme_provider.dart';
 import 'package:muzo/screens/artist_database_debug_screen.dart';
+import 'package:muzo/screens/library_downloads_screen.dart';
 import 'package:muzo/screens/moov_thanks_screen.dart';
-import 'package:muzo/services/stream_endpoint_resolver.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/services/stream_prewarmer.dart';
-import 'package:muzo/services/lyrics_translation_service.dart';
 import 'package:muzo/services/youtube_music_auth.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/utils/app_colors.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
-import 'package:hive/hive.dart';
 
 const Color _hivefyBgColor = Color(0xFF121212);
 const Color _hivefyGreen = Color(0xFF1DDA63);
@@ -39,18 +37,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late ScrollController _scrollController;
   final DiskSpacePlus diskSpacePlus = DiskSpacePlus();
   late Future<List<dynamic>> _storageFuture;
-  static const Map<String, String> _streamServers = {
-    'Auto': '',
-    'Main Server': StreamExtractionService.cloudYtDlpBase,
-    'Backup Server': StreamExtractionService.cloudBackupYtDlpBase,
-    'Local Server': 'http://127.0.0.1:9877',
-    'Freedify': StreamExtractionService.freedifyBase,
-  };
-
-  String _selectedServer = 'Auto';
-  String? _activeBase;
-  final TextEditingController _ytdlpController = TextEditingController();
-  final TextEditingController _deeplController = TextEditingController();
   bool _shuffleEnabled = false;
   bool _smartShuffleEnabled = true;
   bool _crossfadeEnabled = false;
@@ -58,13 +44,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _gaplessEnabled = true;
   bool _loudnessNormalization = false;
   bool _dynamicColorEnabled = true;
+  bool _enableLegacyYtDlpServers = false;
+  bool _playDownloadedOnly = false;
 
   @override
   void initState() {
     super.initState();
 
-    _loadYtDlpServerUrl();
-    _loadDeeplApiKey();
     _loadPlaybackSettings();
 
     _scrollController =
@@ -83,16 +69,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
-    _ytdlpController.dispose();
-    _deeplController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadDeeplApiKey() async {
-    final service = LyricsTranslationService();
-    final key = await service.getStoredDeeplApiKey();
-    _deeplController.text = key ?? '';
-    if (mounted) setState(() {});
   }
 
   void _loadPlaybackSettings() {
@@ -104,6 +81,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _gaplessEnabled = storage.gaplessEnabled;
     _loudnessNormalization = storage.loudnessNormalizationEnabled;
     _dynamicColorEnabled = storage.dynamicColorEnabled;
+    _enableLegacyYtDlpServers = storage.enableLegacyYtDlpServers;
+    _playDownloadedOnly = storage.playDownloadedOnly;
   }
 
   Widget _buildSwitchTile({
@@ -227,64 +206,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  Future<void> _saveDeeplApiKey() async {
-    final key = _deeplController.text.trim();
-    final service = LyricsTranslationService();
-    final l10n = AppLocalizations.of(context);
-    if (key.isEmpty) {
-      await service.clearDeeplApiKey();
-      _showSnack(l10n.deeplKeyCleared);
-      return;
-    }
-    await service.setDeeplApiKey(key);
-    _showSnack(l10n.deeplKeySaved);
-  }
-
-  Future<void> _loadYtDlpServerUrl() async {
-    try {
-      final box = Hive.isBoxOpen('settings')
-          ? Hive.box('settings')
-          : await Hive.openBox('settings');
-      final saved = (box.get('ytdlpServerUrl') as String?)?.trim();
-      // No pin means Auto: the resolver decides at runtime.
-      final label =
-          (saved == null || saved.isEmpty) ? 'Auto' : _serverLabelForUrl(saved);
-      _ytdlpController.text = saved ?? '';
-      _selectedServer = label.isEmpty ? 'Auto' : label;
-      _activeBase = (box.get('stream_active_base') as String?)?.trim();
-      if (mounted) setState(() {});
-    } catch (_) {
-      _ytdlpController.text = '';
-      _selectedServer = 'Auto';
-    }
-  }
-
-  String _serverLabelForUrl(String url) {
-    for (final entry in _streamServers.entries) {
-      if (url.trim() == entry.value) return entry.key;
-    }
-    return '';
-  }
-
-  static String _shortHost(String url) {
-    final host = Uri.tryParse(url)?.host ?? url;
-    return host.replaceFirst('www.', '');
-  }
-
-  /// Probes every candidate and reports which one answers, so a broken
-  /// Liveness of the loopback resolver. It is the only source that resolves on
-  /// the device's own IP, so when it is down nothing plays — and the symptom is
-  /// indistinguishable from "this song is broken".
+  /// Probes YoutubeExplode — the primary resolver now that the local server
+  /// is gone. It resolves directly from the device, no server needed.
   Future<bool> _probeLocalServer() async {
     try {
-      final client = http.Client();
+      final yt = YoutubeExplode();
       try {
-        final resp = await client
-            .get(Uri.parse('http://127.0.0.1:9877/health'))
-            .timeout(const Duration(seconds: 4));
-        return resp.statusCode == 200;
+        final manifest = await yt.videos.streamsClient
+            .getManifest('dQw4w9WgXcQ')
+            .timeout(const Duration(seconds: 8));
+        return manifest.audioOnly.isNotEmpty || manifest.muxed.isNotEmpty;
       } finally {
-        client.close();
+        yt.close();
       }
     } catch (_) {
       return false;
@@ -337,10 +270,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             builder: (context, snap) {
               final up = snap.data;
               final label = up == null
-                  ? 'Vérification du serveur local…'
+                  ? 'Vérification de YoutubeExplode…'
                   : up
-                      ? 'Serveur local : actif (127.0.0.1:9877)'
-                      : 'Serveur local : arrêté — rien ne peut se lire';
+                      ? 'YoutubeExplode : actif (résolution directe)'
+                      : 'YoutubeExplode : injoignable — vérifie ton réseau';
               final color = up == null
                   ? Colors.white38
                   : up
@@ -373,8 +306,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   if (up == false) ...[
                     const SizedBox(height: 6),
                     const Text(
-                      'Lance : python backend\\local_stream_server.py --port 9877'
-                      '\npuis : adb reverse tcp:9877 tcp:9877',
+                      'Vérifie ta connexion internet — YoutubeExplode résout directement depuis l\'app.',
                       style: TextStyle(
                           color: Colors.white38, fontSize: 11.5, height: 1.4),
                     ),
@@ -439,113 +371,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Server is visible here instead of surfacing as "playback failed".
-  Widget _buildTestServerButton(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return StatefulBuilder(
-      builder: (context, setInner) {
-        return TextButton.icon(
-          onPressed: () async {
-            HapticFeedback.selectionClick();
-            setInner(() {});
-            final healthy = await StreamEndpointResolver().healthyBases(force: true);
-            if (!mounted) return;
-            setState(() {
-              _activeBase = healthy.isEmpty ? null : healthy.first;
-            });
-            setInner(() {});
-            _showSnack(
-              healthy.isEmpty
-                  ? l10n.streamServerTestFail
-                  : '${l10n.streamServerTestOk} · ${_shortHost(healthy.first)}',
-              error: healthy.isEmpty,
-            );
-          },
-          icon: const Icon(Icons.wifi_tethering, size: 18),
-          label: Text(l10n.streamServerTest),
-          style: TextButton.styleFrom(
-            foregroundColor: _hivefyGreen,
-            visualDensity: VisualDensity.compact,
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _selectServer(String server) async {
-    final base = _streamServers[server];
-    if (base == null) return;
-    final l10n = AppLocalizations.of(context);
-    setState(() => _selectedServer = server);
-    _ytdlpController.text = base;
-    try {
-      final box = Hive.isBoxOpen('settings')
-          ? Hive.box('settings')
-          : await Hive.openBox('settings');
-      await box.put('streamServer', server);
-      // "Auto" clears the pin so the resolver picks whichever host answers.
-      if (base.isEmpty) {
-        await box.delete('ytdlpServerUrl');
-        // Re-test every candidate, including hosts the breaker had open.
-        await StreamEndpointResolver.resetCircuitBreaker();
-      } else {
-        await box.put('ytdlpServerUrl', base);
-      }
-      _showSnack(l10n.serverUpdated);
-    } catch (e) {
-      _showSnack(l10n.failedToSave(e.toString()), error: true);
-    }
-  }
-
-  Future<void> _saveYtDlpServerUrl() async {
-    final url = _ytdlpController.text.trim();
-    final l10n = AppLocalizations.of(context);
-    if (url.isEmpty) {
-      _showSnack(l10n.urlCannotBeEmpty, error: true);
-      return;
-    }
-    try {
-      final box = Hive.isBoxOpen('settings')
-          ? Hive.box('settings')
-          : await Hive.openBox('settings');
-      await box.put('ytdlpServerUrl', url);
-      _showSnack(l10n.serverUpdated);
-    } catch (e) {
-      _showSnack(l10n.failedToSave(e.toString()), error: true);
-    }
-  }
-
-  Future<void> _testYtDlpServer() async {
-    final url = _ytdlpController.text.trim();
-    final l10n = AppLocalizations.of(context);
-    // Freedify exposes /api/health (FastAPI), local/Vercel use /health.
-    final healthPath = url.contains('8000') || url.contains('freedify')
-        ? '/api/health'
-        : '/health';
-    final healthUrl = Uri.parse('$url$healthPath');
-    try {
-      final res = await http
-          .get(healthUrl)
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode == 200) {
-        _showSnack(l10n.serverReachable);
-      } else {
-        _showSnack(l10n.serverReplied(res.statusCode), error: true);
-      }
-    } catch (_) {
-      _showSnack(l10n.serverUnreachable, error: true);
-    }
-  }
-
   Future<void> _checkNotificationStatus() async {
-    final status = await Permission.notification.status;
-    if (mounted) setState(() => notificationsEnabled = status.isGranted);
+    try {
+      final status = await Permission.notification.status;
+      if (mounted) setState(() => notificationsEnabled = status.isGranted);
+    } catch (_) {}
   }
 
   Future<void> _requestNotificationPermission() async {
-    final status = await Permission.notification.request();
-    if (mounted) setState(() => notificationsEnabled = status.isGranted);
-    if (!status.isGranted) openAppSettings();
+    try {
+      final status = await Permission.notification.request();
+      if (mounted) setState(() => notificationsEnabled = status.isGranted);
+      if (!status.isGranted) openAppSettings();
+    } catch (_) {}
   }
 
   Future<double> getDeviceStorageInBytes() async {
@@ -774,6 +612,64 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           SliverList(
             delegate: SliverChildListDelegate([
+              // La tuile « Téléchargements » a quitté la Library : c'est ici
+              // qu'on ouvre encore la liste des fichiers, sinon ils ne sont
+              // plus atteignables que depuis le bouton hors ligne d'une page
+              // artiste.
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const LibraryDownloadsScreen(),
+                  ));
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: _hivefyGreen.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.download_for_offline_outlined,
+                            size: 22, color: _hivefyGreen),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              l10n.downloads,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              l10n.songsCountFiles(ref
+                                  .watch(storageServiceProvider)
+                                  .getDownloads()
+                                  .length),
+                              style: const TextStyle(
+                                  color: Colors.white54, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right,
+                          color: Colors.white54, size: 22),
+                    ],
+                  ),
+                ),
+              ),
               SettingsRow(
                 icon: Icons.download_done,
                 title: l10n.deleteAllOfflineSongs,
@@ -898,12 +794,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           _buildDivider(),
 
-          // --- API Server Selection ---
+          // --- Source Health ---
           _buildSectionTitle(
-            l10n.streamServer,
-            subtitle: _activeBase == null
-                ? l10n.chooseStreamServer
-                : '${l10n.streamServerActive}: ${_shortHost(_activeBase!)}',
+            'Sources audio',
+            subtitle: 'Résolution directe — pas de serveur requis',
           ),
           SliverToBoxAdapter(
             child: Padding(
@@ -911,121 +805,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _streamServers.keys.map((server) {
-                      final isSelected = server == _selectedServer;
-
-                      return ChoiceChip(
-                        label: Text(
-                          isSelected
-                              ? server
-                              : server.replaceAll(" Server", ""),
-                          style: TextStyle(
-                            color: isSelected ? _hivefyGreen : Colors.white,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        selected: isSelected,
-                        color: WidgetStateProperty.resolveWith<Color?>((states) {
-                          return AppColors.cardTranslucent;
-                        }),
-                        selectedColor: _hivefyGreen.withAlpha(51),
-                        backgroundColor: AppColors.cardTranslucent,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color: isSelected
-                                ? _hivefyGreen
-                                : Colors.grey.shade800,
-                            width: isSelected ? 1 : 0,
-                          ),
-                        ),
-                        showCheckmark: false,
-                        onSelected: (_) => _selectServer(server),
-                      );
-                    }).toList(),
-                  ),
-
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          l10n.settingsServerSwitchHint,
-                          style: const TextStyle(
-                            color: Colors.white60,
-                            fontSize: 12.5,
-                            height: 1.3,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      _buildTestServerButton(context),
-                    ],
-                  ),
-
-                  const SizedBox(height: 16),
                   _buildSourceHealthCard(context),
-
-                  const SizedBox(height: 20),
-                  Text(
-                    l10n.localYTDLP,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    l10n.ytDlpInfo,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 12.5,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _ytdlpController,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                    keyboardType: TextInputType.url,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      filled: true,
-                      fillColor: Colors.white10,
-                      hintText: 'https://…',
-                      hintStyle: const TextStyle(color: Colors.white30),
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(10)),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      FilledButton(
-                        onPressed: _saveYtDlpServerUrl,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _hivefyGreen,
-                          foregroundColor: Colors.black,
-                        ),
-                        child: Text(l10n.save),
-                      ),
-                      const SizedBox(width: 10),
-                      OutlinedButton(
-                        onPressed: _testYtDlpServer,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _hivefyGreen,
-                          side: const BorderSide(color: _hivefyGreen),
-                        ),
-                        child: Text(l10n.test),
-                      ),
-                    ],
-                  ),
                 ],
               ),
             ),
@@ -1087,7 +867,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onChanged: (value) async {
                   setState(() => _crossfadeEnabled = value);
                   await ref.read(audioHandlerProvider).setCrossfadeEnabled(value);
-                  if (value) {
+                  if (value && mounted) {
                     setState(() => _gaplessEnabled = false);
                   }
                 },
@@ -1115,7 +895,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onChanged: (value) async {
                   setState(() => _gaplessEnabled = value);
                   await ref.read(audioHandlerProvider).setGaplessEnabled(value);
-                  if (value) {
+                  if (value && mounted) {
                     setState(() => _crossfadeEnabled = false);
                   }
                 },
@@ -1147,6 +927,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 },
               ),
               _buildQualitySelector(),
+              _buildSwitchTile(
+                icon: Icons.download_for_offline_outlined,
+                title: 'Lecture réservée aux titres téléchargés',
+                subtitle:
+                    'Toutes les pages affichent tous leurs titres, mais un '
+                    'titre absent de l\'appareil ne se lance pas : il faut le '
+                    'télécharger d\'abord (menu ⋮ › Télécharger). Désactivez '
+                    'pour tout écouter en streaming.',
+                value: _playDownloadedOnly,
+                onChanged: (value) async {
+                  setState(() => _playDownloadedOnly = value);
+                  await ref
+                      .read(storageServiceProvider)
+                      .setPlayDownloadedOnly(value);
+                },
+              ),
+              _buildSwitchTile(
+                icon: Icons.dns_outlined,
+                title: 'Serveurs de secours (yt-dlp)',
+                subtitle:
+                    'Relais Freedify/Vercel/Supabase. Désactivé par défaut : '
+                    'ils sont souvent hors ligne et ralentissent la résolution. '
+                    'À n\'activer que si vous avez un relais opérationnel.',
+                value: _enableLegacyYtDlpServers,
+                onChanged: (value) async {
+                  setState(() => _enableLegacyYtDlpServers = value);
+                  await ref
+                      .read(storageServiceProvider)
+                      .setEnableLegacyYtDlpServers(value);
+                },
+              ),
             ]),
           ),
           _buildDivider(),
@@ -1162,52 +973,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    l10n.deeplApiKeyLabel,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    l10n.deeplApiKeyHint,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 12.5,
-                      height: 1.3,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _deeplController,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                    obscureText: true,
-                    keyboardType: TextInputType.visiblePassword,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      filled: true,
-                      fillColor: Colors.white10,
-                      hintText: l10n.deeplApiKeyLabel,
-                      hintStyle: const TextStyle(color: Colors.white30),
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(10)),
-                        borderSide: BorderSide.none,
+                  Row(
+                    children: [
+                      Icon(Icons.check_circle, size: 16, color: _hivefyGreen),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Clé DeepL intégrée — fonctionne automatiquement',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            height: 1.3,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton(
-                      onPressed: _saveDeeplApiKey,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _hivefyGreen,
-                        foregroundColor: Colors.black,
-                      ),
-                      child: Text(l10n.saveKey),
-                    ),
+                    ],
                   ),
                 ],
               ),
@@ -1348,42 +1128,49 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           border: Border.all(color: Colors.white12),
           borderRadius: BorderRadius.circular(14),
         ),
-        child: ListTile(
-          leading: Container(
-            width: 42,
-            height: 42,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF1DB954), Color(0xFF1DDA63)],
+        // The coloured Container above is a DecoratedBox, not a Material: the
+        // ListTile's splash paints on the nearest ancestor Material and ends up
+        // hidden behind that background. A transparent Material in between gives
+        // the ripple its own layer while the container keeps drawing the fill.
+        child: Material(
+          type: MaterialType.transparency,
+          child: ListTile(
+            leading: Container(
+              width: 42,
+              height: 42,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF1DB954), Color(0xFF1DDA63)],
+                ),
               ),
+              child: const Icon(Icons.mobile_friendly,
+                  color: Colors.black, size: 22),
             ),
-            child: const Icon(Icons.mobile_friendly,
-                color: Colors.black, size: 22),
+            title: Text(
+              l10n.moovCelestis,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              l10n.moovThanksPreview,
+              style:
+                  const TextStyle(color: Colors.white54, fontSize: 12.5),
+            ),
+            trailing: const Icon(Icons.chevron_right,
+                color: Colors.white38, size: 22),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const MoovThanksScreen(credits: 1),
+                ),
+              );
+            },
           ),
-          title: Text(
-            l10n.moovCelestis,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            l10n.moovThanksPreview,
-            style:
-                const TextStyle(color: Colors.white54, fontSize: 12.5),
-          ),
-          trailing: const Icon(Icons.chevron_right,
-              color: Colors.white38, size: 22),
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const MoovThanksScreen(credits: 1),
-              ),
-            );
-          },
         ),
       ),
     );
@@ -1562,7 +1349,7 @@ class _YouTubeMusicAuthSectionState extends ConsumerState<_YouTubeMusicAuthSecti
             child: OutlinedButton.icon(
               onPressed: () async {
                 await auth.clearAuth();
-                setState(() {});
+                if (mounted) setState(() {});
               },
               icon: const Icon(Icons.logout, size: 16, color: Colors.redAccent),
               label: Text(l10n.signOut,
@@ -1664,6 +1451,7 @@ class _YouTubeMusicAuthSectionState extends ConsumerState<_YouTubeMusicAuthSecti
 
     try {
       final result = await YouTubeMusicAuth.instance.startDeviceFlow();
+      if (!mounted) return;
       if (result == null) {
         setState(() => _isAuthenticating = false);
         if (mounted) {
@@ -1682,6 +1470,7 @@ class _YouTubeMusicAuthSectionState extends ConsumerState<_YouTubeMusicAuthSecti
       // Start polling in background
       _pollForAuth();
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isAuthenticating = false);
       if (mounted) {
         showGlassSnackBar(context,

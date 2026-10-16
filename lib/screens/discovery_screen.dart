@@ -11,6 +11,7 @@ import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/utils/period_utils.dart';
 import 'package:muzo/utils/release_playback.dart';
+import 'package:muzo/utils/shelf_claim.dart';
 import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/widgets/brand_badge.dart';
 import 'package:muzo/widgets/spotify_chips.dart';
@@ -618,23 +619,41 @@ class DiscoveryHomeSection extends ConsumerWidget {
             if (!_hasContent(feed.popularArtists)) {
               return const SizedBox.shrink();
             }
-            return _ArtistSection(
-              title: l10n.discoveryPopularArtists,
-              periodLabel:
-                  localizedPeriodLabel(context, feed.popularArtists.period),
-              section: feed.popularArtists,
-              emptyMessage: l10n.discoveryEmptyArtists,
+            // Home's artist rule, applied to the avatar row too: an artist
+            // already leading a tile in a ray above is a second face of the
+            // same person on the same page.
+            return ShelfClaimBuilder<PopularArtist>(
+              items: feed.popularArtists.items,
+              artistOf: (artist) => artist.name,
+              keyOf: (artist) =>
+                  (artist.artistId ?? artist.name).toLowerCase(),
+              builder: (context, claimed) => _ArtistSection(
+                title: l10n.discoveryPopularArtists,
+                periodLabel:
+                    localizedPeriodLabel(context, feed.popularArtists.period),
+                section: feed.popularArtists.copyWith(items: claimed),
+                emptyMessage: l10n.discoveryEmptyArtists,
+              ),
             );
           case DiscoveryHomePart.popularAlbums:
             if (!_hasContent(feed.popularAlbums)) {
               return const SizedBox.shrink();
             }
-            return _AlbumSection(
-              title: l10n.discoveryPopularAlbums,
-              periodLabel:
-                  localizedPeriodLabel(context, feed.popularAlbums.period),
-              section: feed.popularAlbums,
-              emptyMessage: l10n.discoveryEmptyPopularAlbums,
+            // Home's artist rule applies here too: an album by an artist a ray
+            // above already showed is a duplicate tile, and this row carried no
+            // claim at all before.
+            return ShelfClaimBuilder<PopularAlbum>(
+              items: feed.popularAlbums.items,
+              artistOf: (album) => album.artistName ?? '',
+              keyOf: (album) =>
+                  (album.albumId ?? album.title).toLowerCase(),
+              builder: (context, claimed) => _AlbumSection(
+                title: l10n.discoveryPopularAlbums,
+                periodLabel:
+                    localizedPeriodLabel(context, feed.popularAlbums.period),
+                section: feed.popularAlbums.copyWith(items: claimed),
+                emptyMessage: l10n.discoveryEmptyPopularAlbums,
+              ),
             );
         }
       },

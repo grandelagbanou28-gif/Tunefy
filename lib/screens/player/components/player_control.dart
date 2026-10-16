@@ -1,4 +1,5 @@
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'dart:ui';
@@ -78,6 +79,7 @@ class PlayerControlWidget extends ConsumerWidget {
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
                 onPressed: () {
+                  HapticFeedback.selectionClick();
                   showModalBottomSheet(
                     context: context,
                     backgroundColor: Colors.transparent,
@@ -139,6 +141,7 @@ class PlayerControlWidget extends ConsumerWidget {
                           color: isFav ? Colors.red : Theme.of(context).colorScheme.onSurface,
                         ),
                         onPressed: () {
+                          HapticFeedback.selectionClick();
                           // Reconstruct MuzoItem
                           final result = MuzoItem(
                             videoId: mediaItem.id,
@@ -229,6 +232,7 @@ class PlayerControlWidget extends ConsumerWidget {
                 final shuffleEnabled = snapshot.data ?? false;
                 return IconButton(
                   onPressed: () async {
+                    HapticFeedback.selectionClick();
                     await player.setShuffleModeEnabled(!shuffleEnabled);
                   },
                   icon: Icon(
@@ -248,7 +252,10 @@ class PlayerControlWidget extends ConsumerWidget {
                 color: Theme.of(context).colorScheme.onSurface,
                 size: 28,
               ),
-              onPressed: () => audioHandler.skipToPrevious(),
+              onPressed: () {
+                HapticFeedback.selectionClick();
+                audioHandler.skipToPrevious();
+              },
             ),
 
             // Play/Pause
@@ -281,6 +288,9 @@ class PlayerControlWidget extends ConsumerWidget {
                       size: 35,
                     ),
                     onPressed: () {
+                      // Feedback immédiat : la commande audio part derrière,
+                      // mais le doigt doit sentir que le tap a été pris.
+                      HapticFeedback.lightImpact();
                       if (playing) {
                         player.pause();
                       } else {
@@ -299,7 +309,10 @@ class PlayerControlWidget extends ConsumerWidget {
                 color: Theme.of(context).colorScheme.onSurface,
                 size: 28,
               ),
-              onPressed: () => audioHandler.skipToNext(),
+              onPressed: () {
+                HapticFeedback.selectionClick();
+                audioHandler.skipToNext();
+              },
             ),
 
             // Loop
@@ -308,14 +321,12 @@ class PlayerControlWidget extends ConsumerWidget {
               builder: (context, snapshot) {
                 final loopMode = snapshot.data ?? LoopMode.off;
                 return IconButton(
-                  onPressed: () async {
-                    if (loopMode == LoopMode.off) {
-                      await player.setLoopMode(LoopMode.all);
-                    } else if (loopMode == LoopMode.all) {
-                      await player.setLoopMode(LoopMode.one);
-                    } else {
-                      await player.setLoopMode(LoopMode.off);
-                    }
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    // Handler, not player.setLoopMode: only setRepeatMode
+                    // persists the choice, so a mode picked here used to be
+                    // silently restored (or lost) on the next launch.
+                    audioHandler.cycleRepeatMode();
                   },
                   icon: Icon(
                     loopMode == LoopMode.one

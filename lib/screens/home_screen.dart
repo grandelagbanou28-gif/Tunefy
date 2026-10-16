@@ -2,6 +2,7 @@
 import 'package:muzo/widgets/fade_indexed_stack.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
 import 'package:muzo/providers/navigation_provider.dart';
@@ -12,6 +13,9 @@ import 'package:muzo/screens/album_screen.dart';
 import 'package:muzo/widgets/artist_avatar.dart';
 import 'package:muzo/widgets/brand_badge.dart';
 import 'package:muzo/widgets/spotify_chips.dart';
+import 'package:muzo/widgets/quick_picks_section.dart';
+import 'package:muzo/widgets/skeleton_loader.dart';
+import 'package:muzo/widgets/main_layout.dart' show kBottomChromeHeight;
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/services/update_service.dart';
@@ -19,6 +23,7 @@ import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/services/multi_api_service.dart';
 import 'package:muzo/providers/home_charts_provider.dart';
+import 'package:muzo/providers/genre_chart_provider.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/screens/settings_screen.dart';
@@ -26,7 +31,6 @@ import 'package:muzo/services/curated_artists_service.dart';
 import 'package:muzo/services/trending_service.dart';
 import 'package:muzo/services/itunes_api_service.dart';
 import 'package:muzo/data/curated_new_releases_2026.dart';
-import 'package:muzo/services/musicbrainz_service.dart';
 import 'package:muzo/providers/search_provider.dart';
 
 import 'package:muzo/screens/playlist_screen.dart';
@@ -40,42 +44,19 @@ import 'package:muzo/services/navigator_key.dart';
 import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/services/content_cache_service.dart';
+import 'package:muzo/services/taste_signals_service.dart';
 import 'package:muzo/services/stream_extraction_service.dart';
 import 'package:muzo/services/stream_prewarmer.dart';
 import 'dart:math';
 import 'dart:async';
+import 'package:muzo/utils/shelf_claim.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SHELF DEDUP — shelves dedupe their own content locally (by song/album/
-// playlist id) so one section can never starve another out of the home.
-// Only the favorite-artist CARDS keep a shared name pool so the same person
-// is not shown twice in a row.
+// SHELF DEDUP lives in utils/shelf_claim.dart: a tile never appears twice
+// inside its own row, and an artist never appears twice across the page — each
+// row claims what it displays in [shownArtistsProvider] and the rows below take
+// their next candidates. Pull-to-refresh empties the pool for a new page.
 // ═══════════════════════════════════════════════════════════════════════════════
-
-final homeShownArtistsProvider = StateProvider<Set<String>>((ref) => {});
-
-/// Canonical key of a song/album/playlist tile, used to dedupe it WITHIN its
-/// own shelf. Same video/album never appears twice in a single row; the global
-/// pool is not involved so sections never vanish because somebody else claimed
-/// "their" artist first.
-String _contentKey(MuzoItem item) {
-  final id = item.videoId ?? item.browseId;
-  if (id != null && id.isNotEmpty) return id.toLowerCase();
-  return '${item.title}|${item.displayArtist}'.toLowerCase();
-}
-
-/// Removes duplicate content within one shelf, keeping order.
-List<MuzoItem> dedupeShelfItems(List<MuzoItem> items) {
-  final seen = <String>{};
-  final out = <MuzoItem>[];
-  for (final item in items) {
-    final key = _contentKey(item);
-    if (key.isEmpty || seen.contains(key)) continue;
-    seen.add(key);
-    out.add(item);
-  }
-  return out;
-}
 
 /// Compilation / karaoke / "playlist-as-album" junk that genre search and
 /// storefront RSS sometimes return instead of a real release.
@@ -127,6 +108,27 @@ bool _looksLikeJunkRelease(MuzoItem item) {
   }
   return false;
 }
+
+/// "New" for the song shelf: a real release date inside the last [days] days,
+/// plus the 7-day pre-release horizon (a Friday drop can already be dated).
+///
+/// Used at BUILD time and again on every READ of the cached shelf. Reading is
+/// the part that matters: `ContentCacheService` replays a shelf snapshot for up
+/// to `offlineCeiling` (365 days) when the device has no usable link, and the
+/// phone spends most sessions offline. Without the read-time cut a row titled
+/// "Nouvelles sorties" keeps serving whatever it last managed to build —
+/// months-old songs still labelled brand new.
+bool datedWithinReleaseWindow(MuzoItem item, {int days = 7}) {
+  final rel = item.releaseDate;
+  if (rel == null) return false;
+  final now = DateTime.now();
+  return !rel.isBefore(now.subtract(Duration(days: days))) &&
+      !rel.isAfter(now.add(const Duration(days: 7)));
+}
+
+/// Same rule for the albums shelf, on the 30-day window the user asked for.
+bool _isFreshAlbum(MuzoItem item) =>
+    datedWithinReleaseWindow(item, days: 30);
 
 /// Same dedup for name+image tuples (favorite-artist cards).
 List<(String, String?)> claimFreshNames(
@@ -208,6 +210,80 @@ final homeSearchProvider =
   });
 });
 
+/// "Popular Songs {year}" — the REAL current hits of this year, straight from
+/// Apple's public storefront RSS charts (no key, no quota). A plain text search
+/// ("top songs 2026") is answered by the YouTube API with anything that merely
+/// matches the phrase, which is why this shelf used to look random; chart feeds
+/// are the authoritative source instead. Entries whose release year is known
+/// must fall in the current year; undated chart rows are kept as a floor so the
+/// shelf never empties when RSS omits `im:releaseDate`.
+final homePopularSongsProvider =
+    FutureProvider.family<List<MuzoItem>, int>((ref, year) async {
+  return ContentCacheService.shelfCached('shelf|popular|$year', () async {
+    final stores = await Future.wait([
+      TrendingService.topSongs('fr'),
+      TrendingService.topSongs('us'),
+      TrendingService.topSongs('gb'),
+    ]);
+    final out = <MuzoItem>[];
+    final seen = <String>{};
+    // Round-robin the storefronts so the shelf blends FR/US/UK instead of
+    // filling every slot from whichever feed returned first.
+    final maxLen = stores.fold<int>(0, (m, l) => l.length > m ? l.length : m);
+    for (var i = 0; i < maxLen && out.length < 24; i++) {
+      for (final list in stores) {
+        if (i >= list.length) continue;
+        final t = list[i];
+        final k = '${t.title}|${t.artist}'.toLowerCase();
+        if (t.title.isEmpty || t.artist.isEmpty || !seen.add(k)) continue;
+        final rel = t.releaseDate;
+        if (rel != null && rel.year != year) continue;
+        out.add(MuzoItem(
+          title: t.title,
+          thumbnails: t.art.isNotEmpty
+              ? [MuzoThumbnail(url: t.art, width: 600, height: 600)]
+              : const [],
+          resultType: 'song',
+          isExplicit: false,
+          artists: [MuzoArtist(name: t.artist)],
+          category: t.genre,
+          releaseDate: rel,
+          source: 'itunes rss',
+          sourceId: k,
+          fetchedAt: DateTime.now(),
+        ));
+        if (out.length >= 24) break;
+      }
+    }
+    // If the strict current-year filter starved the shelf (RSS with few dated
+    // entries), backfill with undated chart rows so a real hits shelf shows.
+    if (out.length < 8) {
+      for (final list in stores) {
+        for (final t in list) {
+          if (out.length >= 24) break;
+          final k = '${t.title}|${t.artist}'.toLowerCase();
+          if (t.title.isEmpty || t.artist.isEmpty || !seen.add(k)) continue;
+          out.add(MuzoItem(
+            title: t.title,
+            thumbnails: t.art.isNotEmpty
+                ? [MuzoThumbnail(url: t.art, width: 600, height: 600)]
+                : const [],
+            resultType: 'song',
+            isExplicit: false,
+            artists: [MuzoArtist(name: t.artist)],
+            category: t.genre,
+            releaseDate: t.releaseDate,
+            source: 'itunes rss',
+            sourceId: k,
+            fetchedAt: DateTime.now(),
+          ));
+        }
+      }
+    }
+    return out;
+  });
+});
+
 /// Real songs of the catalog's real artists for a genre.
 ///
 /// Instead of searching a fake editorial phrase (which the search API
@@ -256,7 +332,7 @@ final homeCatalogSectionProvider = FutureProvider.family<
     return cached;
   }
 
-  final service = ref.read(curatedArtistsServiceProvider);
+  final service = ref.watch(curatedArtistsServiceProvider);
   // Merge every candidate genre, in order, keeping the popularity-first order of
   // each and never repeating an artist across genres.
   final artists = <CuratedArtist>[];
@@ -332,6 +408,64 @@ final homeCatalogSectionProvider = FutureProvider.family<
 /// Hive read, and within one session the shelf is immutable anyway.
 final _homeSectionMemo = <String, List<MuzoItem>>{};
 
+/// A home shelf whose content is a REAL genre chart instead of a hand-written
+/// artist list.
+///
+/// These urban shelves used to read the Supabase `artists_*` catalog: ~100 names
+/// sorted by follower count, one song searched per name. That is what made them
+/// feel fake — the afro table holds 15 hand-typed names (half of them UK drill),
+/// the afrobeats table contains Queen, Madonna and Dire Straits, `country_code`
+/// is empty on every row so the "US" scoping never applied, and a follower sort
+/// buries every act that is not already famous, which is why no woman ever
+/// reached the visible cards. A chart answers with whoever is actually playing
+/// this genre in this country this week — women included, because they chart.
+/// The catalog remains as a last-resort fallback so the shelf never vanishes
+/// when both feeds are unreachable.
+class _RealGenreSection extends ConsumerWidget {
+  final String title;
+
+  /// Any name [TrendingService.genreChartFor] resolves ("rap fr", "afro rap").
+  final String genre;
+
+  /// Catalog buckets used when no chart answers at all.
+  final List<String> catalogGenres;
+  final int offset;
+
+  const _RealGenreSection(
+    this.title, {
+    required this.genre,
+    this.catalogGenres = const [],
+    this.offset = 0,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final charted =
+        ref.watch(genreChartSongsProvider((genre: genre, offset: offset)));
+    // Une catégorie en erreur est une catégorie vide : le bucket du catalogue
+    // prend le relais, sinon la rangée disparaissait de l'accueil.
+    final chartedList = charted.valueOrNull;
+    final chartedEmpty = chartedList != null && chartedList.isEmpty;
+    final needsCatalog = chartedEmpty || charted.hasError;
+    final data = needsCatalog && catalogGenres.isNotEmpty
+        ? ref.watch(homeCatalogSectionProvider(
+            (genres: catalogGenres, offset: offset, country: null)))
+        : charted;
+    return data.when(
+      data: (items) {
+        if (items.isEmpty) return const SizedBox.shrink();
+        return _PlayableShelfGate(
+          title: title,
+          items: items,
+          onTap: (item) => openArtistForSong(context, item),
+        );
+      },
+      loading: () => _HomeShelfSkeleton(title),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+}
+
 final homeSearchArtistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, query) async {
   return ContentCacheService.shelfCached('shelf|searchArtists|$query', () async {
@@ -395,41 +529,37 @@ final homeSearchAlbumsProvider =
 /// leads with different artists and a different order — without making the
 /// same "fresh releases" reappear day after day.
 final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|recommended', () async {
+  return ContentCacheService.shelfCachedDaily('shelf|recommended', () async {
   final dailySeed = _dailySeed();
   try {
-    final storage = ref.read(storageServiceProvider);
-    final counts = <String, int>{};
-    for (final item in storage.getHistory()) {
-      final name = item.displayArtist;
-      if (name.isEmpty || name == 'Unknown') continue;
-      counts[name] = (counts[name] ?? 0) + 1;
-    }
-    var topArtists = counts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    // Rotate which artists lead the search each day so the same top list does
-    // not always produce the same tracks.
-    if (topArtists.isNotEmpty) {
-      topArtists = ContentCacheService.rotate(topArtists, dailySeed);
-      topArtists = topArtists.take(5).toList();
-    }
+    // Graines personnelles : d'abord ce que l'utilisateur a CHERCHÉ, puis les
+    // artistes qu'il joue le plus. Un rayon « Recommandé pour toi » qui
+    // n'exploitait que l'historique de lecture ignorait la signal le plus
+    // volontaire des deux.
+    final seeds = ref
+        .read(tasteSignalsProvider)
+        .recommendationSeeds(max: 3, seed: dailySeed);
 
     final dz = ref.read(deezerApiServiceProvider);
     final discovered = <MuzoItem>[];
-    for (final entry in topArtists.take(3)) {
-      // Vary the search scope slightly by day for fresher results.
-      final query = _dailyQuery(entry.key, dailySeed);
+    for (final term in seeds) {
+      // Une recherche Tap long (« nxamndo black cagnott ») est déjà une
+      // requête valide : on ne lui accole pas « top hits ».
+      final query = term.split(' ').length <= 2
+          ? _dailyQuery(term, dailySeed)
+          : term;
       final batch = await dz.searchTracks(query, limit: 6);
       discovered.addAll(batch.isEmpty
-          ? await dz.searchTracks(entry.key, limit: 6)
+          ? await dz.searchTracks(term, limit: 6)
           : batch);
       if (discovered.length >= 16) break;
     }
     if (discovered.isNotEmpty) {
-      final playable = await ref
-          .read(multiApiServiceProvider)
-          .resolveToPlayable(discovered, max: 12);
+      final playable = _streamEnrichBlocked()
+          ? discovered
+          : await ref
+              .read(multiApiServiceProvider)
+              .resolveToPlayable(discovered, max: 12);
       var dedup = dedupeMuzoSongs(playable);
       if (dedup.isNotEmpty) {
         // Deterministic daily shuffle so the order (and therefore the first
@@ -449,10 +579,12 @@ final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
   // Auto-chargement du son sans vider la section : on enrichit les items avec
   // un audioUrl quand c'est possible, mais on garde TOUS les items de toute
   // façon — la lecture retentera la cascade au clic pour ceux sans URL directe.
-  final playable = await StreamExtractionService.resolvePlayableUrls(
-    fallback,
-    maxN: 10,
-  ).then((r) => r.cast<MuzoItem>());
+  final playable = _streamEnrichBlocked()
+      ? <MuzoItem>[]
+      : await StreamExtractionService.resolvePlayableUrls(
+          fallback,
+          maxN: 10,
+        ).then((r) => r.cast<MuzoItem>());
   final byVideo = <String, MuzoItem>{};
   for (final p in playable) {
     final id = p.videoId ?? p.title;
@@ -468,7 +600,17 @@ final recommendedForYouProvider = FutureProvider<List<MuzoItem>>((ref) async {
 /// Stable integer that changes once per day (device clock), used to rotate and
 /// shuffle the daily recommendations deterministically.
 int _dailySeed() =>
-    DateTime.now().toUtc().difference(DateTime.utc(2024, 1, 1)).inDays;
+    DateTime.now().toUtc().difference(DateTime.utc(2024, 1, 1)).inDays +
+    ContentCacheService.deviceSeed;
+
+/// True when resolving a YouTube stream can never lead to playback: offline
+/// mode, or the opt-in "downloaded titles only" rule. A shelf that resolves
+/// inline must honour it, otherwise a Home pass spends ~20 s per track walking
+/// the dead relay chain and the shelves still loading hit their deadline.
+bool _streamEnrichBlocked() {
+  final storage = StorageService();
+  return storage.offlineMode || storage.playDownloadedOnly;
+}
 
 /// Rotates between a few query phrasings based on the day so the same artist's
 /// search does not always return the identical top hits.
@@ -491,14 +633,15 @@ List<T> _seededShuffle<T>(List<T> items, int seed) {
   return copy;
 }
 
-/// Deezer albums released within the last 30 days, genre-targeted album
-/// searches (rap FR/US, gospel, afrobeats), Apple RSS storefront tops with
-/// real release dates (FR/US/NG/BJ), and albums from the priority curated
-/// catalogs — so "Nouveaux albums" always has a full, real shelf.
+/// "Nouveaux albums": fresh albums from the country-scoped, genre-labelled
+/// Apple charts (rap FR / rap US / afro — the exact specs the genre rows use,
+/// see [TrendingService.genreChartFor]) first, then Deezer's in-genre new
+/// releases, then — only when both feeds are thin — the Deezer genre queries
+/// and priority artist catalogs. Everything is windowed on a real release date.
 final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|recentAlbums', () async {
+  final shelf = await ContentCacheService.shelfCachedDaily(
+      'shelf|recentAlbums', () async {
   final deezer = ref.read(deezerApiServiceProvider);
-  final api = ref.read(muzoApiServiceProvider);
   final catalog = ref.watch(curatedArtistsServiceProvider);
 
   Future<List<MuzoItem>> safeAlbums(Future<List<MuzoItem>> f) async {
@@ -509,17 +652,30 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     }
   }
 
-  final base = await safeAlbums(deezer.recentAlbums(days: 30, limit: 40));
-  final cutoff = DateTime.now().subtract(const Duration(days: 30));
-  final now = DateTime.now();
+  const urbanGenreIds = <int>[
+    DeezerApiService.genreRapHipHop,
+    DeezerApiService.genreRnbSoul,
+    DeezerApiService.genreAfricanMusic,
+  ];
+  // In-genre only: the user asked for rap FR / rap US / afro new albums, and
+  // Deezer's worldwide pool is exactly where pop, rock and gospel leaked in
+  // from. The per-genre charts (`/chart/{id}/tracks` → their albums) are the
+  // one keyless feed that is genuinely genre-accurate.
+  final base = await safeAlbums(
+      deezer.newAlbumsInGenres(urbanGenreIds, days: 30, limit: 40));
 
-  bool inWindow(MuzoItem a) {
-    final rel = a.releaseDate;
-    if (rel == null) return false;
-    // Pre-releases + date-only timezone skew: allow a 7-day future horizon.
-    final horizon = now.add(const Duration(days: 7));
-    return !rel.isBefore(cutoff) && !rel.isAfter(horizon);
-  }
+  // Primary source: the same country-scoped, genre-labelled Apple chart pools
+  // the rap FR / rap US / afro rows read, windowed on their real release dates.
+  final chartAlbums = <MuzoItem>[];
+  try {
+    chartAlbums.addAll(await ref
+        .read(chartNewAlbumsProvider.future)
+        .timeout(const Duration(seconds: 30)));
+  } catch (_) {}
+
+  // The hand-typed Deezer queries and artist lists below are only a filler:
+  // they run when the dated feeds above are thin, never in place of them.
+  final needBackfill = base.length + chartAlbums.length < 14;
 
   const queries = <String>[
     // FR / US rap & urban
@@ -530,23 +686,13 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     'drill',
     'trap',
     'R&B',
-    'pop',
-    // Afrique de l'Ouest / Centre — toutes catégories
-    'gospel',
+    // Afrique de l'Ouest / Centre — afro only (the app's target genres)
     'afrobeats',
     'afro rap',
     'amapiano',
     'musique béninoise',
     'nigerian music',
     'ghana music',
-    'congolese rumba',
-    'rumba congolaise',
-    'coupé-décalé',
-    'zouk',
-    'dancehall',
-    'reggae',
-    'mbalax',
-    'highlife',
     // Artistes phares demandés (Fally, Tiakola…)
     'Fally Ipupa',
     'Tiakola',
@@ -566,7 +712,7 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   // Genre search never returns release_date — hydrate the head of each
   // batch via /album/{id} so only truly recent catalog survives.
   final genreAlbums = <MuzoItem>[];
-  for (var i = 0; i < queries.length; i += 4) {
+  for (var i = 0; needBackfill && i < queries.length; i += 4) {
     final chunk = queries.skip(i).take(4).toList();
     final batches = await Future.wait(
         chunk.map((q) => safeAlbums(deezer.searchAlbums(q, limit: 6))));
@@ -605,9 +751,6 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     'Diamond Platnumz',
     'Olodo',
     'Majeeed',
-    'for KING & COUNTRY',
-    'Cory Asbury',
-    'Anthony Brown',
     // Week of 18–23/09/2026 (web-verified)
     'Fireboy DML',
     'Blaqbonez',
@@ -619,8 +762,6 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     'Shoday',
     'MC Solaar',
     'Daguerre',
-    'Ezra Collective',
-    'Orville Peck',
     'Nao',
     'Dremo',
     'Erigga',
@@ -646,8 +787,12 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   final artistAlbums = <MuzoItem>[];
   // Headroom for must-have + 8 Benin + week artists + 5 catalog genres
   // (52 used to truncate the list before the genre catalogs were reached).
-  final uniqueArtistNames = <String>{...priorityNames}.take(64).toList();
-  for (var i = 0; i < uniqueArtistNames.length; i += 4) {
+  final uniqueArtistNames = <String>{...priorityNames}.take(100).toList();
+  // Budget borné : sans lui, chaque chunk de 4 qui timeout (10 s pièce)
+  // repoussait d'autant les rayons de genre qui tournent en parallèle.
+  final backfillClock = Stopwatch()..start();
+  for (var i = 0; needBackfill && i < uniqueArtistNames.length; i += 4) {
+    if (backfillClock.elapsed > const Duration(seconds: 12)) break;
     final chunk = uniqueArtistNames.skip(i).take(4).toList();
     final batches = await Future.wait(
         chunk.map((name) => safeAlbums(deezer.albumsForArtist(name, limit: 10))));
@@ -656,119 +801,44 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     }
   }
 
-  // Apple RSS tops across AF / FR / US storefronts (real im:releaseDate).
-  final rssStores = <String>[
-    'fr', 'us', 'ng', 'bj', 'ci', 'cd', 'cm', 'sn', 'gh', 'za',
-  ];
-  final rssBatches = await Future.wait(
-      rssStores.map((cc) => TrendingService.topAlbums(cc)));
-  final rssQueries = <(String, String, String?, DateTime?)>[];
-  final rssSeen = <String>{};
-  for (final batch in rssBatches) {
-    for (final a in batch) {
-      final k = '${a.title}|${a.artist}'.toLowerCase();
-      if (a.title.isEmpty || rssSeen.add(k) == false) continue;
-      final rel = a.releaseDate;
-      // RSS reissues of 1995 catalog must not appear under "new albums";
-      // pre-releases up to +7 days are allowed (date-only timezone skew).
-      if (rel == null ||
-          rel.isBefore(cutoff) ||
-          rel.isAfter(now.add(const Duration(days: 7)))) {
-        continue;
-      }
-      rssQueries.add((a.title, a.artist, a.cover, rel));
-      if (rssQueries.length >= 16) break;
-    }
-    if (rssQueries.length >= 16) break;
-  }
+  // The Apple-RSS storefront feed and MusicBrainz release calendar used to
+  // fill this shelf. Both are genre-agnostic — they are what put pop, gospel
+  // and rock under "Nouveaux albums" — so they are gone: everything here now
+  // comes from the rap/R&B/afro genre charts, the genre search terms above and
+  // the urban curated catalogs.
 
-  // MusicBrainz first-release calendar for the 30-day window — free, dated,
-  // daily disk cache. Fills genres RSS/Deezer may miss.
-  final mbReleases = await safeAlbums(ref
-      .read(musicBrainzServiceProvider)
-      .releasesBetween(cutoff, now, limit: 60));
-  final mbQueries = <(String, String, String?, DateTime?)>[];
-  final mbSeen = <String>{...rssSeen};
-  for (final a in mbReleases) {
-    if (!inWindow(a) || _looksLikeJunkRelease(a)) continue;
-    final k = _contentKey(a);
-    if (k.isEmpty || mbSeen.add(k) == false) continue;
-    mbQueries.add((a.title, a.displayArtist, null, a.releaseDate));
-    if (mbQueries.length >= 12) break;
-  }
-
-  final rssAlbums = <MuzoItem>[];
-  final resolvePairs = <(String, String, String?, DateTime?, String)>[
-    for (final t in rssQueries) (t.$1, t.$2, t.$3, t.$4, 'itunes rss'),
-    for (final t in mbQueries) (t.$1, t.$2, t.$3, t.$4, 'musicbrainz'),
-  ];
-  for (var i = 0; i < resolvePairs.length; i += 5) {
-    final chunk = resolvePairs.skip(i).take(5).toList();
-    final resolved = await Future.wait(chunk.map((t) async {
-      final (title, artist, cover, rel, source) = t;
-      try {
-        final resp = await api
-            .search('$title $artist', filter: 'albums')
-            .timeout(const Duration(seconds: 9));
-        final hit = resp.results.firstWhere(
-          (r) => (r.browseId ?? r.videoId) != null,
-          orElse: () => resp.results.isEmpty
-              ? MuzoItem(
-                  title: title,
-                  thumbnails: const [],
-                  resultType: 'album',
-                  isExplicit: false,
-                  artists: [MuzoArtist(name: artist)],
-                  releaseDate: rel,
-                  source: source,
-                )
-              : resp.results.first,
-        );
-        var item = hit.copyWith(
-          releaseDate: rel,
-          source: source,
-        );
-        if (item.thumbnails.isEmpty && cover != null && cover.isNotEmpty) {
-          item = item.copyWith(thumbnails: [
-            MuzoThumbnail(url: cover, width: 600, height: 600)
-          ]);
-        }
-        return item;
-      } catch (_) {
-        return null;
-      }
-    }));
-    rssAlbums.addAll(resolved.whereType<MuzoItem>());
-  }
-
-  // Prefer dated releases (RSS / artist / curated) over undated genre noise,
-  // then drop playlist-style junk so "Nouveaux albums" stays editorial.
+  // Prefer dated releases (artist / curated / genre chart) over undated genre
+  // noise, then drop playlist-style junk so "Nouveaux albums" stays editorial.
   final merged = <MuzoItem>[];
   final seenAlbums = <String>{};
   void push(MuzoItem a) {
-    if (!inWindow(a)) return;
+    if (!_isFreshAlbum(a)) return;
     if (_looksLikeJunkRelease(a)) return;
-    final k = _contentKey(a);
+    final k = contentKey(a);
     if (k.isEmpty || seenAlbums.add(k) == false) return;
     merged.add(a);
   }
 
-  // Deezer's live dated pool first — genuinely fresh discographies (real
-  // release_date from the last 30 days) win the dedupe against the RSS /
-  // curated copies of the same album, so a playable album card leads.
-  for (final a in base) {
+  // Chart albums lead: the same country-scoped, genre-labelled Apple pools the
+  // rap/afro rows read, windowed on their real release dates. This is what
+  // replaced hand-typed artist lists as the source of "Nouveaux albums".
+  for (final a in chartAlbums) {
     push(a);
   }
-  // RSS next — real storefront tops with release dates.
-  for (final a in rssAlbums) {
+
+  // In-genre chart albums first — genuinely fresh rap/R&B/afro discographies
+  // (real release_date from the last 30 days) win the dedupe against the
+  // curated copies of the same album, so a playable album card leads.
+  for (final a in base) {
     push(a);
   }
   // Curated albums (web-verified dates) — seed first so New Albums is never
   // empty and shows the real 18–23/09 drops even when live feeds are thin.
   for (final c in curatedNewReleases2026) {
     if (c.event != 'album') continue;
+    if (!isUrbanOrAfroRelease(c)) continue;
     if (c.title.trim().isEmpty || c.title.trim() == c.artist.trim()) continue;
-    if (!curatedIsFresh(c, window: const Duration(days: 14))) continue;
+    if (!curatedIsFresh(c, window: const Duration(days: 30))) continue;
     push(MuzoItem(
       title: c.title,
       thumbnails: const [],
@@ -785,23 +855,14 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   for (final a in artistAlbums) {
     push(a);
   }
-  // Dated genre hits next (undated ones were dropped by inWindow).
+  // Dated genre hits next (undated ones were dropped by the 30-day window).
   for (final a in genreAlbums) {
     push(a);
   }
 
-  // Always top up with Deezer's honest 7-day new releases — the freshest
-  // drops of the week — instead of only when the shelf looks thin, so a
-  // release published today reaches the shelf on the very next refresh.
-  final freshReleases = await safeAlbums(deezer.newReleases(days: 7, limit: 20));
-  for (final a in freshReleases) {
-    push(a);
-    if (merged.length >= 24) break;
-  }
-
-  // Curated seeds store title/artist/date only (no artwork) and the RSS
-  // fallback can miss the cover too — those tiles would render as a bare
-  // placeholder. Resolve a real cover for the first artless albums.
+  // Curated seeds store title/artist/date only (no artwork) — those tiles
+  // would render as a bare placeholder. Resolve a real cover for the first
+  // artless albums.
   final itunes = ItunesApiService();
   final artless = <int>[];
   for (var i = 0; i < merged.length && artless.length < 16; i++) {
@@ -816,10 +877,16 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
       final query = artist.isEmpty ? item.title : '${item.title} $artist';
       try {
         final hits = await itunes
-            .searchAlbums(query, limit: 1)
+            .searchAlbums(query, limit: 4)
             .timeout(const Duration(seconds: 8));
-        if (hits.isNotEmpty && hits.first.thumbnails.isNotEmpty) {
-          return hits.first.thumbnails.first.url;
+        // iTunes répond lui aussi « le plus proche », pas « le bon » : la
+        // pochette d'un autre album se retrouvait collée sur une vraie sortie,
+        // ce qui se lit comme un faux album. Aucune entité vérifiée ⇒ aucune
+        // pochette, la tuile garde son emplacement réservé au lieu de mentir.
+        for (final h in hits) {
+          if (h.thumbnails.isEmpty) continue;
+          if (!matchesNamedEntity(h, item.title, artist)) continue;
+          return h.thumbnails.first.url;
         }
       } catch (_) {}
       return null;
@@ -835,13 +902,20 @@ final deezerRecentAlbumsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   }
   return merged;
   });
+  // Re-cut on read, exactly as the song shelf does: a cached snapshot ages
+  // while the device stays offline, and an album can leave the 30-day window
+  // long before the shelf is rebuilt.
+  final keptAlbums = shelf.where(_isFreshAlbum).toList();
+  debugPrint('HomeNewAlbums kept=${keptAlbums.length}/${shelf.length} '
+      '(30d window, device clock)');
+  return keptAlbums;
 });
 
 /// Vraies nouvelles sorties — sons des 7 derniers jours (Deezer dates +
 /// albums prioritaires curated + iTunes current tops résolus YouTube).
 /// Priorité rap FR/US/afro, hits Bénin, afrobeats, régions AF.
 final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|newSongs', () async {
+  return ContentCacheService.shelfCachedDaily('shelf|newSongs', () async {
   final deezer = ref.read(deezerApiServiceProvider);
   final multi = ref.read(multiApiServiceProvider);
   final api = ref.read(muzoApiServiceProvider);
@@ -857,8 +931,38 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
 
   final seeds = <MuzoItem>[];
 
-  // 1) Deezer lead tracks of albums released in the last 7 days.
-  seeds.addAll(await safe(deezer.newTracks(days: 7, limit: 30)));
+  // 1) Lead tracks of the albums that just dropped in rap / R&B / afro.
+  // lançée ici, attendue plus bas : en série elle mangeait 26 s du budget
+  // global AVANT la moindre recherche YouTube, et le merge de l'accueil
+  // (`homeNewReleasesMergedProvider`, 70 s par branche) coupait alors tout →
+  // `HomeNewReleases kept=0/0`, le rayon « Nouvelles sorties » vide.
+  final genreNewTracksFuture = deezer
+      .newTracksInGenres(const <int>[
+        DeezerApiService.genreRapHipHop,
+        DeezerApiService.genreRnbSoul,
+        DeezerApiService.genreAfricanMusic,
+      ], days: 7, limit: 30)
+      .timeout(const Duration(seconds: 26))
+      .catchError((Object _) => const <MuzoItem>[]);
+  // 4) Apple current tops FR/US/NG/BJ/CI — eux aussi lancés en parallèle des
+  // appels Deezer ci-dessous, et bornés (ils ne l'étaient pas du tout).
+  // Chaque storefront est piégé séparément : un flux RSS qui JETTE faisait
+  // échouer tout le `Future.wait`, le provider mourait en cours de route et
+  // `shelfCached` rendait l'ancien instantané — ou rien du tout (`branche
+  // newSongs -> 0 titre(s) en 20014 ms`, mesuré 2026-10-15).
+  Future<List<TrendSong>> topsOf(String store) => TrendingService.topSongs(store)
+      .catchError((Object e) {
+    debugPrint('HomeNewReleases: tops "$store" en erreur: $e');
+    return const <TrendSong>[];
+  });
+  final topStoresFuture = Future.wait([
+    topsOf('fr'),
+    topsOf('us'),
+    topsOf('ng'),
+    topsOf('bj'),
+    topsOf('ci'),
+  ]).timeout(const Duration(seconds: 20),
+      onTimeout: () => const <List<TrendSong>>[]);
 
   // 2) Curated FR / priority releases (editorial list → real titles).
   // Skip placeholders where title == artist (no real song name known yet)
@@ -869,7 +973,8 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
   final curatedSeeds = <MuzoItem>[];
   for (final c in curatedNewReleases2026) {
     if (c.title.trim().isEmpty || c.title.trim() == c.artist.trim()) continue;
-    if (!curatedIsFresh(c, window: const Duration(days: 14))) continue;
+    if (!isUrbanOrAfroRelease(c)) continue;
+    if (!curatedIsFresh(c, window: const Duration(days: 7))) continue;
     curatedSeeds.add(MuzoItem(
       title: c.title,
       thumbnails: const [],
@@ -910,9 +1015,6 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     'Olodo',
     'Majeeed',
     'Diamond Platnumz',
-    'for KING & COUNTRY',
-    'Cory Asbury',
-    'Anthony Brown',
     // Week of 18–23/09/2026 (web-verified)
     'Fireboy DML',
     'Blaqbonez',
@@ -946,14 +1048,24 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
       if (a.name.isNotEmpty) priorityArtists.add(a.name);
     }
   }
-  // Wider than 7 days so last-Friday drops (Tiakola…) still make the shelf;
-  // /search/album never carries release_date — use albumsForArtist.
-  final cutoffLead = DateTime.now().subtract(const Duration(days: 21));
-  final leadFutures = <Future<List<MuzoItem>>>[];
-  final uniquePriority = <String>{...priorityArtists}.take(16).toList();
+  // MUST match the shelf's own window: `homeNewReleasesMergedProvider` cuts at
+  // 7 days, so every lead track collected here on a wider window was fetched,
+  // resolved and then thrown away by the merge — Deezer album detail calls that
+  // only burned the phone's slow network. /search/album never carries
+  // release_date, hence albumsForArtist.
+  final cutoffLead = DateTime.now().subtract(const Duration(days: 7));
+  final uniquePriority = <String>{...priorityArtists}.take(40).toList();
+  // Trois artistes à la fois ET un budget total : les 40 requêtes partaient
+  // d'un seul coup (mesuré le 2026-10-16 : ~28 `albumsForArtist` en
+  // TimeoutException simultanées dans le même logcat), ce qui saturait l'uplink
+  // et affamait les cinq rayons de genre du Home lancés au même instant.
+  final leadClock = Stopwatch()..start();
+  const leadBudget = Duration(seconds: 12);
+  final leadOut = <MuzoItem>[];
   for (var i = 0; i < uniquePriority.length; i += 3) {
+    if (leadClock.elapsed > leadBudget) break;
     final chunk = uniquePriority.skip(i).take(3).toList();
-    leadFutures.addAll(chunk.map((name) async {
+    final batches = await Future.wait(chunk.map((name) async {
       final albums = await safe(deezer.albumsForArtist(name, limit: 8));
       final recent = albums.where((a) {
         final rel = a.releaseDate;
@@ -974,25 +1086,17 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
       }
       return out;
     }));
-  }
-  // Resolve lead-track batches sequentially to stay under Deezer rate limits.
-  final leadOut = <MuzoItem>[];
-  for (final f in leadFutures) {
-    leadOut.addAll(await f);
+    for (final b in batches) {
+      leadOut.addAll(b);
+    }
   }
   seeds.addAll(leadOut);
+  // Les pistes des genres venaient ici : collectées en parallèle des artistes
+  // prioritaires, leur attente ne coutait plus de secondes au rayon.
+  seeds.addAll(await genreNewTracksFuture);
 
   // 4) Apple current tops FR/US/NG/BJ/CI — real hits, resolved to playable YT.
-  // One slice per storefront (4 each, 16 total): the old loop filled its 16
-  // slots from the FR list alone, so the Benin / CI / Nigeria charts were
-  // fetched and thrown away and the shelf kept repeating French tops.
-  final topStores = await Future.wait([
-    TrendingService.topSongs('fr'),
-    TrendingService.topSongs('us'),
-    TrendingService.topSongs('ng'),
-    TrendingService.topSongs('bj'),
-    TrendingService.topSongs('ci'),
-  ]);
+  final topStores = await topStoresFuture;
   final topSeeds = <MuzoItem>[];
   final topSeen = <String>{};
   void addTop(TrendSong t) {
@@ -1081,9 +1185,11 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     playable = const <MuzoItem>[];
   }
   if (playable.isEmpty) {
-    // Fallback: direct YT search for a few priority titles.
-    final direct = <MuzoItem>[];
-    for (final s in ordered.take(12)) {
+    // Fallback: direct YT search for a few priority titles. EN PARALLÈLE :
+    // la boucle séquentielle (12 × 8 s, file d'attente comprise) pouvait à
+    // elle seule dépasser le budget du merge et rendait [] — donc un rayon
+    // « Nouvelles sorties » vide alors que les graines, elles, étaient là.
+    Future<MuzoItem?> one(MuzoItem s) async {
       final artist = s.displayArtist;
       final q = (artist.isEmpty || artist == 'Unknown')
           ? s.title
@@ -1092,19 +1198,42 @@ final deezerNewSongsProvider = FutureProvider<List<MuzoItem>>((ref) async {
         final resp = await api
             .search(q, filter: 'songs')
             .timeout(const Duration(seconds: 8));
-        final hit = resp.results.where((r) => r.videoId != null).firstOrNull;
-        if (hit != null) {
-          // Stamp the seed's real release date: undated hits are filtered
-          // out by the shelf's date window (they used to always disappear).
-          direct.add(hit.copyWith(
-            releaseDate: hit.releaseDate ?? s.releaseDate,
-            source: hit.source ?? s.source,
-            sourceId: hit.sourceId ?? s.sourceId,
-          ));
+        // Pas de confiance au premier résultat : ce rayon tamponne la date de
+        // sortie de la graine sur le hit, donc un homonyme se retrouve affiché
+        // comme une nouveauté vérifiée. On exige que le hit nomme bien le titre
+        // ET l'artiste de la graine, sinon on préfère n'avoir aucun titre.
+        MuzoItem? hit;
+        for (final r in resp.results) {
+          if (r.videoId == null) continue;
+          if (!matchesNamedEntity(
+              r, s.title, (artist.isEmpty || artist == 'Unknown') ? '' : artist)) {
+            continue;
+          }
+          hit = r;
+          break;
         }
-      } catch (_) {}
+        if (hit == null) return null;
+        // Stamp the seed's real release date: undated hits are filtered
+        // out by the shelf's date window (they used to always disappear).
+        return hit.copyWith(
+          releaseDate: hit.releaseDate ?? s.releaseDate,
+          source: hit.source ?? s.source,
+          sourceId: hit.sourceId ?? s.sourceId,
+        );
+      } catch (_) {
+        return null;
+      }
     }
-    return dedupeMuzoSongs(direct).take(20).toList();
+
+    final direct = (await Future.wait(ordered.take(12).map(one)))
+        .whereType<MuzoItem>()
+        .toList();
+    if (direct.isNotEmpty) return dedupeMuzoSongs(direct).take(20).toList();
+    // Dernier recours : les graines elles-mêmes. Elles portent une date de
+    // sortie vérifiée (Deezer / Apple RSS / curated) et le merge de l'accueil
+    // sait les afficher et les ouvrir (page artiste, extrait Deezer) — rendre
+    // [] faisait au contraire disparaître tout le rayon.
+    return dedupeMuzoSongs(ordered).take(20).toList();
   }
   return dedupeMuzoSongs(playable).take(24).toList();
   });
@@ -1213,25 +1342,34 @@ int _headArtistBonus(MuzoItem item) {
 /// Filtered to the last 7 days (incl. today), priority-scored, newest first.
 final homeNewReleasesMergedProvider =
     FutureProvider<List<MuzoItem>>((ref) async {
-  return ContentCacheService.shelfCached('shelf|mergedReleases', () async {
-  // 14-day window: last-Friday drops + timezone-skewed midnight stamps still
-  // count as "new" without emptying the shelf when Deezer is thin.
-  final cutoff = DateTime.now().subtract(const Duration(days: 14));
-  Future<List<MuzoItem>> safe(Future<List<MuzoItem>> f) async {
-    // 70s: the songs provider chains Deezer (16 lead artists × album detail)
-    // + 48 YT resolutions + its own 45s resolution budget; at 50s it timed out
-    // right in that window, returned [] and the shelf disappeared instead of
-    // refreshing.
+  final shelf = await ContentCacheService.shelfCachedDaily(
+      'shelf|mergedReleases', () async {
+  Future<List<MuzoItem>> safe(String label, Future<List<MuzoItem>> f) async {
+    // 70s → 90s + chrono: the songs provider chains Deezer (16 lead artists ×
+    // album detail) + 48 YT resolutions + its own 45s resolution budget; at
+    // 50s it timed out right in that window, returned [] and the shelf
+    // disappeared instead of refreshing. Mesuré le 2026-10-15 : la branche
+    // rendait encore `HomeNewReleases kept=0/0`, donc chaque branche est
+    // désormais chronométrée pour savoir laquelle mange le budget.
+    final clock = Stopwatch()..start();
     try {
-      return await f.timeout(const Duration(seconds: 70));
+      final out = await f.timeout(const Duration(seconds: 90));
+      debugPrint('HomeNewReleases: branche $label -> ${out.length} titre(s) '
+          'en ${clock.elapsedMilliseconds} ms');
+      return out;
     } catch (_) {
+      debugPrint('HomeNewReleases: branche $label COUPÉE à '
+          '${clock.elapsedMilliseconds} ms');
       return const <MuzoItem>[];
     }
   }
 
   final batches = await Future.wait([
-    safe(ref.read(deezerNewSongsProvider.future)),
-    safe(() async {
+    // Chart-first: brand-new singles that ARE rap FR / rap US / afro according
+    // to the storefront genre labels, dated inside the window.
+    safe('charts', ref.read(chartNewSongsProvider.future)),
+    safe('newSongs', ref.read(deezerNewSongsProvider.future)),
+    safe('discovery', () async {
       // Discovery "new releases" are albums — never merge them into the
       // song shelf (that branch always returned []). Songs come from
       // deezerNewSongsProvider (dated Deezer + curated + RSS).
@@ -1243,14 +1381,9 @@ final homeNewReleasesMergedProvider =
   for (final batch in batches) {
     for (final item in batch) {
       if (_looksLikeJunkRelease(item)) continue;
-      final rel = item.releaseDate;
-      // "New" = dated inside the 14-day window. Undated chart seeds
+      // "New" = dated inside the 7-day window. Undated chart seeds
       // (old iTunes tops) must never appear as new releases.
-      if (rel == null) continue;
-      if (rel.isBefore(cutoff)) continue;
-      if (rel.isAfter(DateTime.now().add(const Duration(days: 7)))) {
-        continue;
-      }
+      if (!datedWithinReleaseWindow(item)) continue;
       final id = item.videoId ?? item.browseId ?? item.sourceId;
       final key = id != null && id.isNotEmpty
           ? id.toLowerCase()
@@ -1279,6 +1412,13 @@ final homeNewReleasesMergedProvider =
   });
   return merged.take(24).toList();
   });
+  // The cache can hold a snapshot built days ago — offline the replay ceiling
+  // is a full year — so the window is cut again against the DEVICE clock on
+  // every read. Nothing stale may ever render under "Nouvelles sorties".
+  final keptReleases = shelf.where(datedWithinReleaseWindow).toList();
+  debugPrint('HomeNewReleases kept=${keptReleases.length}/${shelf.length} '
+      '(7d window, device clock)');
+  return keptReleases;
 });
 
 /// Découverte de la semaine — de vrais sons du chart mondial Deezer
@@ -1308,7 +1448,8 @@ final deezerTopArtistsProvider = FutureProvider<List<MuzoItem>>((ref) async {
     final artists =
         await ref.read(deezerApiServiceProvider).topArtists(limit: 60);
     if (artists.isEmpty) return const [];
-    final bucket = DateTime.now().year * 12 + DateTime.now().month;
+    final bucket = DateTime.now().year * 12 + DateTime.now().month +
+        ContentCacheService.deviceSeed;
     final rotated = ContentCacheService.rotate(artists, bucket);
     return dedupeShelfItems(rotated).take(12).toList();
   } catch (_) {
@@ -1351,7 +1492,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         // updates daily even if the app stays open past midnight.
         ref.invalidate(deezerRecentAlbumsProvider);
         ref.invalidate(deezerNewSongsProvider);
+        ref.invalidate(chartNewSongsProvider);
+        ref.invalidate(chartNewAlbumsProvider);
         ref.invalidate(homeNewReleasesMergedProvider);
+        ref.invalidate(homePopularSongsProvider);
         ref.invalidate(deezerWeeklyTracksProvider);
         ref.invalidate(deezerTopArtistsProvider);
       }
@@ -1454,8 +1598,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ? Theme.of(context).cardColor
                   : Colors.white),
               onRefresh: () async {
-                ref.read(homeShownArtistsProvider.notifier).state = {};
+                ref.read(shownArtistsProvider.notifier).state = {};
                 ref.invalidate(homeSearchProvider);
+                ref.invalidate(homePopularSongsProvider);
                 ref.invalidate(homeSearchArtistsProvider);
                 ref.invalidate(homeSearchAlbumsProvider);
                 ref.invalidate(homeCatalogSectionProvider);
@@ -1467,8 +1612,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ref.read(discoveryServiceProvider).invalidateNewContent();
                 } catch (_) {}
                 ref.invalidate(homeNewReleasesMergedProvider);
+                ref.invalidate(homePopularSongsProvider);
                 ref.invalidate(deezerRecentAlbumsProvider);
                 ref.invalidate(deezerNewSongsProvider);
+                ref.invalidate(chartNewSongsProvider);
+                ref.invalidate(chartNewAlbumsProvider);
+                ref.invalidate(genreChartSongsProvider);
                 ref.invalidate(deezerWeeklyTracksProvider);
                 ref.invalidate(deezerTopArtistsProvider);
                 ref.invalidate(categorySubSongsProvider);
@@ -1484,6 +1633,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 await ContentCacheService.instance.invalidatePrefix('trendpl|');
                 await ContentCacheService.instance.invalidatePrefix('homecharts|');
                 await ContentCacheService.instance.invalidatePrefix('mb|rel|');
+                // The genre-chart shelves read their own cache keys, so a
+                // pull-to-refresh must clear those too or they replay the
+                // snapshot they took this morning.
+                await ContentCacheService.instance
+                    .invalidatePrefix('trendsm2|');
+                await ContentCacheService.instance
+                    .invalidatePrefix('shelf|genrechart|');
+                await ContentCacheService.instance
+                    .invalidatePrefix('shelf|chartnew');
+                // Les trois rayons datés étaient les seuls à ne pas être purgés :
+                // « Nouvelles sorties » (mergedReleases), ses graines Deezer
+                // (newSongs) et « Nouveaux albums » (recentAlbums) rejouaient
+                // leur instantané à chaque pull-to-refresh, ce qui faisait
+                // relaisser les mêmes titres — y compris périmés — sous un
+                // libellé de nouveautés.
+                await ContentCacheService.instance
+                    .invalidatePrefix('shelf|mergedReleases');
+                await ContentCacheService.instance
+                    .invalidatePrefix('shelf|newSongs');
+                await ContentCacheService.instance
+                    .invalidatePrefix('shelf|recentAlbums');
                 // Les rayons doivent repartir de zéro, pas rejouer leur ancien tri.
                 ref.invalidate(categorySubSongsProvider);
                 ref.invalidate(discoveryFeedProvider);
@@ -1492,6 +1662,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ref.invalidate(homeChartsProvider);
                 ref.invalidate(recommendedForYouProvider);
                 ref.invalidate(homeNewReleasesMergedProvider);
+                ref.invalidate(homePopularSongsProvider);
                 ref.invalidate(deezerRecentAlbumsProvider);
                 ref.invalidate(deezerNewSongsProvider);
                 ref.invalidate(deezerWeeklyTracksProvider);
@@ -1503,6 +1674,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 slivers: [
                   // 1 — Tunefy DJ — mix infini autour de votre écoute actuelle
                   const SliverToBoxAdapter(child: _DjHomeEntry()),
+                  // 1b — Quick Picks : suggestions issues de l'historique
+                  // (GET /api/feed du backend, section masquee si vide)
+                  const SliverToBoxAdapter(child: QuickPicksSection()),
                   // 2 — Écoutés récemment
                   const SliverToBoxAdapter(child: _RecentlyListenedSection()),
                   // 3 — Reprendre l'écoute
@@ -1526,27 +1700,41 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   SliverToBoxAdapter(
                       child: _SubCategorySongsSection(
                           l10n.trendingNow, 'Charts', 'Trending')),
-                  // 9 — Rap FR
+                  // 9 — Rap FR: Apple FR most-played, kept to the rap genres.
                   SliverToBoxAdapter(
-                      child: _SearchSection(l10n.frRap,
-                        genres: const ['fr rap'])),
-
-                  // 10 — Rap US
+                      child: _RealGenreSection(
+                          l10n.frRap,
+                          genre: 'fr rap',
+                          catalogGenres: const ['fr rap'])),
+                  // 10 — Rap US (US + CA storefronts)
                   SliverToBoxAdapter(
-                      child: _SearchSection(l10n.usRap,
-                          genres: const ['hip-hop'], offset: 6, country: 'US')),
-                  // 11 — Rap Afro
+                      child: _RealGenreSection(
+                          l10n.usRap,
+                          genre: 'hip-hop',
+                          catalogGenres: const ['hip-hop'],
+                          offset: 6)),
+                  // 11 — Rap Afro: Nigerian, Ghanaian and Ivorian hip-hop,
+                  // which is what afro rap is — not UK drill.
                   SliverToBoxAdapter(
-                      child: _SearchSection(l10n.afroRap,
-                          genres: const ['afro rap', 'afrobeats'], offset: 5)),
+                      child: _RealGenreSection(
+                          l10n.afroRap,
+                          genre: 'afro rap',
+                          catalogGenres: const ['afro rap', 'afrobeats'],
+                          offset: 5)),
                   // 12 — Afrobeats
                   SliverToBoxAdapter(
-                      child: _SearchSection(l10n.afrobeats,
-                          genres: const ['afrobeats'],)),
-                  // 13 — Afro Hits
+                      child: _RealGenreSection(
+                          l10n.afrobeats,
+                          genre: 'afrobeats',
+                          catalogGenres: const ['afrobeats'])),
+                  // 13 — Afro Hits (the southern/eastern African side, so the
+                  // three afro rows do not repeat the same Nigerian tops)
                   SliverToBoxAdapter(
-                      child: _SearchSection(l10n.afroHits,
-                          genres: const ['afrobeats', 'r&b'], offset: 6)),
+                      child: _RealGenreSection(
+                          l10n.afroHits,
+                          genre: 'afro hits',
+                          catalogGenres: const ['afrobeats', 'r&b'],
+                          offset: 6)),
                   // 14 — Gospel (query pipeline — no dedicated curated table)
                   SliverToBoxAdapter(
                       child: _SearchSection(l10n.homeGospel,
@@ -1572,7 +1760,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   SliverToBoxAdapter(
                       child: _FavoritesSearchSection(
                           l10n.personalizedRecommendations)),
-            const SliverPadding(padding: EdgeInsets.only(bottom: 140)),
+            const SliverPadding(
+                padding: EdgeInsets.only(bottom: kBottomChromeHeight)),
           ],
         ),
       ),
@@ -1689,6 +1878,59 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+/// Rayon de l'accueil pendant qu'il se charge : titre + rangée de cartes en
+/// squelette, à la géométrie exacte de [_MusicCard] (152 px, écart 14,
+/// padding 20).
+///
+/// Les rayons de catégories rendaient `SizedBox.shrink()` tant que leur
+/// provider travaillait. Sur le réseau mesuré ici (le worker YouTube relance
+/// un scrape par graine, 32 graines par rayon), aucun des cinq rayons de
+/// genre n'avait fini au bout de quatre minutes : « Rap FR », « Rap US »,
+/// « Afro Rap », « Afrobeats », « Afro Hits », « Tendance » et « Gospel »
+/// n'existaient simplement pas à l'écran. C'est la cause de « je ne vois pas
+/// les autres catégories dans Home ». Une rangée en chargement est visible,
+/// elle, et elle ne réclame aucun artiste — le remplissage reste géré par
+/// le provider quand il livre.
+class _HomeShelfSkeleton extends StatelessWidget {
+  final String title;
+  const _HomeShelfSkeleton(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title),
+        SizedBox(
+          height: 216,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            itemCount: 4,
+            itemBuilder: (context, index) => Padding(
+              padding: EdgeInsets.only(right: index == 3 ? 0 : 14),
+              child: SizedBox(
+                width: 152,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    SkeletonLoader(width: 152, height: 152, borderRadius: 8),
+                    SizedBox(height: 10),
+                    SkeletonLoader(width: 120, height: 14, borderRadius: 4),
+                    SizedBox(height: 6),
+                    SkeletonLoader(width: 80, height: 12, borderRadius: 4),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// ⭐ Recommandé pour vous — personalized from your listening history + Deezer.
 class _RecommendedForYouSection extends ConsumerWidget {
   const _RecommendedForYouSection();
@@ -1727,6 +1969,8 @@ class _MergedNewReleasesSection extends ConsumerWidget {
         return _PlayableShelfGate(
           title: AppLocalizations.of(context).newReleases,
           items: items,
+          claimsArtists: false,
+          showDate: true,
           onTap: (item) {
             HapticFeedback.selectionClick();
             playSongAndOpenNowPlaying(context, item, openPlayer: false);
@@ -1770,14 +2014,19 @@ class _NewAlbumsSection extends ConsumerWidget {
           if (pa != pb) return pb.compareTo(pa);
           return 0;
         });
-        final fresh = dedupeShelfItems(unique.take(24).toList());
+        final candidates = unique.take(24).toList();
+        // Les nouveautés sont exemptées de la règle d'artiste unique : leur
+        // promesse est la sortie récente, pas la variété. Dédupliquées
+        // seulement à l'intérieur du rayon.
+        final fresh = dedupeShelfItems(candidates).take(18).toList();
         if (fresh.isEmpty) return const SizedBox.shrink();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _SectionHeader(title),
             _AlbumRow(
-              items: fresh.take(18).toList(),
+              items: fresh,
+              showDate: true,
               onTap: (item) {
                 HapticFeedback.selectionClick();
                 final browseId = item.browseId ?? item.album?.id;
@@ -1895,7 +2144,7 @@ class _SubCategorySongsSection extends ConsumerWidget {
           onTap: (item) => openArtistForSong(context, item),
         );
       },
-      loading: () => const SizedBox.shrink(),
+      loading: () => _HomeShelfSkeleton(title),
       error: (_, __) => const SizedBox.shrink(),
     );
   }
@@ -1917,14 +2166,12 @@ class _ChartsPlaylistsSection extends ConsumerWidget {
     return data.when(
       data: (items) {
         if (items.isEmpty) return const SizedBox.shrink();
-        final claimed = dedupeShelfItems(items);
-        if (claimed.isEmpty) return const SizedBox.shrink();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _SectionHeader(title),
-            _SongRow(
-              items: claimed,
+            _ClaimedSongRow(
+              items: items,
               onTap: (item) {
                 HapticFeedback.selectionClick();
                 final id = item.browseId ?? item.videoId;
@@ -1941,14 +2188,15 @@ class _ChartsPlaylistsSection extends ConsumerWidget {
           ],
         );
       },
-      loading: () => const SizedBox.shrink(),
+      loading: () => _HomeShelfSkeleton(title),
       error: (_, __) => const SizedBox.shrink(),
     );
   }
 }
 
-/// "Popular Songs {year}" — fresh songs of the current year surfaced from a
-/// text search, a distinct source from the charts/DJ shelves.
+/// "Popular Songs {year}" — real chart hits of the current year, sourced from
+/// Apple storefront RSS via [homePopularSongsProvider] (a distinct, authoritative
+/// source from the charts/DJ shelves).
 class _YearSongsSection extends ConsumerWidget {
   final String title;
   const _YearSongsSection(this.title);
@@ -1956,7 +2204,7 @@ class _YearSongsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final year = DateTime.now().year;
-    final data = ref.watch(homeSearchProvider('top songs $year'));
+    final data = ref.watch(homePopularSongsProvider(year));
     final sectionTitle = '$title $year';
     return data.when(
       data: (items) {
@@ -1978,12 +2226,17 @@ class _MusicCard extends StatelessWidget {
   final String title;
   final String? subtitle;
   final String? imageUrl;
+
+  /// Date de sortie affichée sous le titre (rayons « Nouveaux albums » /
+  /// « Nouveautés ») — null ailleurs, la carte garde son aspect d'origine.
+  final String? dateLabel;
   final VoidCallback onTap;
 
   const _MusicCard({
     required this.title,
     this.subtitle,
     required this.imageUrl,
+    this.dateLabel,
     required this.onTap,
   });
 
@@ -2056,6 +2309,21 @@ class _MusicCard extends StatelessWidget {
                   ),
                 ),
               ),
+            if (dateLabel != null && dateLabel!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, left: 2, right: 2),
+                child: Text(
+                  dateLabel!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: spotifyLightGrey,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 10,
+                    height: 1.2,
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -2124,7 +2392,15 @@ class _SongRow extends StatelessWidget {
   final List<MuzoItem> items;
   final void Function(MuzoItem) onTap;
 
-  const _SongRow({required this.items, required this.onTap});
+  /// Affiche la date de sortie sous le titre de chaque carte (rayon
+  /// « Nouveautés ») ; faux partout ailleurs.
+  final bool showDate;
+
+  const _SongRow({
+    required this.items,
+    required this.onTap,
+    this.showDate = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2143,6 +2419,7 @@ class _SongRow extends StatelessWidget {
             title: item.title,
             subtitle: item.displayArtist,
             imageUrl: imageUrl,
+            dateLabel: showDate ? releaseDateLabel(context, item.releaseDate) : null,
             onTap: () {
               HapticFeedback.selectionClick();
               onTap(item);
@@ -2154,7 +2431,7 @@ class _SongRow extends StatelessWidget {
   }
 }
 
-/// Song shelf that claims its artists against [homeShownArtistsProvider]
+/// Song shelf that claims its artists against [shownArtistsProvider]
 /// exactly once. The claimed subset is remembered in state so rebuilding the
 /// section (data refresh, theme change…) never drops its own artists nor
 /// re-claims them — guaranteeing a section keeps the people it displayed.
@@ -2166,10 +2443,19 @@ class _PlayableShelfGate extends ConsumerStatefulWidget {
   final String title;
   final List<MuzoItem> items;
   final void Function(MuzoItem) onTap;
+
+  /// Les rayons de NOUVEAUTÉS passent `false` : leur promesse est « ce qui est
+  /// sorti cette semaine », pas « un artiste qu'on n'a pas encore vu ». Leur
+  /// retirer une sortie au profit d'un rayon de genre plus bas ferait disparaître
+  /// la nouveauté elle-même.
+  final bool claimsArtists;
+  final bool showDate;
   const _PlayableShelfGate({
     required this.title,
     required this.items,
     required this.onTap,
+    this.claimsArtists = true,
+    this.showDate = false,
   });
 
   @override
@@ -2189,6 +2475,11 @@ class _PlayableShelfGateState extends ConsumerState<_PlayableShelfGate> {
   // vie du widget (c'était la cause des rayons figés après un pull-to-refresh).
   List<MuzoItem>? _claimedCache;
   List<MuzoItem>? _claimedSource;
+
+  // Les artistes que CETTE section possède dans le pool partagé. Rendus à
+  // chaque re-claim (paramètre `release`) : sans eux, un nouveau tirage se
+  // comparait à lui-même et basculait toute la liste en repeats.
+  Set<String> _claimedArtists = <String>{};
 
   @override
   void initState() {
@@ -2211,6 +2502,23 @@ class _PlayableShelfGateState extends ConsumerState<_PlayableShelfGate> {
   Future<void> _enrich() async {
     final items = widget.items;
     if (items.isEmpty) return;
+    // Downloaded-only (the default): a resolved stream can never start, the
+    // queue refuses anything not on disk. Same rule as AlbumScreen and
+    // ArtistPageScreen — without it a Home pass walks the dead relay chain for
+    // every shelf and the shelves still loading time out.
+    if (_streamEnrichBlocked()) {
+      if (!mounted) return;
+      setState(() => _enriched = items);
+      return;
+    }
+    // Offline: no stream can be resolved and downloads play straight from
+    // disk — render the cached shelf immediately instead of spending seconds
+    // on resolutions that can only fail.
+    if (await ContentCacheService.isOffline()) {
+      if (!mounted) return;
+      setState(() => _enriched = items);
+      return;
+    }
     // The rest of the shelf is warmed through the shared queue rather than here:
     // firing a dozen resolutions at once against the local server only makes
     // each of them slower, because it merges one clip at a time.
@@ -2244,7 +2552,18 @@ class _PlayableShelfGateState extends ConsumerState<_PlayableShelfGate> {
     final raw = _enriched ?? widget.items;
     if (_claimedSource != raw) {
       _claimedSource = raw;
-      _claimedCache = dedupeShelfItems(raw);
+      if (!widget.claimsArtists) {
+        _claimedArtists = <String>{};
+        _claimedCache = dedupeShelfItems(raw);
+      } else {
+        final claim = claimShelfItems(
+          ref.read(shownArtistsProvider),
+          raw,
+          release: _claimedArtists,
+        );
+        _claimedArtists = claim.claimed;
+        _claimedCache = claim.items;
+      }
     }
     final claimed = _claimedCache!;
     if (claimed.isEmpty) return const SizedBox.shrink();
@@ -2268,56 +2587,31 @@ class _PlayableShelfGateState extends ConsumerState<_PlayableShelfGate> {
         _SongRow(
           items: shown,
           onTap: widget.onTap,
+          showDate: widget.showDate,
         ),
       ],
     );
   }
 }
 
-class _ClaimedSongRow extends ConsumerStatefulWidget {
+/// Song row that runs the Home artist claim for shelves without a stream gate
+/// of their own (the chart-playlist ray).
+class _ClaimedSongRow extends StatelessWidget {
   final List<MuzoItem> items;
   final void Function(MuzoItem) onTap;
 
   const _ClaimedSongRow({required this.items, required this.onTap});
 
   @override
-  ConsumerState<_ClaimedSongRow> createState() => _ClaimedSongRowState();
-}
-
-class _ClaimedSongRowState extends ConsumerState<_ClaimedSongRow> {
-  List<MuzoItem>? _claimed;
-
-  @override
   Widget build(BuildContext context) {
-    final items = _claimed ??
-        dedupeShelfItems(widget.items);
-    _claimed = items;
-    if (items.isEmpty) return const SizedBox.shrink();
-    return _SongRow(items: items, onTap: widget.onTap);
-  }
-}
-
-/// Album shelf with the same one-time claim guarantee as [_ClaimedSongRow].
-class _ClaimedAlbumRow extends ConsumerStatefulWidget {
-  final List<MuzoItem> items;
-  final void Function(MuzoItem) onTap;
-
-  const _ClaimedAlbumRow({required this.items, required this.onTap});
-
-  @override
-  ConsumerState<_ClaimedAlbumRow> createState() => _ClaimedAlbumRowState();
-}
-
-class _ClaimedAlbumRowState extends ConsumerState<_ClaimedAlbumRow> {
-  List<MuzoItem>? _claimed;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _claimed ??
-        dedupeShelfItems(widget.items);
-    _claimed = items;
-    if (items.isEmpty) return const SizedBox.shrink();
-    return _AlbumRow(items: items, onTap: widget.onTap);
+    return ShelfClaimBuilder<MuzoItem>(
+      items: items,
+      artistOf: shelfArtistOf,
+      keyOf: contentKey,
+      builder: (context, claimed) => claimed.isEmpty
+          ? const SizedBox.shrink()
+          : _SongRow(items: claimed, onTap: onTap),
+    );
   }
 }
 
@@ -2325,7 +2619,15 @@ class _AlbumRow extends StatelessWidget {
   final List<MuzoItem> items;
   final void Function(MuzoItem) onTap;
 
-  const _AlbumRow({required this.items, required this.onTap});
+  /// Affiche la date de sortie sous le titre de chaque carte (rayon
+  /// « Nouveaux albums ») ; faux partout ailleurs.
+  final bool showDate;
+
+  const _AlbumRow({
+    required this.items,
+    required this.onTap,
+    this.showDate = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2344,6 +2646,7 @@ class _AlbumRow extends StatelessWidget {
             title: item.title,
             subtitle: item.displayArtist,
             imageUrl: imageUrl,
+            dateLabel: showDate ? releaseDateLabel(context, item.releaseDate) : null,
             onTap: () {
               HapticFeedback.selectionClick();
               onTap(item);
@@ -2352,6 +2655,20 @@ class _AlbumRow extends StatelessWidget {
         },
       ),
     );
+  }
+}
+
+/// Libellé de date de sortie compact (« 13 oct. 2026 ») dans la locale de
+/// l'interface ; null quand l'item n'a pas de date — la carte n'affiche alors
+/// rien de supplémentaire.
+String? releaseDateLabel(BuildContext context, DateTime? date) {
+  if (date == null) return null;
+  final locale = Localizations.localeOf(context).toString();
+  try {
+    return DateFormat('d MMM yyyy', locale).format(date);
+  } catch (_) {
+    // Symboles de locale non chargés : format neutre plutôt qu'un plantage.
+    return DateFormat('d MMM yyyy').format(date);
   }
 }
 
@@ -2514,21 +2831,15 @@ class _ContinueListeningSection extends ConsumerWidget {
 
 // ── Recommandé pour vous (Deezer + vos artistes écoutés) ────────────────────
 
+/// A shelf whose songs come from one search phrase (gospel today). The urban
+/// genre shelves moved to [_RealGenreSection]: searching a phrase returns
+/// approximate matches, whereas a chart returns the genre's actual hits.
 class _SearchSection extends ConsumerWidget {
   final String title;
-
-  /// Catalog genres this shelf draws from, in priority order. A list because
-  /// the catalog ships broad genre keys, not editorial ones like `fr-rap`.
-  final List<String>? genres;
-  final int offset;
-  final String? country;
   final String? query;
 
   const _SearchSection(
     this.title, {
-    this.genres,
-    this.offset = 0,
-    this.country,
     this.query,
   });
 
@@ -2536,14 +2847,11 @@ class _SearchSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final data = query != null
         ? ref.watch(homeSearchProvider(query!))
-        : genres != null
-            ? ref.watch(homeCatalogSectionProvider(
-                (genres: genres!, offset: offset, country: country)))
-            : ref.watch(homeChartsProvider).when(
-                data: (charts) => AsyncData<List<MuzoItem>>(charts.tracks),
-                loading: () => const AsyncLoading<List<MuzoItem>>(),
-                error: (e, st) => AsyncError<List<MuzoItem>>(e, st),
-              );
+        : ref.watch(homeChartsProvider).when(
+            data: (charts) => AsyncData<List<MuzoItem>>(charts.tracks),
+            loading: () => const AsyncLoading<List<MuzoItem>>(),
+            error: (e, st) => AsyncError<List<MuzoItem>>(e, st),
+          );
     return data.when(
       data: (items) {
         if (items.isEmpty) return const SizedBox.shrink();
@@ -2553,7 +2861,7 @@ class _SearchSection extends ConsumerWidget {
           onTap: (item) => openArtistForSong(context, item),
         );
       },
-      loading: () => const SizedBox.shrink(),
+      loading: () => _HomeShelfSkeleton(title),
       error: (_, __) => const SizedBox.shrink(),
     );
   }
@@ -2629,7 +2937,11 @@ class _ClaimedArtistRowState extends ConsumerState<_ClaimedArtistRow> {
     if (artists.length > 10) artists.removeRange(10, artists.length);
     if (artists.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 120,
+      // 88 avatar + 8 gap + two 11px lines ≈ 127: at 120 the card overflowed
+      // its own row on the bottom for every two-line artist name. 142 ne
+      // suffisait plus dès que le système agrandit le texte (lignes à ~16 px) :
+      // la carte débordait de nouveau de sa rangée.
+      height: 155,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 20),

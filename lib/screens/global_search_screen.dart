@@ -8,8 +8,10 @@ import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/providers/search_provider.dart';
 import 'package:muzo/screens/artist_page_screen.dart';
 import 'package:muzo/screens/collection_screen.dart';
+import 'package:muzo/screens/playlist_details_screen.dart';
 import 'package:muzo/screens/video_player_screen.dart';
 import 'package:muzo/services/search_relevance.dart';
+import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/utils/page_routes.dart';
 import 'package:muzo/utils/song_navigation.dart';
 import 'package:muzo/utils/video_playback.dart';
@@ -144,6 +146,10 @@ class _GlobalSearchScreenState extends ConsumerState<GlobalSearchScreen> {
 
   Future<void> _saveRecent(String query) async {
     if (query.trim().isEmpty) return;
+    // Les recommandations et les mix se nourrissent de l'historique Hive, pas
+    // de la liste affichée ici — sans cet enregistrement, cette page ne
+    // laissait aucune trace dans le goût de l'utilisateur.
+    await ref.read(storageServiceProvider).addSearchQuery(query);
     final prefs = await SharedPreferences.getInstance();
     _recentSearches.remove(query);
     _recentSearches.insert(0, query);
@@ -446,13 +452,27 @@ class _GlobalSearchScreenState extends ConsumerState<GlobalSearchScreen> {
                 } else if (item.resultType == 'album' ||
                     item.resultType == 'playlist') {
                   HapticFeedback.selectionClick();
+                  final bId = item.browseId ?? '';
+                  // 'local:' playlists are stored on this device: open the
+                  // local playlist page rather than a YouTube collection id.
+                  if (item.resultType == 'playlist' &&
+                      bId.startsWith('local:')) {
+                    Navigator.of(ctx).push(
+                      MaterialPageRoute(
+                        builder: (_) => PlaylistDetailsScreen(
+                          playlistName: bId.substring(6),
+                        ),
+                      ),
+                    );
+                    return;
+                  }
                   // Albums & playlists open their EXACT track list page.
                   Navigator.of(ctx).push(
                     MaterialPageRoute(
                       builder: (_) => _CollectionScreen(
                         title: item.title,
                         artist: item.displayArtist,
-                        browseId: item.browseId ?? '',
+                        browseId: bId,
                         isAlbum: item.resultType == 'album',
                         coverUrl: _thumbUrl(item),
                       ),

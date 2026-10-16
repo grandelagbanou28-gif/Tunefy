@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +19,9 @@ import 'package:muzo/services/concert_service.dart';
 import 'package:muzo/models/concert_event.dart';
 import 'package:muzo/screens/album_screen.dart';
 import 'package:muzo/screens/concert_detail_screen.dart';
+import 'package:muzo/screens/library_downloads_screen.dart';
+import 'package:muzo/services/content_cache_service.dart';
+import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/screens/playlist_screen.dart';
 import 'package:muzo/widgets/skeleton_loader.dart';
 import 'package:muzo/widgets/spotify_back_button.dart';
@@ -34,40 +35,122 @@ import 'package:share_plus/share_plus.dart';
 /// then "Populaires" (100+ songs), "Concerts" (upcoming first), discography,
 /// and similar artists — mirroring the real Spotify artist screen.
 
+/// Une recherche worker coûte jusqu'à 24 s (2 essais × 12 s dans `search`) et
+/// peut attendre encore dans la file : sans deadline ces deux étagères
+/// restaient en `isLoading` bien après l'affichage des titres, puis rendaient
+/// `[]` et disparaissaient sans laisser la moindre trace dans la log.
+const Duration _shelfTimeout = Duration(seconds: 12);
+
+/// Comparaison sans casse ni ponctuation : « DJ Snake » doit matcher
+/// « dj snake hits » comme « Djsnake ».
+String _fold(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9\u00C0-\u024F]+'), '')
+    .replaceAll(RegExp(r'[àâä]'), 'a')
+    .replaceAll(RegExp(r'[éèêë]'), 'e')
+    .replaceAll(RegExp(r'[îï]'), 'i')
+    .replaceAll(RegExp(r'[ôö]'), 'o')
+    .replaceAll(RegExp(r'[ùûü]'), 'u');
+
 final _artistPlaylistsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
-  final api = ref.read(muzoApiServiceProvider);
-  try {
-    // filter 'all' only returns songs on this worker — ask for playlists
-    // explicitly or the shelf below the titles stays empty.
-    final res = await api.search('$artistName playlist', filter: 'playlists');
-    return res.results
-        .where((i) =>
-            (i.resultType == 'playlist' || i.browseId != null) &&
-            i.browseId != null &&
-            i.browseId!.isNotEmpty)
-        .take(10)
-        .toList();
-  } catch (_) {
-    return <MuzoItem>[];
-  }
+  // Disk-backed so the discography row survives a restart and a flight:
+  // offline it replays the last snapshot instead of collapsing the section.
+  return ContentCacheService.shelfCached('artpage.pl|$artistName', () async {
+    final api = ref.read(muzoApiServiceProvider);
+
+    Future<List<MuzoItem>> hit(String q) async {
+      try {
+        // filter 'all' only returns songs on this worker — ask for playlists
+        // explicitly or the shelf below the titles stays empty.
+        final res =
+            await api.search(q, filter: 'playlists').timeout(_shelfTimeout);
+        return res.results
+            .where((i) =>
+                i.browseId != null &&
+                i.browseId!.isNotEmpty &&
+                !i.browseId!.startsWith('dz:'))
+            .toList();
+      } catch (e) {
+        debugPrint('Artist playlists "$q" failed: $e');
+        return const [];
+      }
+    }
+
+    final primary = await hit('$artistName playlist');
+    final byId = <String, MuzoItem>{
+      for (final i in primary) i.browseId!: i,
+    };
+    if (primary.length < 6) {
+      // « X playlist » cherche le mot « playlist » autant que l'artiste et rend
+      // souvent des listes sans rapport. Le nom nu ramène les vraies listes de
+      // fans — on ne garde que celles qui nomment l'artiste.
+      final folded = _fold(artistName);
+      for (final i in await hit(artistName)) {
+        if (!_fold(i.title).contains(folded)) continue;
+        byId.putIfAbsent(i.browseId!, () => i);
+      }
+    }
+
+    var out = byId.values.take(10).toList();
+    if (out.length < 3) {
+      // Le worker est la seule autre source de playlists et il a timeout sur
+      // tous les appels mesurés sur l'appareil (2026-10-15) : l'étagère restait
+      // vide sans rien dire. Deezer rend de vraies listes (fans, labels,
+      // radios), ouvertes par PlaylistScreen via leur id `dzpl:`.
+      try {
+        final dz = await ref
+            .read(deezerApiServiceProvider)
+            .searchPlaylists(artistName, limit: 10)
+            .timeout(const Duration(seconds: 12));
+        final folded = _fold(artistName);
+        final seen = byId.keys.toSet();
+        for (final p in dz) {
+          // Hors-sujet interdit : la liste doit nommer l'artiste.
+          if (!_fold(p.title).contains(folded)) continue;
+          if (!seen.add(p.browseId!)) continue;
+          out.add(p);
+        }
+      } catch (e) {
+        debugPrint('Artist playlists "$artistName" Deezer fill failed: $e');
+      }
+    }
+    debugPrint('Artist playlists "$artistName" -> ${out.length}');
+    return out.take(10).toList();
+  });
 });
 
 final _artistAlbumsProvider =
     FutureProvider.family<List<MuzoItem>, String>((ref, artistName) async {
-  final api = ref.read(muzoApiServiceProvider);
-  try {
-    final res = await api.search('$artistName album', filter: 'albums');
-    return res.results
-        .where((i) =>
-            (i.resultType == 'album' || i.browseId != null) &&
-            i.browseId != null &&
-            i.browseId!.isNotEmpty)
-        .take(10)
-        .toList();
-  } catch (_) {
-    return <MuzoItem>[];
-  }
+  return ContentCacheService.shelfCached('artpage.alb|$artistName', () async {
+    final api = ref.read(muzoApiServiceProvider);
+    // Les deux sources partent EN PARALLÈLE : en série, un worker muet (12 s)
+    // puis un Deezer affamé (15 s) laissaient l'étagère vide ~27 s — mesuré
+    // « Werenoi » peinte à 0 titre en 46 s. Le worker reste prioritaire.
+    final workerFut = api
+        .search('$artistName album', filter: 'albums')
+        .timeout(_shelfTimeout)
+        .then((res) => res.results
+            .where((i) => i.browseId != null && i.browseId!.isNotEmpty)
+            .take(10)
+            .toList())
+        .catchError((Object e) {
+      debugPrint('Artist albums "$artistName" search failed: $e');
+      return const <MuzoItem>[];
+    });
+    final deezerFut = ref
+        .read(deezerApiServiceProvider)
+        .albumsForArtist(artistName, limit: 12)
+        .timeout(const Duration(seconds: 15))
+        .catchError((Object e) {
+      debugPrint('Artist albums "$artistName" Deezer fill failed: $e');
+      return const <MuzoItem>[];
+    });
+    final fromWorker = await workerFut;
+    final albums = fromWorker.isNotEmpty ? fromWorker : await deezerFut;
+    debugPrint('Artist albums "$artistName" -> ${albums.length}');
+    return albums.take(12).toList();
+  });
 });
 
 /// Counts for the "Concerts" tab: past concerts + every watchable video
@@ -238,6 +321,13 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
   /// round trip through the resolver chain).
   Future<void> _enrichSongs(List<MuzoItem> songs) async {
     const budget = 12;
+    // « Seuls les téléchargés se lisent » : pré-résoudre 12 streams YouTube
+    // ne sert à rien (ils ne seront pas joués) et coûte l'IP de l'appareil,
+    // déjà plafonnée par YouTube. Uniquement les titres absents du disque.
+    if (StorageService().playDownloadedOnly) {
+      debugPrint('ArtistPage: enrichment skipped (downloaded-only playback)');
+      return;
+    }
     final target = songs.take(budget).toList();
     if (target.isEmpty) return;
     debugPrint('ArtistPage: enriching ${target.length} songs for $artistName');
@@ -337,6 +427,13 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
           );
         },
       );
+    }
+
+    // Jamais « 0 chansons » pendant le chargement : la page affiche des
+    // squelettes, donc un zéro ici se lit comme « artiste sans titres ».
+    if (playable.isEmpty &&
+        ref.watch(artistSongsProvider(artistName)).isLoading) {
+      return Text('…', style: style);
     }
 
     final total = playable.fold<int>(0, (a, s) => a + (s.durationSeconds ?? 0));
@@ -920,9 +1017,8 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     BuildContext context,
     WidgetRef ref,
     List<MuzoItem> playable,
-    AppLocalizations l10n, {
-    required bool offline,
-  }) {
+    AppLocalizations l10n,
+  ) {
     final playlistsAsync = ref.watch(_artistPlaylistsProvider(artistName));
     final albumsAsync = ref.watch(_artistAlbumsProvider(artistName));
 
@@ -957,7 +1053,6 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                 final storage = ref.read(storageServiceProvider);
                 final downloaded = song.videoId != null &&
                     storage.isDownloaded(song.videoId!);
-                final locked = offline && !downloaded;
                 final chip = SpotifySongChip(
                   imageUrl: img,
                   songTitle: song.title,
@@ -966,20 +1061,13 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                   videoId: song.videoId,
                   isExplicit: song.isExplicit,
                   result: song,
+                  downloaded: downloaded,
                   onSingerTap: () {
                     HapticFeedback.selectionClick();
                     _openSongArtist(context, song, img);
                   },
                   onTap: () {
                     HapticFeedback.selectionClick();
-                    if (locked) {
-                      showGlassSnackBar(
-                        context,
-                        AppLocalizations.of(context).offlineNotDownloaded,
-                        error: true,
-                      );
-                      return;
-                    }
                     setState(() {
                       _selectedSongIndex = index;
                     });
@@ -988,19 +1076,16 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                     handler.playAll(playable, startIndex: index);
                   },
                 );
-                if (!locked) return chip;
-                return Opacity(
-                  opacity: 0.55,
-                  child: ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-                    child: chip,
-                  ),
-                );
+                return chip;
               },
             );
           },
         ),
       ),
+      // Les titres téléchargés ne sont PAS regroupés à part : ils restent à
+      // leur place dans la liste (badge vert sur la ligne). Un second groupe
+      // « Téléchargés » doublait chaque titre et faisait croire que le reste
+      // de la discographie avait disparu.
       SliverToBoxAdapter(child: _albumsShelf(context, ref, albumsAsync, l10n)),
       SliverToBoxAdapter(
         child: _playlistsShelf(context, ref, playlistsAsync, l10n),
@@ -1167,12 +1252,24 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     try {
     final l10n = AppLocalizations.of(context);
     final songsAsync = ref.watch(artistSongsProvider(artistName));
+    // Phase 2 keeps growing the list behind the rendered page until it reaches
+    // the 100-track goal (the search backend caps one artist query at ~40).
+    final extras =
+        ref.watch(artistSongsTopUpProvider(artistName)).valueOrNull ??
+            const <MuzoItem>[];
     // Only keep playable tracks (non-null videoId) so tapping a row reliably
     // plays that exact song — playAll skips id-less items internally, which
     // used to shift the seek index and "play the wrong thing".
-    final songs = (songsAsync.valueOrNull ?? [])
-        .where((s) => s.videoId != null)
-        .toList();
+    final songs = <MuzoItem>[];
+    final seenIds = <String>{};
+    for (final s in [
+      ...songsAsync.valueOrNull ?? const <MuzoItem>[],
+      ...extras
+    ]) {
+      if (s.videoId == null) continue;
+      if (!seenIds.add(s.videoId!.toLowerCase())) continue;
+      songs.add(s);
+    }
     if (songs.isNotEmpty && !_enrichmentScheduled) {
       _enrichmentScheduled = true;
       final snapshot = songs;
@@ -1189,7 +1286,13 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     // network) while every title stays visible: downloaded ones play from
     // the local file, the rest stay blurred until downloaded.
     final offline = ref.watch(isOfflineProvider);
-    final showConcerts = widget.showConcerts && !offline;
+    // Hide the Concerts tab entirely when the artist has no listed show — an
+    // empty result (loaded, not still fetching) is a real "no concerts", not a
+    // failure. Loading/error keep the tab so a slow network doesn't flicker it.
+    final concertsAsync = ref.watch(artistConcertsProvider(artistName));
+    final noConcerts =
+        concertsAsync.hasValue && (concertsAsync.value!.isEmpty);
+    final showConcerts = widget.showConcerts && !offline && !noConcerts;
     final activeTab = showConcerts ? _tab : _popularTab;
     final totalSeconds = playable.fold<int>(
       0,
@@ -1320,16 +1423,17 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
             else if (songsAsync.hasError)
               SliverFillRemaining(
                 hasScrollBody: false,
-                child: _buildErrorState(context, ref),
+                child: _buildNoContentState(context, ref,
+                    isError: true, offline: offline),
               )
             else if (songs.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
-                child: _buildEmptyState(context, ref),
+                child: _buildNoContentState(context, ref,
+                    isError: false, offline: offline),
               )
             else
-              ..._popularContentSlivers(context, ref, playable, l10n,
-                  offline: offline),
+              ..._popularContentSlivers(context, ref, playable, l10n),
 
             const SliverPadding(padding: EdgeInsets.only(bottom: 130)),
           ],
@@ -1654,18 +1758,31 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
     );
   }
 
-  Widget _buildErrorState(BuildContext context, WidgetRef ref) {
+  /// Empty / error state for the "Populaires" tab — never a dead end.
+  ///
+  /// Offline, a retry button is a lie (there is nothing to retry against), so
+  /// the page offers the downloads the user already owns, which still play.
+  /// Online the classic retry stays: it genuinely reloads both providers.
+  Widget _buildNoContentState(BuildContext context, WidgetRef ref,
+      {required bool isError, required bool offline}) {
     final l10n = AppLocalizations.of(context);
+    final title = isError
+        ? l10n.artistLoadFailed({'name': artistName})
+        : l10n.artistNoSongsFound({'name': artistName});
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_off, color: spotifyLightGrey, size: 48),
+            Icon(
+              offline ? Icons.cloud_off : Icons.music_off,
+              color: spotifyLightGrey,
+              size: 48,
+            ),
             const SizedBox(height: 14),
             Text(
-              l10n.artistLoadFailed({'name': artistName}),
+              title,
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: spotifyWhite,
@@ -1673,19 +1790,29 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                 fontWeight: FontWeight.w800,
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              l10n.checkConnectionRetry,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: spotifyLightGrey.withValues(alpha: 0.9),
-                fontSize: 13,
+            if (offline) ...[
+              const SizedBox(height: 6),
+              Text(
+                l10n.checkConnectionRetry,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: spotifyLightGrey.withValues(alpha: 0.9),
+                  fontSize: 13,
+                ),
               ),
-            ),
+            ],
             const SizedBox(height: 22),
             GestureDetector(
               onTap: () {
                 HapticFeedback.selectionClick();
+                if (offline) {
+                  // Downloads are local: open them instead of a retry that
+                  // can only fail again with no network.
+                  Navigator.of(context).push(
+                    SlidePageRoute(page: const LibraryDownloadsScreen()),
+                  );
+                  return;
+                }
                 ref.invalidate(artistSongsProvider(artistName));
                 ref.invalidate(categoryAlbumsProvider(artistName));
               },
@@ -1700,59 +1827,7 @@ class _ArtistPageScreenState extends ConsumerState<ArtistPageScreen> {
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: Text(
-                  l10n.retry,
-                  style: const TextStyle(
-                    color: spotifyBlack,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(BuildContext context, WidgetRef ref) {
-    final l10n = AppLocalizations.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.music_off, color: spotifyLightGrey, size: 48),
-            const SizedBox(height: 14),
-            Text(
-              l10n.artistNoSongsFound({'name': artistName}),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: spotifyWhite,
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 22),
-            GestureDetector(
-              onTap: () {
-                HapticFeedback.selectionClick();
-                ref.invalidate(artistSongsProvider(artistName));
-                ref.invalidate(categoryAlbumsProvider(artistName));
-              },
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 28,
-                  vertical: 11,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1DDA63),
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Text(
-                  l10n.retry,
+                  offline ? l10n.downloads : l10n.retry,
                   style: const TextStyle(
                     color: spotifyBlack,
                     fontSize: 14,
@@ -1988,7 +2063,7 @@ class _RelatedArtistsSection extends ConsumerWidget {
         padding: EdgeInsets.only(top: 22),
         child: HomeSkeletonSection(
           showTitle: false,
-          rowHeight: 130,
+          rowHeight: 180,
           forceDark: true,
         ),
       ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:muzo/l10n/app_localizations.dart';
+import 'package:muzo/services/lyrics_translation_service.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/glass_snackbar.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
@@ -148,16 +150,55 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final storage = ref.watch(storageServiceProvider);
     final lastChecked = storage.lastUpdateCheck;
 
-    final socials = [
-      (Icons.facebook, l10n.facebook, 'Grandel AGBANOU',
-          'https://www.facebook.com/profile.php?id=61582857279041'),
-      (Icons.camera_alt, l10n.instagram, '@grandel.2801',
-          'https://www.instagram.com/grandel.2801?igsh=ZTZnano2bzM2Zmpn'),
-      (Icons.alternate_email, l10n.xTwitter, '@Grandel2801',
-          'https://x.com/Grandel2801'),
-      (Icons.work_outline, l10n.linkedin, 'Grandel AGBANOU',
-          'https://www.linkedin.com/in/grandel-agbanou-018b973a3?'),
+    // Real brand glyphs (Font Awesome), brand-tinted, like Spotify/Apple Music.
+    final socials = <(Widget, String, String, String)>[
+      (
+        const FaIcon(FontAwesomeIcons.facebook,
+            color: Color(0xFF1877F2), size: 22),
+        l10n.facebook,
+        'Grandel AGBANOU',
+        'https://www.facebook.com/profile.php?id=61582857279041',
+      ),
+      (
+        const FaIcon(FontAwesomeIcons.instagram,
+            color: Color(0xFFE4405F), size: 22),
+        l10n.instagram,
+        '@grandel.2801',
+        'https://www.instagram.com/grandel.2801?igsh=ZTZnano2bzM2Zmpn',
+      ),
+      (
+        const FaIcon(FontAwesomeIcons.xTwitter,
+            color: Colors.white, size: 22),
+        l10n.xTwitter,
+        '@Grandel2801',
+        'https://x.com/Grandel2801',
+      ),
+      (
+        const FaIcon(FontAwesomeIcons.linkedinIn,
+            color: Color(0xFF0A66C2), size: 22),
+        l10n.linkedin,
+        'Grandel AGBANOU',
+        'https://www.linkedin.com/in/grandel-agbanou-018b973a3?',
+      ),
     ];
+
+    // The About copy ships in English; translate it into the chosen language.
+    const termsEn =
+        'By using Tunefy you agree to use the service for personal, '
+        'non-commercial listening. The app does not host any audio content; '
+        'all music is streamed from public sources. You are responsible for '
+        'respecting the rights of content owners.';
+    const privacyEn =
+        'Tunefy stores your listening statistics, downloads and preferences '
+        'locally on your device. Your account data is stored securely and is '
+        'never sold to third parties. You can clear your local data at any '
+        'time from Settings.';
+    final termsBody =
+        ref.watch(translatedTextProvider((text: termsEn))).valueOrNull ??
+            termsEn;
+    final privacyBody =
+        ref.watch(translatedTextProvider((text: privacyEn))).valueOrNull ??
+            privacyEn;
 
     return Scaffold(
       backgroundColor: hivefyBg,
@@ -218,12 +259,19 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                 const SizedBox(height: 12),
                 const Divider(color: Colors.grey, height: 1),
                 const SizedBox(height: 12),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Text(
-                    'A powerful, privacy-focused music client. Ad-free, offline, '
-                    'synced lyrics and smart caching — free, forever.',
-                    style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+                    ref.watch(translatedTextProvider((
+                          text:
+                              'A powerful, privacy-focused music client. '
+                              'Ad-free, offline, synced lyrics and smart '
+                              'caching — free, forever.',
+                        ))).valueOrNull ??
+                        'A powerful, privacy-focused music client. Ad-free, '
+                        'offline, synced lyrics and smart caching — free, forever.',
+                    style: const TextStyle(
+                        color: Colors.white70, fontSize: 14, height: 1.5),
                   ),
                 ),
                 if (storage.username != null) ...[
@@ -264,7 +312,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
             child: _card([
               for (final s in socials)
                 ListTile(
-                  leading: Icon(s.$1, color: Colors.white, size: 22),
+                  leading: s.$1,
                   title: Text(
                     s.$2,
                     style: const TextStyle(
@@ -393,10 +441,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                 trailing: const Icon(Icons.chevron_right, color: Colors.white24, size: 18),
                 onTap: () => _showTextDialog(
                   l10n.termsOfService,
-                  'By using Tunefy you agree to use the service for personal, '
-                  'non-commercial listening. The app does not host any audio '
-                  'content; all music is streamed from public sources. You are '
-                  'responsible for respecting the rights of content owners.',
+                  termsBody,
                 ),
               ),
               ListTile(
@@ -413,10 +458,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                 trailing: const Icon(Icons.chevron_right, color: Colors.white24, size: 18),
                 onTap: () => _showTextDialog(
                   l10n.privacyPolicy,
-                  'Tunefy stores your listening statistics, downloads and '
-                  'preferences locally on your device. Your account data is '
-                  'stored securely and is never sold to third parties. You can '
-                  'clear your local data at any time from Settings.',
+                  privacyBody,
                 ),
               ),
               ListTile(

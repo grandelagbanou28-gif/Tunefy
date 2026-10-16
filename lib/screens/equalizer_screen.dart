@@ -37,7 +37,10 @@ class _EqualizerScreenState extends State<EqualizerScreen> {
       final box = Hive.box('settings');
       final saved = box.get('eq_values');
       if (saved is List) {
-        _values = saved.map((e) => (e as num).toDouble()).toList();
+        final loaded = saved.map((e) => (e as num).toDouble()).toList();
+        if (loaded.length == 5) {
+          _values = loaded.map((v) => v.clamp(-12.0, 12.0)).toList();
+        }
         _selectedPreset = box.get('eq_preset', defaultValue: 'Flat');
       }
     } catch (_) {}

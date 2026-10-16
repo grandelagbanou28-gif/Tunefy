@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:muzo/utils/net_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +18,7 @@ import 'package:muzo/services/lyrics_service.dart';
 import 'package:muzo/services/lyrics_translation_service.dart';
 import 'package:muzo/services/storage_service.dart';
 import 'package:muzo/widgets/song_options_menu.dart';
+import 'package:muzo/widgets/song_video_backdrop.dart';
 import 'package:muzo/widgets/spotify_spinner.dart';
 
 class LyricsFullScreen extends ConsumerStatefulWidget {
@@ -29,7 +31,7 @@ class LyricsFullScreen extends ConsumerStatefulWidget {
 }
 
 class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   final List<GlobalKey> _lineKeys = [];
   final ValueNotifier<int> _activeLine = ValueNotifier<int>(-1);
@@ -39,6 +41,12 @@ class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
 
   VideoPlayerController? _videoController;
   bool _hasVideo = false;
+  /// Propriété du signal « un fond vidéo occupe l'écran » (voir
+  /// `claimLyricsVideoBackdrop`) : la pochette du player doit libérer son
+  /// décodeur, Android n'en supporte pas deux.
+  int? _backdropToken;
+  /// Une vidéo déjà décodée qu'il faudra relancer au retour au premier plan.
+  bool _videoToResume = false;
   StreamSubscription<bool>? _playingSub;
   late MediaItem _currentMediaItem;
   Lyrics? _lastLyrics;
@@ -53,6 +61,7 @@ class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentMediaItem = widget.mediaItem;
 
     // Ken Burns: slow zoom 1.0→1.15 + gentle pan, 12s cycle, repeat forever
@@ -76,13 +85,38 @@ class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _autoScrollResumeTimer?.cancel();
     _activeLine.dispose();
     _kenBurnsController.dispose();
     _scrollController.dispose();
     _playingSub?.cancel();
+    releaseLyricsVideoBackdrop(_backdropToken);
     _videoController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_videoToResume) {
+        _videoToResume = false;
+        unawaited(_initVideoForMedia(_currentMediaItem));
+      }
+      return;
+    }
+    // La surface du TextureView meurt avec l'app arrière-plan : un décodeur
+    // qui continue d'écrire dessus fait planter le processus.
+    final vc = _videoController;
+    if (vc == null && !_hasVideo) return;
+    _videoToResume = vc != null;
+    _playingSub?.cancel();
+    _playingSub = null;
+    _videoController = null;
+    releaseLyricsVideoBackdrop(_backdropToken);
+    _backdropToken = null;
+    if (mounted) setState(() => _hasVideo = false);
+    unawaited(vc?.dispose());
   }
 
   Future<void> _initVideo() async {
@@ -92,10 +126,14 @@ class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
   Future<void> _initVideoForMedia(MediaItem media) async {
     final videoId = media.id;
     if (videoId.isEmpty) return;
+    // Pendant la résolution, aucun décodeur n'est tenu ici : la pochette animée
+    // du player peut garder le sien. Le jeton n'est reclamé qu'au succès.
+    releaseLyricsVideoBackdrop(_backdropToken);
+    _backdropToken = null;
 
     // Skip video entirely when connection is unstable
     try {
-      final results = await Connectivity().checkConnectivity();
+      final results = await safeConnectivity();
       if (results.contains(ConnectivityResult.none)) {
         if (mounted) setState(() => _hasVideo = false);
         return;
@@ -144,17 +182,35 @@ class _LyricsFullScreenState extends ConsumerState<LyricsFullScreen>
       }
       await vc.setLooping(true);
       await vc.setVolume(0);
-      if (mounted) setState(() => _hasVideo = true);
+      if (!mounted) {
+        await vc.dispose();
+        return;
+      }
+      _backdropToken = claimLyricsVideoBackdrop();
+      setState(() => _hasVideo = true);
       final audioHandler = ref.read(audioHandlerProvider);
       _playingSub?.cancel();
       _playingSub = audioHandler.player.playingStream.listen((playing) {
         if (!mounted) return;
-        _videoController?.play();
-        if (!playing) _videoController?.pause();
+        // Le fond suit la lecture : appeler play() même quand la musique est
+        // en pause laissait une vidéo tourner pour rien.
+        if (playing) {
+          _videoController?.play();
+        } else {
+          _videoController?.pause();
+        }
       });
       if (audioHandler.player.playing) await vc.play();
     } catch (_) {
+      final dead = _videoController;
       _videoController = null;
+      // Un contrôleur abandonné sans dispose retient son décodeur ; à force,
+      // c'est tout le processus qui tombe.
+      if (dead != null) {
+        try {
+          await dead.dispose();
+        } catch (_) {}
+      }
     }
   }
 
