@@ -477,3 +477,39 @@ bool curatedIsFresh(CuratedRelease c, {required Duration window}) {
 /// normalises an entity name kept simple (no smart quotes) to how the artist
 /// page is likely labelled.
 String curatedArtistFor(CuratedRelease c) => c.artist;
+
+/// Artists in this list that are NOT rap / R&B / afro. The web-verified
+/// releases were collected across every genre, but the home shelves only ever
+/// promise rap FR, rap US and afro — so anything else is dropped there.
+const Set<String> _nonUrbanCuratedArtists = <String>{
+  'beck',
+  'carly rae jepsen',
+  'chaka khan',
+  'cory asbury',
+  'anthony brown',
+  'for king & country',
+  'ezra collective',
+  'orville peck',
+  'neil young',
+  'miley cyrus',
+  'tove lo',
+  'lizzy mcalpine',
+  'teddy swims',
+  'beabadoobee',
+  'slow pulp',
+  'rhiannon giddens',
+  'dominic fike',
+  'hiba tawaji',
+  'kareen lomax',
+  'daley',
+  'kebero',
+  'franni cash',
+};
+
+/// True when this release belongs to the genres the app serves (rap FR/US,
+/// R&B, afro). Feature credits are checked as a whole, so "Fireboy DML &
+/// Masicka" stays in.
+bool isUrbanOrAfroRelease(CuratedRelease c) {
+  final artist = c.artist.toLowerCase();
+  return !_nonUrbanCuratedArtists.any(artist.contains);
+}

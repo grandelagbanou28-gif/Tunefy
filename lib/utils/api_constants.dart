@@ -3,7 +3,8 @@ class ApiConstants {
   static const String extendedWorkerBaseUrl = 'https://backend-grandelagbanou28-gifs-projects.vercel.app';
 
   /// Main application data and user backend
-  static const String mainApiBaseUrl = 'https://veltrixcode-ytify.hf.space/api';
+  /// Backend "pro" (FastAPI + Supabase) déployé sur Render (free, sans carte).
+  static const String mainApiBaseUrl = 'https://tunefy-api.onrender.com/api';
 
   /// Jamendo API client id (free, keyless streaming of Creative-Commons
   /// music). Used as the fast/reliable primary source, YouTube as fallback.

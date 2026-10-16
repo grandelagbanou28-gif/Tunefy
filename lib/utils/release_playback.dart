@@ -41,6 +41,24 @@ Future<List<MuzoItem>> resolveTracks({
         .where((r) => (r.videoId ?? '').isNotEmpty)
         .toList();
   }
+  if (playable.isEmpty) {
+    // The YouTube worker is the only part of this that can be offline. A
+    // title+artist pair is enough for the title-driven sources (Saavn,
+    // Jamendo, Audius), so hand back a title seed instead of nothing: the
+    // tap then still plays instead of reporting "indisponible".
+    return [
+      MuzoItem(
+        videoId: 'tt_${'$title|$artist'.hashCode.abs()}',
+        title: title,
+        thumbnails: const [],
+        resultType: 'video',
+        isExplicit: false,
+        artists: artist.trim().isEmpty
+            ? const []
+            : [MuzoArtist(name: artist, id: null)],
+      ),
+    ];
+  }
   // The artist outranks the title: a title hit on the wrong artist plays the
   // wrong song, so results naming the requested artist lead, then title hits.
   if (artist.trim().isNotEmpty) {

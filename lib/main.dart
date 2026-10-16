@@ -11,6 +11,7 @@ import 'package:muzo/l10n/app_localizations.dart';
 import 'package:muzo/screens/home_screen.dart';
 import 'package:muzo/screens/auth_screen.dart';
 import 'package:muzo/services/storage_service.dart';
+import 'package:muzo/services/content_cache_service.dart';
 import 'package:muzo/services/navigator_key.dart';
 import 'package:muzo/services/notification_service.dart';
 import 'package:muzo/services/deep_link_service.dart';
@@ -41,6 +42,22 @@ Future<void> main() async {
   // Catch all framework errors instead of showing grey screen
   FlutterError.onError = (details) {
     debugPrint('FlutterError: ${details.exceptionAsString()}');
+    // present() truncate le dump sur Android : sans ces deux lignes, un
+    // « RenderFlex overflowed » arrive sans dire quel widget le produit.
+    final node = details.context;
+    if (node != null) {
+      final dump = node
+          .toStringDeep(minLevel: DiagnosticLevel.debug)
+          .split('\n')
+          .take(6)
+          .join(' | ')
+          .replaceAll(RegExp(r'\s+'), ' ');
+      debugPrint('FlutterError widget: $dump');
+    }
+    for (final detail in details.informationCollector?.call() ?? const []) {
+      final line = detail.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (line.isNotEmpty) debugPrint('FlutterError detail: $line');
+    }
     FlutterError.presentError(details);
   };
 
@@ -89,6 +106,13 @@ Future<void> main() async {
   // is really an ordering one.
   await _safeInitializer(container.read(storageServiceProvider).init());
   await _safeInitializer(Hive.openBox('artist_songs_cache'));
+  // Per-install content seed: generated once, then every rotation offset and
+  // "of the day" pick derives from it, so two users never see the same feed.
+  await _safeInitializer(ContentCacheService.ensureDeviceSeed());
+  // Retires the browse snapshots assembled under superseded content rules (the
+  // genre text-gate, a genre word counting as a country) once per change,
+  // before anything reads them — see the migration's doc.
+  await _safeInitializer(ContentCacheService.migrateBrowseRulesCache());
 
   // The rest stays parallelised; skipping web-incompatible plugins on the web
   // (just_audio_background / flutter_local_notifications have no web support);
@@ -177,24 +201,43 @@ class MyApp extends ConsumerWidget {
         final locale = ref.watch(localeProvider);
 
         // Wired once: the observer needs a container to publish into, and it
-        // must never hold a widget ref.
+        // must never hold a widget ref. It is attached to the nested content
+        // navigator (see main_layout), not here — a NavigatorObserver instance
+        // can only belong to one Navigator, and every player-scene route pushes
+        // on the nested one, so a second attach would both throw and double-count.
         playerSceneObserver.container =
             ProviderScope.containerOf(context, listen: false);
 
         return MaterialApp(
           navigatorKey: navigatorKey,
-          // The single writer of `overlayScenesProvider`. Screens no longer set
-          // a flag for "a player surface is open"; they just tag their route.
-          navigatorObservers: [playerSceneObserver],
           title: 'Tunefy',
           debugShowCheckedModeBanner: false,
           theme: theme,
           locale: locale,
           supportedLocales: _appSupportedLocales,
           localizationsDelegates: appLocalizationsDelegates,
-          // No builder wrapping here — MainLayout is only applied inside AuthGate
-          // for authenticated / guest sessions. This prevents the navbar and
-          // mini player from ever rendering on top of the auth screen.
+          builder: (context, child) {
+            // Almost every card in this app is laid out in a fixed-height box
+            // (cover + 2 lines of metadata). On a phone with a large system
+            // font those texts push past the bottom edge and Flutter reports a
+            // vertical RenderFlex overflow on every screen at once. Clamping
+            // the scale keeps the layout the designer measured while still
+            // respecting modest increases.
+            final mq = MediaQuery.of(context);
+            return MediaQuery(
+              data: mq.copyWith(
+                textScaler: mq.textScaler.clamp(
+                  minScaleFactor: 0.9,
+                  maxScaleFactor: 1.15,
+                ),
+              ),
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
+          // The builder above only rewrites MediaQuery; MainLayout is still
+          // applied inside AuthGate alone for authenticated / guest sessions.
+          // That keeps the navbar and mini player from ever rendering on top of
+          // the auth screen.
           home: const AuthGate(),
         );
       },

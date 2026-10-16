@@ -27,7 +27,7 @@ class SlidePageRoute<T> extends PageRouteBuilder<T> {
 
           var fadeAnimation = CurvedAnimation(
             parent: animation,
-            curve: Curves.easeIn,
+            curve: const Interval(0, 0.55, curve: Curves.easeOut),
           );
 
           return SlideTransition(
@@ -35,8 +35,10 @@ class SlidePageRoute<T> extends PageRouteBuilder<T> {
             child: FadeTransition(opacity: fadeAnimation, child: child),
           );
         },
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 250),
+        // Volontairement court : une transition de 300 ms donne à chaque tap
+        // l'impression que l'app met du temps à répondre.
+        transitionDuration: const Duration(milliseconds: 200),
+        reverseTransitionDuration: const Duration(milliseconds: 160),
       );
 }
 
@@ -62,7 +64,7 @@ class ModalSlidePageRoute<T> extends PageRouteBuilder<T> {
 
           return SlideTransition(position: offsetAnimation, child: child);
         },
-        transitionDuration: const Duration(milliseconds: 350),
-        reverseTransitionDuration: const Duration(milliseconds: 300),
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 180),
       );
 }

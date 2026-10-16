@@ -417,10 +417,16 @@ String? normalizeContentKey(MuzoItem s) {
 String compactSongTitle(String value) {
   var v = value.toLowerCase().trim();
   // Tag flavored parentheticals: (official video), [lyrics], (audio), ...
+  // The speed/version family is here because the worker returns the SAME song
+  // as separate uploads under it — "Est-ce que tu m'aimes ? (Slowed)" and the
+  // original arrive with different videoIds, which is exactly the "même son"
+  // the user sees twice in a search list.
   v = v.replaceAll(
     RegExp(
         r'[\(\[][^)\]]*(official|lyrics?|audio|video|vevo|hq|hd|explicit|clean|'
-        r'remaster|live|karaoke|instrumental|acoustic|session|short|edit|ft\.?|feat\.?)[^)\]]*[\)\]]'),
+        r'remaster|live|karaoke|instrumental|acoustic|session|short|edit|ft\.?|feat\.?|'
+        r'slowed|sped|speed up|speedup|nightcore|reverb|8 ?d|reverse|mashup|'
+        r'remix|loops?|version|fan cam|fancam)[^)\]]*[\)\]]'),
     ' ',
   );
   // "- youtube" / "- topic" / "on Sundays" tails.
@@ -438,6 +444,41 @@ String compactArtistName(String value) {
   v = v.replaceAll(RegExp(r'\s*(feat\.?|ft\.?)\b.*'), ' ');
   v = v.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
   return v.trim();
+}
+
+/// True when [item] really is the entity named ([title], [artist]) — not the
+/// nearest look-alike a search engine handed back.
+///
+/// Every "resolve a known title through YouTube / iTunes" path needs this.
+/// Those endpoints answer with the closest match, never with a guarantee, so
+/// trusting the first hit is what put other artists' covers and years-old
+/// catalogue albums under the home "Nouveaux albums" shelf (measured on the
+/// handset 2026-10-15: « Deux frères » PNL, « Dans la légende » PNL,
+/// « Matière Noire » Djadja & Dinaz resolved from an Apple **top** albums feed
+/// and shown as new releases).
+bool matchesNamedEntity(MuzoItem item, String title, String artist) {
+  final want = compactSongTitle(title);
+  final got = compactSongTitle(item.title);
+  if (want.isEmpty || got.isEmpty) return false;
+  if (!got.contains(want) && !want.contains(got)) return false;
+
+  final wantArtist = compactArtistName(artist);
+  if (wantArtist.isEmpty) return true;
+  final names = <String>[
+    compactArtistName(item.displayArtist),
+    for (final a in item.artists ?? const <MuzoArtist>[])
+      compactArtistName(a.name),
+  ]..removeWhere((s) => s.isEmpty);
+  if (names.isEmpty) return false;
+
+  final wantTokens =
+      wantArtist.split(' ').where((t) => t.length > 2).toSet();
+  if (wantTokens.isEmpty) return true;
+  return names.any((n) {
+    if (n.contains(wantArtist) || wantArtist.contains(n)) return true;
+    final tokens = n.split(' ').where((t) => t.length > 2).toSet();
+    return tokens.intersection(wantTokens).isNotEmpty;
+  });
 }
 
 /// Remove duplicate songs (same videoId, or title+artist when videoId is

@@ -330,6 +330,19 @@ String get afroForYou => _t('afroForYou');
   String get djMoodError => _t('djMoodError');
   String get djTyping => _t('djTyping');
   String get djChatFallback => _t('djChatFallback');
+  String get djGreetMorning => _t('djGreetMorning');
+  String get djGreetAfternoon => _t('djGreetAfternoon');
+  String get djGreetEvening => _t('djGreetEvening');
+  String get djGreetNight => _t('djGreetNight');
+  String get djStGreeting => _t('djStGreeting');
+  String get djStHowAreYou => _t('djStHowAreYou');
+  String get djStThanks => _t('djStThanks');
+  String get djStWho => _t('djStWho');
+  String get djStBye => _t('djStBye');
+  String get djStAskMusic => _t('djStAskMusic');
+  String get djStLowDay => _t('djStLowDay');
+  String get djStGoodDay => _t('djStGoodDay');
+  String get djStFallback => _t('djStFallback');
   String get djOnline => _t('djOnline');
   String get djShuffle => _t('djShuffle');
   String get djSmartPlaylistBuilding => _t('djSmartPlaylistBuilding');
@@ -355,6 +368,12 @@ String get afroForYou => _t('afroForYou');
   String get loadError => _t('loadError');
   String get checkConnectionRetry => _t('checkConnectionRetry');
   String get retry => _t('retry');
+String get playMissingId => _t('playMissingId');
+String get playUnavailable => _t('playUnavailable');
+String get playNoStream => _t('playNoStream');
+String get playFailed => _t('playFailed', {'error': ''});
+String get playAddQueueFailed => _t('playAddQueueFailed');
+String get playbackUnavailable => _t('playbackUnavailable');
   String get periodLast7Days => _t('periodLast7Days');
   String get periodLast30Days => _t('periodLast30Days');
 
@@ -1465,6 +1484,32 @@ const Map<String, String> _en = {
   'djTyping': 'Tunefy DJ is typing…',
   'djChatFallback':
       'Got it! I am Tunefy DJ. Describe your mood (energetic, calm, sad, happy, focus, love, nostalgia or sleep) and I will spin a real mix for you.',
+  'djGreetMorning':
+      'Good morning! How did you sleep? Tell me how your day is starting and I will pick the right soundtrack.',
+  'djGreetAfternoon':
+      'Good afternoon! How is your day going so far — busy, calm, or a bit of both?',
+  'djGreetEvening':
+      'Good evening! How was your day? I am on the decks, whether you feel like talking or just listening.',
+  'djGreetNight':
+      'Still up late? What is keeping you awake — thoughts, work, or just the music?',
+  'djStGreeting':
+      'Hey! Good to find you on the decks. How is your day going?',
+  'djStHowAreYou':
+      'I am doing well — vinyl never gets tired. And you, how is your day really going?',
+  'djStThanks':
+      'Anytime, that is my job. Want me to spin something for the mood?',
+  'djStWho':
+      'I am Tunefy DJ, the DJ of this app. I listen to how you feel and build a real mix out of the actual catalogue — I never invent a title.',
+  'djStBye':
+      'Alright, I will keep the decks warm. Come back whenever you want a mix.',
+  'djStAskMusic':
+      'Tell me a bit more: what are you doing right now, and how do you want to feel by the end of it?',
+  'djStLowDay':
+      'Rough days happen. Do you want music that keeps you company, or music that pulls you out of it?',
+  'djStGoodDay':
+      'Love to hear that. Want a mix that keeps the good mood rolling?',
+  'djStFallback':
+      'I am listening. Tell me in a few words how your day went, or what you feel like hearing, and I will answer with music.',
   'djOnline': 'Online',
   'djShuffle': 'Shuffle',
   'djSmartPlaylistBuilding': 'Building your smart playlist with Gemini…',
@@ -2969,6 +3014,19 @@ const Map<String, String> _fr = {
   'djMoodError': 'Une erreur s\'est produite lors de la création du mix. Voulez-vous réessayer ?',
   'djTyping': 'Tunefy DJ est en train de taper…',
   'djChatFallback': 'D\'accord ! Je suis Tunefy DJ. Décris-moi ton humeur (énergique, calme, triste, joyeuse, concentrée, amoureuse, nostalgique ou somnolente) et je te préparerai un vrai mix sur mesure.',
+  'djGreetMorning': 'Bonjour ! Comment as-tu dormi ? Dis-moi comment ta journée démarre et je choisis la bande-son qui va bien.',
+  'djGreetAfternoon': 'Bon après-midi ! Comment se passe ta journée jusqu\'ici — chargée, tranquille, ou un peu des deux ?',
+  'djGreetEvening': 'Bonsoir ! Comment s\'est passée ta journée ? Je reste aux platines, que tu aies envie de parler ou seulement d\'écouter.',
+  'djGreetNight': 'Tu veilles encore ? Qu\'est-ce qui te tient éveillé — les pensées, le travail, ou juste la musique ?',
+  'djStGreeting': 'Salut ! Content de te retrouver aux platines. Comment se passe ta journée ?',
+  'djStHowAreYou': 'Ça va très bien — le vinyle ne se fatigue jamais. Et toi, comment se passe ta journée, vraiment ?',
+  'djStThanks': 'Avec plaisir, c\'est mon rôle. Tu veux que je te lance quelque chose selon ton humeur ?',
+  'djStWho': 'Je suis Tunefy DJ, le DJ de l\'application. Je t\'écoute décrire ton humeur, puis je construis un vrai mix avec le catalogue réel — je n\'invente jamais un titre.',
+  'djStBye': 'Ça marche, je garde les platines au chaud. Reviens quand tu veux un mix.',
+  'djStAskMusic': 'Dis-moi encore un peu : tu fais quoi, là, tout de suite, et tu veux te sentir comment à la fin ?',
+  'djStLowDay': 'Les journées difficiles, ça arrive. Tu préfères une musique qui te tient compagnie, ou qui te sort de là ?',
+  'djStGoodDay': 'Ça me fait plaisir de l\'entendre. Je te lance un mix pour garder la vague ?',
+  'djStFallback': 'Je t\'écoute. Dis-moi en quelques mots comment s\'est passée ta journée, ou ce qui te ferait plaisir à écouter, et je réponds avec de la musique.',
   'djOnline': 'En ligne',
   'djShuffle': 'Lecture aléatoire',
   'djSmartPlaylistBuilding': 'Créer votre playlist intelligente avec Gemini…',
@@ -3217,7 +3275,7 @@ const Map<String, String> _fr = {
 'lyricsTranslation': 'Traduction des paroles',
   'lyricsTranslationDesc': 'Traduire automatiquement les paroles dans la langue sélectionnée dans l\'application.',
   'download': 'Télécharger',
-  'downloadComplete': 'Télécharger l\'intégralité',
+  'downloadComplete': 'Téléchargement terminé',
   'removedFromHistory': 'Supprimé de l\'historique',
   'deeplApiKeyLabel': 'Clé de traduction (facultative)',
   'deeplApiKeyHint': 'Facultatif. Laissez ce champ vide pour utiliser le service de traduction automatique.',
