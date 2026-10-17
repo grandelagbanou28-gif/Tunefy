@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-fitur-utama">Fitur</a> ·
   <a href="#-lokalisasi">Bahasa</a> ·
-  <a href="#-tangkapan-layar">Tangkapan Layar</a> ·
   <a href="#-arsitektur">Arsitektur</a> ·
   <a href="#-penyiapan--pemasangan">Pengaturan</a> ·
   <a href="#-server-backend--streaming">Server</a>
@@ -50,7 +49,7 @@ Tunefy adalah klien musik kaya fitur dan berfokus pada privasi yang dibuat denga
 **15+ sumber terbuka dan tanpa kunci** dengan kaskade fallback otomatis, sehingga track gagal pada salah satunya
 penyedia bermain di berikutnya. Ini menawarkan pengalaman premium bebas iklan dengan pemutaran di latar belakang,
 unduhan offline, lirik yang disinkronkan **dan diterjemahkan**, **AI DJ**, radio internet, konser,
-berbagi daftar putar Blend, UI Liquid Glass modern, dan cache latar belakang cerdas — dengan atau tanpa
+berbagi Blend daftar putar, UI Liquid Glass modern, dan cache latar belakang cerdas — dengan atau tanpa
 sebuah akun.
 
 > [!NOTE]
@@ -86,23 +85,23 @@ Tunefy menyelesaikan pemutaran melalui **kaskade fallback otomatis** di seluruh 
 
 | Sumber | Ketik | Catatan |
 |---|---|---|
-| **YouTube / Musik YT** | Video / Audio | Utama, melalui youtube_explode + API internal |
+| **YouTube / Musik YT** | Video/Audio | Utama, melalui youtube_explode + API internal |
 | **Jamendo** | Tanpa kunci | Katalog Creative-Commons |
 | **Deezer** | Tanpa kunci | Katalog + metadata |
 | **Audius** | Tanpa kunci | Seniman yang terdesentralisasi |
-| **JioSaavn** | Buka API | Fast metadata & search |
-| **Invidious** | Keyless | YouTube cermin (4 contoh) |
-| **Piped** | Buka API | YouTube mirror |
-| **OpenVerse** | Keyless | Gambar/audio CC *(baru)* |
+| **JioSaavn** | Buka API | Metadata & pencarian cepat |
+| **Invidious** | Tanpa kunci | YouTube cermin (4 contoh) |
+| **Piped** | Buka API | YouTube cermin |
+| **OpenVerse** | Tanpa kunci | Gambar/audio CC *(baru)* |
 | **Wikimedia Commons** | Tanpa kunci | Buka media *(baru)* |
-| **Beatport** | Keyless | Elektronik/tari *(baru)* |
-| **Dailymotion** | Keyless | Video fallback *(new)* |
-| **ccMixter** | Keyless | Remix culture *(new)* |
-| **Internet Archive** | Keyless | Audio historis *(baru)* |
-| **Radio Browser** | Keyless | Stasiun radio internet |
-| **iTunes / MusicBrainz / Last.fm** | Open | Metadata, bagan, genre |
+| **Beatport** | Tanpa kunci | Elektronik/tari *(baru)* |
+| **Dailymotion** | Tanpa kunci | Penggantian video *(baru)* |
+| **ccMixter** | Tanpa kunci | Budaya remix *(baru)* |
+| **Internet Archive** | Tanpa kunci | Audio historis *(baru)* |
+| **Radio Browser** | Tanpa kunci | Stasiun radio internet |
+| **iTunes / MusicBrainz / Last.fm** | Buka | Metadata, bagan, genre |
 
-- **Cloud Stream Relay** — Relai yang dihosting sendiri menyelesaikan dan **memproksi byte audio** dari IP yang sama dengan yang digunakan pemutar, menghindari HTTP 403 yang dikembalikan oleh tautan Googlevideo yang dikunci IP. See [Servers](#-server-backend--streaming).
+- **Cloud Stream Relay** — Relai yang dihosting sendiri menyelesaikan dan **memproksi byte audio** dari IP yang sama dengan yang digunakan pemutar, menghindari HTTP 403 yang dikembalikan oleh tautan Googlevideo yang dikunci IP. Lihat [Servers](#-server-backend--streaming).
 - **Spotify Impor** — Tempelkan URL daftar putar Spotify publik mana pun (atau pindai kode Spotify) untuk mengimpor lagu.
 - **Pencarian Global** — Satu pencarian untuk lagu, video, album, artis, dan podcast.
 - **Bagikan untuk Memutar** — Bagikan tautan Musik YouTube/YT langsung ke Tunefy.
@@ -147,56 +146,6 @@ Atur bahasa di **Pengaturan → Bahasa** (atau simpan **Sistem** untuk deteksi o
 
 ---
 
-## 📸 Tangkapan layar
-
-### 🏠 Beranda & Navigasi
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Layar Beranda" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Rumah dengan Mini Player" />
-  <img src="images/library.jpg" width="30%" alt="Perpustakaan" />
-</p>
-
-### 🔍 Cari
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Hasil Pencarian" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Saran Pencarian" />
-</p>
-
-### 🎵 Pemain
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Pemain Imersif" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Pemain Warisan" />
-  <img src="images/song_queue.jpg" width="30%" alt="Antrean Lagu" />
-</p>
-
-### 🎤 Lyrics
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lirik dengan Kontrol" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lirik tanpa Kontrol" />
-</p>
-
-### 👥 Komunitas & Profil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Umpan Komunitas" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Layar Profil" />
-</p>
-
-### ⚙️ Pengaturan & Kustomisasi
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Pengaturan" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Pemilih Tema" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Warna Aksen" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Warna Aksen Kustom" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Pemilih Bahasa" />
-</p>
-
-### ℹ️ Tentang
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Tentang Layar" />
-</p>
-
----
-
 ## 🏗️ Arsitektur
 
 ```
@@ -225,17 +174,17 @@ apa yang menghindari 403 yang dikunci IP pada tautan video Google.
 
 | Lapisan | Teknologi |
 |---|---|
-| **Framework** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
+| **Kerangka** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **Manajemen Negara** | [Riverpod](https://riverpod.dev/) |
-| **Audio Engine** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
+| **Mesin Audio** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
 | **YouTube Ekstraksi** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (bercabang oleh [anandnet](https://github.com/anandnet)) |
 | **AI DJ** | Google Gemini (`gemini_service`) |
-| **Lyrics** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + mesin karaoke khusus + DeepL terjemahan |
-| **Local Storage** | [Hive](https://docs.hivedb.dev/) |
-| **Cloud Sync / Auth** | Supabase (Postgres + RLS, anonim & masuk Google) |
-| **Networking** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
-| **Stream Relay** | FastAPI + yt-dlp pada Render (`server/`) |
-| **UI Components** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
+| **Lirik** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + mesin karaoke khusus + DeepL terjemahan |
+| **Penyimpanan Lokal** | [Hive](https://docs.hivedb.dev/) |
+| **Sinkronisasi Cloud / Auth** | Supabase (Postgres + RLS, anonim & masuk Google) |
+| **Jaringan** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
+| **Relai Aliran** | FastAPI + yt-dlp pada Render (`server/`) |
+| **Komponen UI** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
 ---
 
@@ -244,10 +193,10 @@ apa yang menghindari 403 yang dikunci IP pada tautan video Google.
 ### Prasyarat
 - Flutter SDK (Stabil Terbaru)
 - Dart SDK
-- Android Studio / VS Code
+- Android Studio / Kode VS
 - Java JDK 17
 
-### Installation
+### Instalasi
 
 1. **Kloning repositori:**
    ```bash
@@ -260,7 +209,7 @@ apa yang menghindari 403 yang dikunci IP pada tautan video Google.
    flutter pub get
    ```
 
-3. **Run the app:**
+3. **Jalankan aplikasi:**
    ```bash
    flutter run
    ```
@@ -280,26 +229,26 @@ apa yang menghindari 403 yang dikunci IP pada tautan video Google.
 
 ### ☁️ Cloud Stream Relay — `server/` (digunakan pada Render)
 Menyelesaikan URL audio YouTube **dan meneruskan byte** sehingga ponsel dan penyelesai berbagi satu IP
-(no 403). FastAPI + yt-dlp, Docker, tingkat gratis.
+(tidak ada 403). FastAPI + yt-dlp, Docker, tingkat gratis.
 
-| Endpoint | Deskripsi |
+| Titik akhir | Deskripsi |
 | --- | --- |
 | `GET /health` | Pemeriksaan keaktifan (`ok`) |
-| `GET /stream?videoId=X&key=K` | Diselesaikan melalui yt-dlp → mengembalikan URL `…/relay` (200 hanya jika terselesaikan) |
+| `GET /stream?videoId=X&key=K` | Selesaikan melalui yt-dlp → mengembalikan URL `…/relay` (200 hanya jika berhasil) |
 | `GET /relay?videoId=X&key=K` | Proksi byte audio (Range-aware → 206 untuk mencari) |
 
 Dilindungi oleh `RELAY_KEY` env var bersama (mengembalikan **401** tanpanya). Terapkan: Render →
-**Root Directory = `server`**, Docker, **Health Check = `/health`**. See `server/README.md`.
+**Root Directory = `server`**, Docker, **Health Check = `/health`**. Lihat `server/README.md`.
 
 ### 🎵 API Aplikasi — `backend/`
 Backend data/pencarian (YouTube Music melalui youtubei.js + sumber terbuka: Last.fm genre,
 MusicBrainz rilis & dekade).
 
-| Endpoint | Deskripsi |
+| Titik akhir | Deskripsi |
 | --- | --- |
-| `/api/search` | Music / video search |
+| `/api/search` | Pencarian musik / video |
 | `/api/trending` | Sedang Tren |
-| `/api/charts` | YT Music charts |
+| `/api/charts` | Tangga lagu YT Musik |
 | `/api/playlist/:id` | Detail daftar putar |
 | `/api/moods`, `/api/moods/:id` | Kategori & suasana hati (Last.fm fallback) |
 | `/api/tags?tag=` | Lagu/album teratas bergenre (Last.fm) |

@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-principais-recursos">Recursos</a> ·
   <a href="#-localização">Idiomas</a> ·
-  <a href="#-capturas-de-tela">Capturas de tela</a> ·
   <a href="#-arquitetura">Arquitetura</a> ·
   <a href="#-configuração-e-instalação">Configuração</a> ·
   <a href="#-servidores-de-back-end-e-streaming">Servidores</a>
@@ -62,7 +61,7 @@ uma conta.
 ## 🚀 Principais recursos
 
 ### 🎨 Liquid Glass UI/UX
-- **Temas Glassmorphic Dinâmicos** — Estilo premium nos modos Claro e Escuro via `liquid_glass_easy`. O Modo Claro usa uma tonalidade branca semitransparente que se adapta à capa do álbum.
+- **Temas Glassmorphic Dinâmicos** — Estilo premium nos modos Escuro e Claro até `liquid_glass_easy`. O Modo Claro usa uma tonalidade branca semitransparente que se adapta à capa do álbum.
 - **Sombreadores e desfoque personalizados** — Painéis de vidro fosco de alto desempenho e sobreposições que se adaptam às cores da arte.
 - **Elementos sensíveis ao contraste** — Ícones da barra de status, controles, controles deslizantes e menus são invertidos automaticamente para maior legibilidade.
 - **Otimização de tela grande e desktop** — Layouts de player responsivos (até 1300px), caixas de diálogo centralizadas e uma barra de pesquisa superior dedicada para desktop/tablet.
@@ -147,56 +146,6 @@ Defina o idioma em **Configurações → Idioma** (ou mantenha **Sistema** para 
 
 ---
 
-## 📸 Capturas de tela
-
-### 🏠 Início e navegação
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Tela inicial" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Casa com mini player" />
-  <img src="images/library.jpg" width="30%" alt="Biblioteca" />
-</p>
-
-### 🔍 Pesquisa
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Resultados da pesquisa" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Sugestões de pesquisa" />
-</p>
-
-### 🎵 Jogador
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Jogador envolvente" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Jogador legado" />
-  <img src="images/song_queue.jpg" width="30%" alt="Fila de músicas" />
-</p>
-
-### 🎤 Letras
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Letras com controles" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Letras sem controles" />
-</p>
-
-### 👥 Comunidade e perfil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Feed da comunidade" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Tela de perfil" />
-</p>
-
-### ⚙️ Configurações e personalização
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Configurações" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Seletor de tema" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Cor de destaque" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Cor de destaque personalizada" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Seletor de idioma" />
-</p>
-
-### ℹ️ Sobre
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Sobre a tela" />
-</p>
-
----
-
 ## 🏗️ Arquitetura
 
 ```
@@ -230,7 +179,7 @@ o que evita o 403 bloqueado por IP nos links do Googlevideo.
 | **Mecanismo de áudio** | [Just Audio](https://pub.dev/packages/just_audio) e [Audio Service](https://pub.dev/packages/audio_service) |
 | **YouTube Extração** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (garfo por [anandnet](https://github.com/anandnet)) |
 | **AI DJ** | Google Gemini (`gemini_service`) |
-| **Letra** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + mecanismo de karaokê personalizado + tradução DeepL |
+| **Letra** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + mecanismo de karaokê personalizado + DeepL tradução |
 | **Armazenamento local** | [Hive](https://docs.hivedb.dev/) |
 | **Sincronização/autenticação na nuvem** | Supabase (Postgres + RLS, anônimo e login do Google) |
 | **Rede** | [Dio](https://pub.dev/packages/dio) e [Http](https://pub.dev/packages/http) |
@@ -311,7 +260,7 @@ MusicBrainz lançamentos e décadas).
 **Implantar (Vercel):** importe este repositório, **Root Directory = `backend`**. Consulte `backend/README.md`.
 
 ### 🗄️ Banco de dados — `supabase/`
-Esquema Postgres com **Segurança em nível de linha**: as linhas do usuário têm como escopo `auth.uid()`, o catálogo é
+Postgres esquema com **Segurança em nível de linha**: as linhas do usuário têm como escopo `auth.uid()`, o catálogo é
 somente leitura para usuários anônimos e gravável somente pela função de serviço. Execute migrações no Supabase
 Editor SQL (em ordem).
 
@@ -339,7 +288,7 @@ Tunefy não existiria sem o trabalho incrível desses desenvolvedores e projetos
 Agradecimentos a**[Hexer10](https://github.com/Hexer10)**, autor original de
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — a espinha dorsal de Tunefy
 YouTube streaming — e**[anandnet](https://github.com/anandnet)** para o fork atualizado que
-mantém o Tunefy trabalhando com as alterações mais recentes do YouTube.
+mantém Tunefy trabalhando com as alterações mais recentes de YouTube.
 
 ### Animesh (n-ce) — saavn rápido & ytify
 Grite para**[Animesh (n-ce)](https://github.com/n-ce)**, criador de

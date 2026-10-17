@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-الميزات-الرئيسية">المميزات</a> ·
   <a href="#-التوطين">اللغات</a> ·
-  <a href="#-لقطات-الشاشة">لقطات الشاشة</a> ·
   <a href="#الهندسة-المعمارية">الهندسة المعمارية</a> ·
   <a href="#-الإعداد-والتثبيت">الإعداد</a> ·
   <a href="#-خوادم-الواجهة-الخلفية-والبث-المباشر">الخوادم</a>
@@ -50,7 +49,7 @@ Tunefy هو عميل موسيقى غني بالميزات ويركز على ال
 **أكثر من 15 مصدرًا مفتوحًا وبدون مفتاح** مع سلسلة احتياطية تلقائية، أي مسار يفشل في أحدها
 يلعب مزود في اليوم التالي. فهو يوفر تجربة متميزة خالية من الإعلانات مع تشغيل الخلفية،
 التنزيلات دون اتصال بالإنترنت، وكلمات الأغاني المتزامنة **والمترجمة**، و**AI DJ**، وراديو الإنترنت، والحفلات الموسيقية،
-قوائم التشغيل المشتركة Blend وواجهة المستخدم الحديثة Liquid Glass والتخزين المؤقت الذكي للخلفية - مع أو بدونه
+قوائم التشغيل المشتركة Blend وواجهة المستخدم الحديثة Liquid Glass والتخزين المؤقت الذكي للخلفية - مع أو بدون
 حساب.
 
 > [!NOTE]
@@ -62,7 +61,7 @@ Tunefy هو عميل موسيقى غني بالميزات ويركز على ال
 ## 🚀 الميزات الرئيسية
 
 ### 🎨 Liquid Glass واجهة المستخدم/تجربة المستخدم
-- ** سمات Glassmorphic الديناميكية** - تصميم متميز في الوضعين الداكن والفاتح عبر `liquid_glass_easy`. يستخدم وضع الإضاءة لونًا أبيض شبه شفاف يتكيف مع صورة الألبوم.
+- ** سمات Glassmorphic الديناميكية** — تصميم متميز في الوضعين الداكن والفاتح عبر `liquid_glass_easy`. يستخدم وضع الإضاءة لونًا أبيض شبه شفاف يتكيف مع صورة الألبوم.
 - **تظليل وطمس مخصص** — ألواح وتراكبات زجاجية بلوري عالية الأداء تتكيف مع ألوان العمل الفني.
 - **عناصر مدركة للتباين** — يتم قلب أيقونات شريط الحالة وعناصر التحكم وشرائح التمرير والقوائم تلقائيًا من أجل الوضوح.
 - **تحسين الشاشة الكبيرة وسطح المكتب** — تخطيطات المشغل سريعة الاستجابة (حتى 1300 بكسل)، ومربعات الحوار المركزية، وشريط بحث علوي مخصص لسطح المكتب/الكمبيوتر اللوحي.
@@ -115,14 +114,14 @@ Tunefy يحل التشغيل من خلال **سلسلة احتياطية تلق�
 - **DJ Mixes** — اكتشاف وتشغيل DJ/mix مخصص.
 
 ### 🤝 وسائل التواصل الاجتماعي والمزج والمجتمع
-- **Blend قوائم التشغيل** — أنشئ قائمة تشغيل مشتركة برمز انضمام قصير (مثل `KORA-4821`)؛ يمكن لأي شخص لديه الكود الاستماع والمساهمة، مثل Spotify Blend الروابط.
+- **Blend قوائم التشغيل** — أنشئ قائمة تشغيل مشتركة برمز انضمام قصير (على سبيل المثال `KORA-4821`)؛ يمكن لأي شخص لديه الكود الاستماع والمساهمة، مثل Spotify Blend الروابط.
 - **خلاصة المجتمع** — ابحث عن المقاطع التي تم تحميلها بواسطة المجتمع وبثها واكتشفها.
 - **متابعة الفنانين** — متابعة الفنانين/القنوات لتتبعهم.
 - **قائمة الانتظار الذكية والتشغيل اللانهائي** — قائمة الانتظار التلقائية مع سلوك واضح وذكي.
 
 ### 🔐 الخصوصية والحسابات
 - **لا يلزم وجود حساب** — يتم تخزين المفضلة وقوائم التشغيل والسجل محليًا بشكل افتراضي.
-- **مجهول + تسجيل الدخول إلى Google** — تسجيل دخول اختياري (هوية الجهاز المجهول أو Google عبر Supabase Auth) للمزامنة السحابية والملف الشخصي.
+- **مجهول + تسجيل الدخول إلى Google** — تسجيل دخول اختياري (هوية الجهاز المجهول أو Google عبر مصادقة Supabase) للمزامنة السحابية والملف الشخصي.
 - **التنزيلات دون اتصال** — تنزيل الأغاني ومقاطع الفيديو للاستماع إليها في وضع عدم الاتصال.
 - **الربط العميق** — مخطط URL مخصص كامل لفتح/تشغيل الأغاني والفنانين والألبومات وقوائم التشغيل عبر المتصفح أو الروابط المشتركة.
 - **خالية من الإعلانات وموثوقة** — الاستماع دون انقطاع مدعومًا بمرحلات مفتوحة (Last.fm، MusicBrainz، iTunes) لضمان التشغيل.
@@ -144,56 +143,6 @@ Tunefy يأتي مع **ترجمات كاملة** بـ 14 لغة (بالإضاف�
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 اضبط اللغة في **الإعدادات → اللغة** (أو احتفظ **بالنظام** للاكتشاف التلقائي).
-
----
-
-## 📸 لقطات الشاشة
-
-### 🏠 الصفحة الرئيسية والملاحة
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="الشاشة الرئيسية" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="المنزل مع مشغل صغير" />
-  <img src="images/library.jpg" width="30%" alt="مكتبة" />
-</p>
-
-### 🔍 بحث
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="نتائج البحث" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="اقتراحات البحث" />
-</p>
-
-### 🎵 لاعب
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="لاعب غامرة" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="لاعب تراث" />
-  <img src="images/song_queue.jpg" width="30%" alt="قائمة انتظار الأغنية" />
-</p>
-
-### 🎤 كلمات الاغنية
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="كلمات مع الضوابط" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="كلمات بدون ضوابط" />
-</p>
-
-### 👥 المجتمع والملف الشخصي
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="تغذية المجتمع" />
-  <img src="images/profile_screen.jpg" width="30%" alt="شاشة الملف الشخصي" />
-</p>
-
-### ⚙️ الإعدادات والتخصيص
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="الإعدادات" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="محدد الموضوع" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="لون مميز" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="لون مميز مخصص" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="محدد اللغة" />
-</p>
-
-### ℹ️ نبذة
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="حول الشاشة" />
-</p>
 
 ---
 
@@ -228,7 +177,7 @@ tunefy-music/
 | **الإطار** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **إدارة الدولة** | [Riverpod](https://riverpod.dev/) |
 | **محرك الصوت** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube استخلاص** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (شوكة بـ [anandnet](https://github.com/anandnet)) |
+| **YouTube استخراج** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (شوكة بـ [anandnet](https://github.com/anandnet)) |
 |** AI DJ** | جوجل Gemini (`gemini_service`) |
 | **كلمات** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + محرك كاريوكي مخصص + DeepL ترجمة |
 | **التخزين المحلي** | [Hive](https://docs.hivedb.dev/) |
@@ -285,7 +234,7 @@ tunefy-music/
 | نقطة النهاية | الوصف |
 | --- | --- |
 | `GET /health` | مسبار الحياة (`ok`) |
-| `GET /stream?videoId=X&key=K` | يتم الحل عبر yt-dlp → إرجاع عنوان URL `…/relay` (200 فقط إذا تم حله) |
+| `GET /stream?videoId=X&key=K` | يتم الحل عبر yt-dlp → إرجاع عنوان URL `…/relay` (200 فقط إذا تم الحل) |
 | `GET /relay?videoId=X&key=K` | وكلاء البايتات الصوتية (النطاق المدرك → 206 للبحث) |
 
 محمي بواسطة `RELAY_KEY` env var مشترك (إرجاع **401** بدونه). نشر: Render →
@@ -302,7 +251,7 @@ MusicBrainz الإصدارات والعقود).
 | `/api/charts` | مخططات موسيقى YT |
 | `/api/playlist/:id` | تفاصيل قائمة التشغيل |
 | `/api/moods`, `/api/moods/:id` | الفئات والحالات المزاجية (Last.fm احتياطي) |
-| `/api/tags?tag=` | النوع الأعلى الأغاني / الألبومات (Last.fm) |
+| `/api/tags?tag=` | أفضل الأغاني/الألبومات (Last.fm) |
 | `/api/newreleases` | الإصدارات الجديدة (MusicBrainz) |
 | `/api/decades?year=` | الالبومات حسب العقد (MusicBrainz) |
 | `/api/categories` | قائمة الفئات |
@@ -311,7 +260,7 @@ MusicBrainz الإصدارات والعقود).
 **نشر (Vercel):** استيراد هذا الريبو، **Root Directory = `backend`**. انظر `backend/README.md`.
 
 ### 🗄️ قاعدة البيانات — `supabase/`
-مخطط Postgres مع **الأمان على مستوى الصف**: يتم تحديد نطاق صفوف المستخدم إلى `auth.uid()`، الكتالوج هو
+مخطط Postgres مع **أمان على مستوى الصف**: يتم تحديد نطاق صفوف المستخدم إلى `auth.uid()`، الكتالوج هو
 للقراءة فقط للمستخدمين المجهولين وقابل للكتابة فقط من خلال دور الخدمة. تشغيل عمليات الترحيل في Supabase
 محرر SQL (بالترتيب).
 
@@ -339,12 +288,12 @@ Tunefy لن يكون موجودًا لولا العمل المذهل لهؤلا�
 شكرًا**[Hexer10](https://github.com/Hexer10)** المؤلف الأصلي لـ
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — العمود الفقري لـ Tunefy
 YouTube البث - و**[anandnet](https://github.com/anandnet)** للشوكة المحدثة التي
-يحافظ على Tunefy يعمل مع أحدث YouTube التغييرات.
+يحافظ على Tunefy العمل مع أحدث YouTube التغييرات.
 
 ### Animesh (n-ce) — سريع السافن & ytify
 تحية إلى**[Animesh (n-ce)](https://github.com/n-ce)**، خالق
 **[fast-saavn](https://github.com/n-ce/saavn)** (واجهة برمجة تطبيقات JioSaavn المفتوحة التي تعمل على تشغيل البيانات الوصفية لـ Tunefy)
-و**[ytify](https://github.com/n-ce/ytify)** (مصدر كبير للإلهام).
+و**[ytify](https://github.com/n-ce/ytify)** (مصدر إلهام كبير).
 
 ### مكتبات مفتوحة المصدر
 | الحزمة | المؤلف / المشرفون |

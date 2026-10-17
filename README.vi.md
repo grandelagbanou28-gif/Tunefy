@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-các-tính-năng-chính">Tính năng</a> ·
   <a href="#-bản-địa-hóa">Ngôn ngữ</a> ·
-  <a href="#-ảnh-chụp-màn-hình">Ảnh chụp màn hình</a> ·
   <a href="#-kiến-trúc">Kiến trúc</a> ·
   <a href="#-thiết-lập--cài-đặt">Thiết lập</a> ·
   <a href="#-máy-chủ-phụ-trợ-và-phát-trực-tuyến">Máy chủ</a>
@@ -122,7 +121,7 @@ Tunefy giải quyết quá trình phát lại thông qua **tầng dự phòng t�
 
 ### 🔐 Quyền riêng tư & Tài khoản
 - **Không cần tài khoản** — Các mục yêu thích, danh sách phát và lịch sử được lưu trữ cục bộ theo mặc định.
-- **Ẩn danh + Đăng nhập bằng Google** — Đăng nhập tùy chọn (danh tính thiết bị ẩn danh hoặc Google qua Supabase Auth) để đồng bộ hóa hồ sơ và đám mây.
+- **Ẩn danh + Đăng nhập bằng Google** — Đăng nhập tùy chọn (danh tính thiết bị ẩn danh hoặc Google thông qua Supabase Auth) để đồng bộ hóa hồ sơ và đám mây.
 - **Tải xuống ngoại tuyến** — Tải xuống bài hát và video để nghe ngoại tuyến.
 - **Liên kết sâu** — Lược đồ URL tùy chỉnh đầy đủ để mở/phát bài hát, nghệ sĩ, album và danh sách phát qua trình duyệt hoặc liên kết được chia sẻ.
 - **Không có quảng cáo và đáng tin cậy** — Nghe không bị gián đoạn được hỗ trợ bởi các rơle mở (Last.fm, MusicBrainz, iTunes) để đảm bảo phát lại.
@@ -144,56 +143,6 @@ Tunefy cung cấp **bản dịch đầy đủ** bằng 14 ngôn ngữ (cộng v�
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 Đặt ngôn ngữ trong **Cài đặt → Ngôn ngữ** (hoặc giữ **Hệ thống** để tự động phát hiện).
-
----
-
-## 📸 Ảnh chụp màn hình
-
-### 🏠 Trang chủ & Điều hướng
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Màn hình chính" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Trang chủ với máy nghe nhạc mini" />
-  <img src="images/library.jpg" width="30%" alt="Thư viện" />
-</p>
-
-### 🔍 Tìm kiếm
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Kết quả tìm kiếm" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Đề xuất tìm kiếm" />
-</p>
-
-### 🎵 Người chơi
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Người chơi nhập vai" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Người chơi kế thừa" />
-  <img src="images/song_queue.jpg" width="30%" alt="Hàng đợi bài hát" />
-</p>
-
-### 🎤 Lời bài hát
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lời bài hát có điều khiển" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lời bài hát không có điều khiển" />
-</p>
-
-### 👥 Cộng đồng & Hồ sơ
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Nguồn cấp dữ liệu cộng đồng" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Màn hình hồ sơ" />
-</p>
-
-### ⚙️ Cài đặt & Tùy chỉnh
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Cài đặt" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Bộ chọn chủ đề" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Màu nhấn" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Màu nhấn tùy chỉnh" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Bộ chọn ngôn ngữ" />
-</p>
-
-### ℹ️ Giới thiệu
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Giới thiệu về màn hình" />
-</p>
 
 ---
 
@@ -311,7 +260,7 @@ MusicBrainz phát hành & thập kỷ).
 **Triển khai (Vercel):** nhập kho lưu trữ này, **Root Directory = `backend`**. Xem `backend/README.md`.
 
 ### 🗄️ Cơ sở dữ liệu — `supabase/`
-Lược đồ Postgres với **Bảo mật cấp hàng**: các hàng của người dùng nằm trong phạm vi `auth.uid()`, danh mục là
+Lược đồ Postgres có **Bảo mật cấp hàng**: các hàng của người dùng nằm trong phạm vi `auth.uid()`, danh mục là
 chỉ đọc đối với người dùng ẩn danh và chỉ có thể ghi theo vai trò dịch vụ. Chạy di chuyển trong Supabase
 SQL Editor (theo thứ tự).
 
@@ -324,7 +273,7 @@ SQL Editor (theo thứ tự).
 1. **Rẽ nhánh dự án**
 2. **Tạo nhánh tính năng của bạn** (`git checkout -b feature/AmazingFeature`)
 3. **Cam kết thay đổi của bạn** (`git commit -m 'Add some AmazingFeature'`)
-4. **Đẩy tới chi nhánh** (`git push origin feature/AmazingFeature`)
+4. **Đẩy tới nhánh** (`git push origin feature/AmazingFeature`)
 5. **Mở yêu cầu kéo**
 
 **Nguyên tắc:** tuân theo kiểu mã hiện có, chạy `flutter analyze` (phải sạch) và kiểm tra các tính năng mới trước khi gửi.
@@ -339,11 +288,11 @@ Tunefy sẽ không tồn tại nếu không có sự nỗ lực đáng kinh ng�
 Cảm ơn**[Hexer10](https://github.com/Hexer10)**, tác giả gốc của
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — xương sống của Tunefy
 YouTube phát trực tuyến — và**[anandnet](https://github.com/anandnet)** dành cho đợt phân nhánh cập nhật
-giữ cho Tunefy hoạt động với những thay đổi mới nhất của YouTube.
+giúp Tunefy hoạt động với những thay đổi mới nhất của YouTube.
 
 ### Animesh (n-ce) — fast-saavn & ytify
 Xin gửi lời cảm ơn tới**[Animesh (n-ce)](https://github.com/n-ce)**, người tạo ra
-**[fast-saavn](https://github.com/n-ce/saavn)** (siêu dữ liệu của API JioSaavn mở Tunefy)
+**[fast-saavn](https://github.com/n-ce/saavn)** (siêu dữ liệu của API JioSaavn mở hỗ trợ Tunefy)
 và**[ytify](https://github.com/n-ce/ytify)** (một nguồn cảm hứng to lớn).
 
 ### Thư viện nguồn mở

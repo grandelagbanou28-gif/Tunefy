@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-主要特点">特点</a>·
   <a href="#-本地化">语言</a> ·
-  <a href="#-截图">截图</a> ·
   <a href="#-架构">建筑</a> ·
   <a href="#-设置和安装">设置</a> ·
   <a href="#-后端和流媒体服务器">服务器</a>
@@ -91,7 +90,7 @@ Tunefy 通过跨这些提供者的**自动回退级联**解决播放问题（无
 | **Deezer** |无钥匙|目录+元数据|
 | **Audius** |无钥匙|去中心化艺术家 |
 | **JioSaavn** |开放API |快速元数据和搜索 |
-| **Invidious** |无钥匙| YouTube 镜子（4 个实例）|
+| **Invidious** |无钥匙| YouTube 镜子（4 个）|
 | **Piped** |开放API | YouTube镜子|
 | **OpenVerse** |无钥匙| CC 图像/音频 *（新）* |
 | **Wikimedia Commons** |无钥匙|开放媒体*（新）* |
@@ -105,7 +104,7 @@ Tunefy 通过跨这些提供者的**自动回退级联**解决播放问题（无
 - **云流中继** — 自托管中继解析并**代理来自播放器使用的同一 IP 的音频字节**，避免 IP 锁定的 Googlevideo 链接返回的 HTTP 403。参见[Servers](#-后端和流媒体服务器)。
 - **Spotify 导入** — 粘贴任何公共 Spotify 播放列表 URL（或扫描 Spotify 代码）以导入曲目。
 - **全局搜索** — 跨歌曲、视频、专辑、艺术家和播客进行一次搜索。
-- **分享到播放** — 分享YouTube/YT Music 链接直接进入Tunefy。
+- **分享到播放** — 分享YouTube/YT Music 直接链接到Tunefy。
 
 ### 📻 广播、音乐会和视频
 - **网络广播** — 数千个直播电台 (Radio Browser)。
@@ -144,56 +143,6 @@ Tunefy 附带 14 种语言的**完整翻译**（加上自动系统语言）：
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 在**设置→语言**中设置语言（或保留**系统**以进行自动检测）。
-
----
-
-## 📸 截图
-
-### 🏠 主页和导航
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="主屏幕" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="带迷你播放器的家" />
-  <img src="images/library.jpg" width="30%" alt="图书馆" />
-</p>
-
-### 🔍 搜索
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="搜索结果" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="搜索建议" />
-</p>
-
-### 🎵 玩家
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="沉浸式玩家" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="旧版玩家" />
-  <img src="images/song_queue.jpg" width="30%" alt="歌曲队列" />
-</p>
-
-### 🎤 歌词
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="带控件的歌词" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="没有控制的歌词" />
-</p>
-
-### 👥 社区和简介
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="社区动态" />
-  <img src="images/profile_screen.jpg" width="30%" alt="个人资料屏幕" />
-</p>
-
-### ⚙️ 设置和自定义
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="设置" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="主题选择器" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="强调色" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="自定义强调色" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="语言选择器" />
-</p>
-
-### ℹ️ 关于
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="关于屏幕" />
-</p>
 
 ---
 
@@ -270,7 +219,7 @@ tunefy-music/
    flutter build apk --split-per-abi
    ```
 
-> 云中继 URL 已烘焙到 `lib/utils/api_constants.dart`
+> 云中继 URL 被烘焙到 `lib/utils/api_constants.dart`
 > (`relayBaseUrl`)，因此不需要构建标志。指向你自己的继电器：
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
@@ -288,8 +237,8 @@ tunefy-music/
 | `GET /stream?videoId=X&key=K` |通过 yt-dlp 解析 → 返回 `…/relay` URL（仅当解析时为 200）|
 | `GET /relay?videoId=X&key=K` |代理音频字节（范围感知 → 206 用于查找）|
 
-受共享 `RELAY_KEY` 环境变量保护（没有它则返回 **401**）。部署：Render→
-**Root Directory = `server`**，Docker，**Health Check = `/health`**。参见`server/README.md`。
+由共享的 `RELAY_KEY` 环境变量保护（没有它则返回 **401**）。部署：Render→
+**Root Directory = `server`**、Docker、**Health Check = `/health`**。参见`server/README.md`。
 
 ### 🎵 应用程序 API — `backend/`
 数据/搜索后端（YouTube Music来自 youtubei.js + 开源：Last.fm流派，
@@ -327,7 +276,7 @@ SQL 编辑器（按顺序）。
 4. **推送到分支** (`git push origin feature/AmazingFeature`)
 5. **打开拉取请求**
 
-**指导原则：**遵循现有代码风格，运行`flutter analyze`（必须干净），并在提交前测试新功能。
+**指南：**遵循现有代码风格，运行`flutter analyze`（必须干净），并在提交前测试新功能。
 
 ---
 
@@ -338,11 +287,11 @@ SQL 编辑器（按顺序）。
 ### youtube_explode_dart
 感谢原作者**[Hexer10](https://github.com/Hexer10)**
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — Tunefy 的支柱
-YouTube 流式传输 — 以及**[anandnet](https://github.com/anandnet)** 用于最新的分支
+YouTube 流媒体 — 以及**[anandnet](https://github.com/anandnet)** 对于最新的分支
 保持 Tunefy 使用最新的 YouTube 更改。
 
 ### Animesh (n-ce) — fast-saavn & ytify
-向**[Animesh (n-ce)](https://github.com/n-ce)** 致敬，创始人
+向**[Animesh (n-ce)](https://github.com/n-ce)**，的创造者致敬
 **[fast-saavn](https://github.com/n-ce/saavn)**（开放的 JioSaavn API 为 Tunefy 的元数据提供支持）
 和**[ytify](https://github.com/n-ce/ytify)** （巨大的灵感来源）。
 

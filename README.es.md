@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-características-clave">Características</a> ·
   <a href="#-localización">Idiomas</a> ·
-  <a href="#-capturas-de-pantalla">Capturas de pantalla</a> ·
   <a href="#-arquitectura">Arquitectura</a> ·
   <a href="#-configuración-e-instalación">Configuración</a> ·
   <a href="#-servidores-backend-y-de-streaming">Servidores</a>
@@ -125,7 +124,7 @@ Tunefy resuelve la reproducción a través de una **cascada de reserva automáti
 - **Anónimo + Inicio de sesión de Google**: inicio de sesión opcional (identidad de dispositivo anónima o Google a través de Supabase Auth) para sincronización y perfil en la nube.
 - **Descargas sin conexión**: descarga canciones y videos para escucharlos sin conexión.
 - **Enlaces profundos**: esquema de URL personalizado completo para abrir/reproducir canciones, artistas, álbumes y listas de reproducción a través del navegador o enlaces compartidos.
-- **Sin publicidad y confiable**: escucha ininterrumpida respaldada por retransmisiones abiertas (Last.fm, MusicBrainz, iTunes) para garantizar la reproducción.
+- **Sin publicidad y confiable**: escucha ininterrumpida respaldada por relés abiertos (Last.fm, MusicBrainz, iTunes) para garantizar la reproducción.
 
 ---
 
@@ -144,56 +143,6 @@ Tunefy viene con **traducciones completas** en 14 idiomas (más el idioma autom�
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 Configure el idioma en **Configuración → Idioma** (o mantenga **Sistema** para la detección automática).
-
----
-
-## 📸 Capturas de pantalla
-
-### 🏠 Inicio y navegación
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Pantalla de inicio" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Hogar con mini reproductor" />
-  <img src="images/library.jpg" width="30%" alt="Biblioteca" />
-</p>
-
-### 🔍 Buscar
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Resultados de la búsqueda" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Sugerencias de búsqueda" />
-</p>
-
-### 🎵 Jugador
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Jugador inmersivo" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Jugador heredado" />
-  <img src="images/song_queue.jpg" width="30%" alt="Cola de canciones" />
-</p>
-
-### 🎤 Letra
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Letras con controles" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Letras sin controles" />
-</p>
-
-### 👥 Comunidad y perfil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Feed de la comunidad" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Pantalla de perfil" />
-</p>
-
-### ⚙️ Configuración y personalización
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Configuración" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Selector de temas" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Color de acento" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Color de acento personalizado" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Selector de idioma" />
-</p>
-
-### ℹ️ Acerca de
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Acerca de la pantalla" />
-</p>
 
 ---
 
@@ -302,7 +251,7 @@ MusicBrainz lanzamientos y décadas).
 | `/api/charts` | Listas de música de YouTube |
 | `/api/playlist/:id` | Detalle de la lista de reproducción |
 | `/api/moods`, `/api/moods/:id` | Categorías y estados de ánimo (Last.fm respaldo) |
-| `/api/tags?tag=` | Género principales pistas/álbumes (Last.fm) |
+| `/api/tags?tag=` | Principales pistas/álbumes del género (Last.fm) |
 | `/api/newreleases` | Nuevos lanzamientos (MusicBrainz) |
 | `/api/decades?year=` | Álbumes por década (MusicBrainz) |
 | `/api/categories` | Lista de categorías |
@@ -324,7 +273,7 @@ Editor SQL (en orden).
 1. **Bifurcar el proyecto**
 2. **Crea tu rama de funciones** (`git checkout -b feature/AmazingFeature`)
 3. **Confirma tus cambios** (`git commit -m 'Add some AmazingFeature'`)
-4. **Empuje a la sucursal** (`git push origin feature/AmazingFeature`)
+4. **Empujar a la sucursal** (`git push origin feature/AmazingFeature`)
 5. **Abrir una solicitud de extracción**
 
 **Pautas:** siga el estilo de código existente, ejecute `flutter analyze` (debe estar limpio) y pruebe las nuevas funciones antes de enviarlas.

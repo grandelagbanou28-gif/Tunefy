@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-key-features">Features</a> ·
   <a href="#-localisation">Languages</a> ·
-  <a href="#-screenshots">Screenshots</a> ·
   <a href="#-architecture">Architecture</a> ·
   <a href="#-setup--installation">Setup</a> ·
   <a href="#-backend--streaming-servers">Servers</a>
@@ -144,56 +143,6 @@ Tunefy ships with **full translations** in 14 languages (plus automatic system l
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 Set the language in **Settings → Language** (or keep **System** for automatic detection).
-
----
-
-## 📸 Screenshots
-
-### 🏠 Home & Navigation
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Home Screen" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Home with Mini Player" />
-  <img src="images/library.jpg" width="30%" alt="Library" />
-</p>
-
-### 🔍 Search
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Search Results" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Search Suggestions" />
-</p>
-
-### 🎵 Player
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Immersive Player" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Legacy Player" />
-  <img src="images/song_queue.jpg" width="30%" alt="Song Queue" />
-</p>
-
-### 🎤 Lyrics
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lyrics with Controls" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lyrics without Controls" />
-</p>
-
-### 👥 Community & Profile
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Community Feed" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Profile Screen" />
-</p>
-
-### ⚙️ Settings & Customization
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Settings" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Theme Selector" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Accent Color" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Custom Accent Color" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Language Selector" />
-</p>
-
-### ℹ️ About
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="About Screen" />
-</p>
 
 ---
 

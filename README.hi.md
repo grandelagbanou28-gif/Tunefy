@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-परमख-वशषतए">विशेषताएं</a> ·
   <a href="#-सथनयकरण">भाषाएँ</a> ·
-  <a href="#-सकरनशट">स्क्रीनशॉट</a> ·
   <a href="#वसतकल">वास्तुकला</a> ·
   <a href="#-सटअप-एव-इसटलशन">सेटअप</a> ·
   <a href="#-बकएड-और-सटरमग-सरवर">सर्वर</a>
@@ -54,7 +53,7 @@ Tunefy एक सुविधा-संपन्न, गोपनीयता-�
 एक खाता.
 
 > [!NOTE]
-> Tunefy सीधे इस रिपॉजिटरी (एपीके रिलीज़) से वितरित किया जाता है। यह **नहीं** उपलब्ध है
+> Tunefy सीधे इस रिपॉजिटरी (एपीके रिलीज) से वितरित किया जाता है। यह **नहीं** उपलब्ध है
 > Google Play Store पर.
 
 ---
@@ -78,7 +77,7 @@ Tunefy एक सुविधा-संपन्न, गोपनीयता-�
 ### 🤖 एआई डीजे और वैयक्तिकरण
 - **एआई डीजे असिस्टेंट (Gemini)** - एक संवादी डीजे जो आपकी पसंद को पढ़ता है, स्मार्ट प्लेलिस्ट बनाता है और अनुरोध लेता है।
 - **स्वाद संकेत** - प्रति-ट्रैक स्वाद स्कोरिंग से पता चलता है कि आपको क्या पसंद है और अनुशंसाएँ मिलती हैं।
-- **Wrapped और सुनने के आँकड़े** — आपकी साल भर की समीक्षा: शीर्ष कलाकार, मूड और सुनने के कैप्सूल।
+- **Wrapped और सुनने के आँकड़े** — आपकी वर्ष-समीक्षा: शीर्ष कलाकार, मूड और सुनने के कैप्सूल।
 - **स्मार्ट कैश सिस्टम** - ऑडियो की एसिंक पृष्ठभूमि कैशिंग + तत्काल, शून्य-प्रतीक्षा प्लेबैक के लिए बहु-रिज़ॉल्यूशन कलाकृति।
 
 ### 🌍 15+ स्रोतों से खोज
@@ -147,56 +146,6 @@ Tunefy 14 भाषाओं में **पूर्ण अनुवाद** �
 
 ---
 
-## 📸 स्क्रीनशॉट
-
-### 🏠 घर और नेविगेशन
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="होम स्क्रीन" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="मिनी प्लेयर के साथ घर" />
-  <img src="images/library.jpg" width="30%" alt="पुस्तकालय" />
-</p>
-
-### 🔍 खोजें
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="खोज परिणाम" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="सुझाव खोजें" />
-</p>
-
-### 🎵खिलाड़ी
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="इमर्सिव प्लेयर" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="विरासत खिलाड़ी" />
-  <img src="images/song_queue.jpg" width="30%" alt="गीत कतार" />
-</p>
-
-### 🎤 गीत
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="नियंत्रण के साथ गीत" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="नियंत्रण के बिना गीत" />
-</p>
-
-### 👥 समुदाय और प्रोफ़ाइल
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="सामुदायिक फ़ीड" />
-  <img src="images/profile_screen.jpg" width="30%" alt="प्रोफ़ाइल स्क्रीन" />
-</p>
-
-### ⚙️ सेटिंग्स और अनुकूलन
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="सेटिंग्स" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="थीम चयनकर्ता" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="एक्सेंट रंग" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="कस्टम एक्सेंट रंग" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="भाषा चयनकर्ता" />
-</p>
-
-### ℹ️ के बारे में
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="स्क्रीन के बारे में" />
-</p>
-
----
-
 ## 🏗️वास्तुकला
 
 ```
@@ -227,13 +176,13 @@ Googlevideo लिंक पर IP-लॉक 403 से क्या बचा �
 |---|---|
 | **ढांचा** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **राज्य प्रबंधन** | [Riverpod](https://riverpod.dev/) |
-| **ऑडियो इंजन** | [Just Audio](https://pub.dev/packages/just_audio) और [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube निष्कर्षण** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) ([anandnet](https://github.com/anandnet) द्वारा कांटा) |
+| **ऑडियो इंजन** | [Just Audio](https://pub.dev/packages/just_audio) एवं [Audio Service](https://pub.dev/packages/audio_service) |
+| **YouTube निष्कर्षण** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (कांटा [anandnet](https://github.com/anandnet) द्वारा) |
 | **एआई डीजे** | गूगल Gemini (`gemini_service`) |
 | **गीत** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + कस्टम कराओके इंजन + DeepL अनुवाद |
 | **स्थानीय भंडारण** | [Hive](https://docs.hivedb.dev/) |
 | **क्लाउड सिंक / ऑथ** | Supabase (Postgres + आरएलएस, अनाम और गूगल साइन-इन) |
-| **नेटवर्किंग** | [Dio](https://pub.dev/packages/dio) और [Http](https://pub.dev/packages/http) |
+| **नेटवर्किंग** | [Dio](https://pub.dev/packages/dio) एवं [Http](https://pub.dev/packages/http) |
 | **स्ट्रीम रिले** | FastAPI + yt-dlp पर Render (`server/`) |
 | **यूआई घटक** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
@@ -311,7 +260,7 @@ MusicBrainz रिलीज़ और दशक)।
 **तैनाती (Vercel):** इस रेपो को आयात करें, **Root Directory = `backend`**। देखें `backend/README.md`.
 
 ### 🗄️ डेटाबेस — `supabase/`
-Postgres स्कीमा **पंक्ति-स्तरीय सुरक्षा** के साथ: उपयोगकर्ता पंक्तियों का दायरा `auth.uid()` तक है, कैटलॉग है
+Postgres **पंक्ति-स्तरीय सुरक्षा** के साथ स्कीमा: उपयोगकर्ता पंक्तियों का दायरा `auth.uid()` तक है, कैटलॉग है
 अनाम उपयोगकर्ताओं के लिए केवल पढ़ने योग्य और केवल सेवा भूमिका द्वारा लिखने योग्य। Supabase में माइग्रेशन चलाएँ
 SQL संपादक (क्रम में)।
 
@@ -337,13 +286,13 @@ Tunefy इन डेवलपर्स और परियोजनाओं क
 
 ### youtube_explode_dart
 **[Hexer10](https://github.com/Hexer10)**, के मूल लेखक को धन्यवाद
-[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) —Tunefy की रीढ़
+[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — Tunefy की रीढ़
 YouTube स्ट्रीमिंग - और**[anandnet](https://github.com/anandnet)** अप-टू-डेट फोर्क के लिए
 Tunefy को नवीनतम YouTube परिवर्तनों के साथ कार्य करता रहता है।
 
 ### अनिमेष (n-ce) — fast-saavn & ytify
 **[Animesh (n-ce)](https://github.com/n-ce)** के निर्माता को सलाम
-**[fast-saavn](https://github.com/n-ce/saavn)** (खुला JioSaavn API पावरिंग Tunefy का मेटाडेटा)
+**[fast-saavn](https://github.com/n-ce/saavn)** (खुला JioSaavn API पॉवरिंग Tunefy का मेटाडेटा)
 और**[ytify](https://github.com/n-ce/ytify)** (प्रेरणा का एक बड़ा स्रोत)।
 
 ### ओपन-सोर्स लाइब्रेरीज़

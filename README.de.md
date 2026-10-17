@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-hauptmerkmale">Funktionen</a> ·
   <a href="#-lokalisierung">Sprachen</a> ·
-  <a href="#-screenshots">Screenshots</a> ·
   <a href="#-architektur">Architektur</a> ·
   <a href="#-einrichtung-und-installation">Einrichtung</a> ·
   <a href="#-backend--und-streaming-server">Server</a>
@@ -147,56 +146,6 @@ Stellen Sie die Sprache unter **Einstellungen → Sprache** ein (oder behalten S
 
 ---
 
-## 📸 Screenshots
-
-### 🏠 Startseite und Navigation
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Startbildschirm" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Zuhause mit Mini-Player" />
-  <img src="images/library.jpg" width="30%" alt="Bibliothek" />
-</p>
-
-### 🔍Suchen
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Suchergebnisse" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Suchvorschläge" />
-</p>
-
-### 🎵 Spieler
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Immersiver Player" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Legacy-Spieler" />
-  <img src="images/song_queue.jpg" width="30%" alt="Song-Warteschlange" />
-</p>
-
-### 🎤 Songtext
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Liedtext mit Steuerung" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Songtexte ohne Bedienelemente" />
-</p>
-
-### 👥 Community & Profil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Community-Feed" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Profilbildschirm" />
-</p>
-
-### ⚙️ Einstellungen und Anpassung
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Einstellungen" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Themenauswahl" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Akzentfarbe" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Benutzerdefinierte Akzentfarbe" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Sprachauswahl" />
-</p>
-
-### ℹ️ Ungefähr
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Über den Bildschirm" />
-</p>
-
----
-
 ## 🏗️ Architektur
 
 ```
@@ -228,7 +177,7 @@ Was vermeidet die IP-Sperre 403 bei Googlevideo-Links.
 | **Rahmen** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **Staatsverwaltung** | [Riverpod](https://riverpod.dev/) |
 | **Audio-Engine** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube Extraktion** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (Gabelung durch [anandnet](https://github.com/anandnet)) |
+| **YouTube Extraktion** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (Gabelung um [anandnet](https://github.com/anandnet)) |
 | **KI-DJ** | Google Gemini (`gemini_service`) |
 | **Texte** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + benutzerdefinierte Karaoke-Engine + DeepL Übersetzung |
 | **Lokaler Speicher** | [Hive](https://docs.hivedb.dev/) |
@@ -338,7 +287,7 @@ Tunefy würde ohne die unglaubliche Arbeit dieser Entwickler und Projekte nicht 
 ### youtube_explode_dart
 Vielen Dank an**[Hexer10](https://github.com/Hexer10)**, ursprünglicher Autor von
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) – das Rückgrat von Tunefy
-YouTube Streaming – und**[anandnet](https://github.com/anandnet)** für den aktuellen Fork
+YouTube Streaming – und**[anandnet](https://github.com/anandnet)** für den aktuellen Fork that
 Tunefy arbeitet weiterhin mit den neuesten YouTube-Änderungen.
 
 ### Animesh (n-ce) – fast-saavn & ytify

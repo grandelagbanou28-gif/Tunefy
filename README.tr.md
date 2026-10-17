@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-temel-özellikler">Özellikler</a> ·
   <a href="#-yerelleştirme">Diller</a> ·
-  <a href="#-ekran-görüntüleri">Ekran görüntüleri</a> ·
   <a href="#-mimarlık">Mimarlık</a> ·
   <a href="#-kurulum-ve-kurulum">Kurulum</a> ·
   <a href="#-arka-uç-ve-yayın-sunucuları">Sunucular</a>
@@ -147,56 +146,6 @@ Dili **Ayarlar → Dil** bölümünde ayarlayın (veya otomatik algılama için 
 
 ---
 
-## 📸 Ekran görüntüleri
-
-### 🏠 Ev ve Navigasyon
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Ana Ekran" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Mini Oynatıcılı Ev" />
-  <img src="images/library.jpg" width="30%" alt="Kütüphane" />
-</p>
-
-### 🔍 Ara
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Arama Sonuçları" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Arama Önerileri" />
-</p>
-
-### 🎵 Oyuncu
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Sürükleyici Oyuncu" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Eski Oyuncu" />
-  <img src="images/song_queue.jpg" width="30%" alt="Şarkı Sırası" />
-</p>
-
-### 🎤 Şarkı Sözleri
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Kontrollü Şarkı Sözleri" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Kontrolsüz Şarkı Sözleri" />
-</p>
-
-### 👥 Topluluk ve Profil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Topluluk Akışı" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Profil Ekranı" />
-</p>
-
-### ⚙️ Ayarlar ve Özelleştirme
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Ayarlar" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Tema Seçici" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Vurgu Rengi" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Özel Vurgu Rengi" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Dil Seçici" />
-</p>
-
-### ℹ️ Hakkında
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Ekran Hakkında" />
-</p>
-
----
-
 ## 🏗️ Mimarlık
 
 ```
@@ -271,14 +220,14 @@ Googlevideo bağlantılarında IP kilitli 403'ü önleyen şey.
    ```
 
 > Bulut geçiş URL'si `lib/utils/api_constants.dart` olarak oluşturulur
-> (`relayBaseUrl`), dolayısıyla derleme bayrağına gerek yoktur. Kendi rölenizi işaret etmek için:
+> (`relayBaseUrl`), dolayısıyla derleme bayrağı gerekmez. Kendi rölenizi işaret etmek için:
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
 ---
 
 ## 🖥️ Arka Uç ve Yayın Sunucuları
 
-### ☁️ Bulut Akışı Aktarması — `server/` (Render'da konuşlandırıldı)
+### ☁️ Bulut Akışı Aktarması — `server/` (Render'de konuşlandırıldı)
 YouTube ses URL'sini çözer **ve baytları aktarır** böylece telefon ve çözümleyici aynı IP'yi paylaşır
 (no 403). FastAPI + yt-dlp, Docker, ücretsiz katman.
 
@@ -288,11 +237,11 @@ YouTube ses URL'sini çözer **ve baytları aktarır** böylece telefon ve çöz
 | `GET /stream?videoId=X&key=K` | yt-dlp aracılığıyla çözümlenir → `…/relay` URL'sini döndürür (yalnızca çözümlenirse 200) |
 | `GET /relay?videoId=X&key=K` | Ses baytlarının proxy'lerini oluşturur (Aralığa duyarlı → arama için 206) |
 
-Paylaşılan bir `RELAY_KEY` env var tarafından korunmaktadır (bu olmadan **401** değerini döndürür). Dağıt: Render →
+Paylaşılan bir `RELAY_KEY` env var tarafından korunmaktadır (onsuz **401** değerini döndürür). Dağıt: Render →
 **Root Directory = `server`**, Docker, **Health Check = `/health`**. Bakınız `server/README.md`.
 
 ### 🎵 Uygulama API'si — `backend/`
-Veri/arama arka ucu (youtubei.js aracılığıyla YouTube Music + açık kaynaklar: Last.fm türler,
+Veri/arama arka ucu (YouTube Music youtubei.js aracılığıyla + açık kaynaklar: Last.fm türler,
 MusicBrainz sürümler ve on yıllar).
 
 | Uç nokta | Açıklama |
@@ -324,7 +273,7 @@ Katkılarınızı bekliyoruz! İster bir hata bildirmek, ister bir özellik öne
 1. **Projeyi çatallayın**
 2. **Özellik Şubenizi oluşturun** (`git checkout -b feature/AmazingFeature`)
 3. **Değişikliklerinizi Gerçekleştirin** (`git commit -m 'Add some AmazingFeature'`)
-4. **Şube'ye İtin** (`git push origin feature/AmazingFeature`)
+4. **Şube'ye Bas** (`git push origin feature/AmazingFeature`)
 5. **Bir Çekme İsteği Açın**
 
 **Yönergeler:** mevcut kod stilini takip edin, `flutter analyze` komutunu çalıştırın (temiz olmalıdır) ve göndermeden önce yeni özellikleri test edin.
@@ -365,4 +314,4 @@ ve**[ytify](https://github.com/n-ce/ytify)** (büyük bir ilham kaynağı).
 
 ## 📄 Lisans
 
-**MIT Lisansı** altında dağıtılmaktadır. Daha fazla bilgi için [`LICENSE`](LICENSE)'ye bakın.
+**MIT Lisansı** altında dağıtılmaktadır. Daha fazla bilgi için [`LICENSE`](LICENSE)'e bakın.

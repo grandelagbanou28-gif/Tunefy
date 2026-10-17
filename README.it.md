@@ -21,9 +21,8 @@
 <p align="center">
   <a href="#-caratteristiche-principali">Caratteristiche</a> ·
   <a href="#-localizzazione">Lingue</a> ·
-  <a href="#-schermate">Screenshot</a> ·
   <a href="#architettura">Architettura</a> ·
-  <a href="#-configurazione-e-installazione">Impostazione</a> ·
+  <a href="#-configurazione-e-installazione">Impostazioni</a> ·
   <a href="#server-backend-e-streaming">Server</a>
 </p>
 
@@ -147,56 +146,6 @@ Imposta la lingua in **Impostazioni → Lingua** (o mantieni **Sistema** per il 
 
 ---
 
-## 📸 Schermate
-
-### 🏠 Home e Navigazione
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Schermata iniziale" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="A casa con il minilettore" />
-  <img src="images/library.jpg" width="30%" alt="Biblioteca" />
-</p>
-
-### 🔍 Cerca
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Risultati della ricerca" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Suggerimenti per la ricerca" />
-</p>
-
-### 🎵 Giocatore
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Giocatore coinvolgente" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Giocatore storico" />
-  <img src="images/song_queue.jpg" width="30%" alt="Coda di brani" />
-</p>
-
-### 🎤 Testi
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Testi con controlli" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Testi senza controlli" />
-</p>
-
-### 👥 Comunità e profilo
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Feed della comunità" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Schermata del profilo" />
-</p>
-
-### ⚙️ Impostazioni e personalizzazione
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Impostazioni" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Selettore di temi" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Colore accento" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Colore accento personalizzato" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Selettore della lingua" />
-</p>
-
-### ℹ️ A proposito
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Informazioni sullo schermo" />
-</p>
-
----
-
 ## 🏗️Architettura
 
 ```
@@ -228,7 +177,7 @@ cosa evita il 403 con blocco IP sui collegamenti Googlevideo.
 | **Quadro** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **Gestione dello Stato** | [Riverpod](https://riverpod.dev/) |
 | **Motore audio** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube Estrazione** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (biforcazione di [anandnet](https://github.com/anandnet)) |
+| **YouTube Estrazione** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (bivio per [anandnet](https://github.com/anandnet)) |
 | **AI DJ** | Google Gemini (`gemini_service`) |
 | **Testo** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + motore karaoke personalizzato + traduzione DeepL |
 | **Archiviazione locale** | [Hive](https://docs.hivedb.dev/) |
@@ -243,7 +192,7 @@ cosa evita il 403 con blocco IP sui collegamenti Googlevideo.
 
 ### Prerequisiti
 - Flutter SDK (ultima versione stabile)
-- Dart SDK
+- DartSDK
 - Android Studio / Codice VS
 - Java JDK 17
 
@@ -278,13 +227,13 @@ cosa evita il 403 con blocco IP sui collegamenti Googlevideo.
 
 ## 🖥️Server backend e streaming
 
-### ☁️ Cloud Stream Relay — `server/` (distribuito il Render)
+### ☁️ Cloud Stream Relay — `server/` (distribuito su Render)
 Risolve un URL audio YouTube **e inoltra i byte** in modo che il telefono e il risolutore condividano un IP
 (n. 403). FastAPI + yt-dlp, Docker, livello gratuito.
 
 | Punto finale | Descrizione |
 | --- | --- |
-| `GET /health` | Sonda di vitalità (`ok`) |
+| `GET /health` | Sonda di vivacità (`ok`) |
 | `GET /stream?videoId=X&key=K` | Si risolve tramite yt-dlp → restituisce un URL `…/relay` (200 solo se si risolve) |
 | `GET /relay?videoId=X&key=K` | Esegue il proxy dei byte audio (Range-aware → 206 per la ricerca) |
 
@@ -324,7 +273,7 @@ I contributi sono benvenuti! Che si tratti di segnalare un bug, suggerire una fu
 1. **Biforca il progetto**
 2. **Crea il tuo ramo di funzionalità** (`git checkout -b feature/AmazingFeature`)
 3. **Conferma le modifiche** (`git commit -m 'Add some AmazingFeature'`)
-4. **Spingi al ramo** (`git push origin feature/AmazingFeature`)
+4. **Spingi verso il ramo** (`git push origin feature/AmazingFeature`)
 5. **Apri una richiesta di pull**
 
 **Linee guida:** segui lo stile del codice esistente, esegui `flutter analyze` (deve essere pulito) e testa le nuove funzionalità prima di inviarle.
@@ -341,7 +290,7 @@ Grazie a**[Hexer10](https://github.com/Hexer10)**, autore originale di
 YouTube streaming — e**[anandnet](https://github.com/anandnet)** per il fork aggiornato che
 mantiene Tunefy funzionante con le ultime modifiche YouTube.
 
-### Animesh (n-ce) — veloce-saavn e ytify
+### Animesh (n-ce) — saavn veloce e ytify
 Un ringraziamento a**[Animesh (n-ce)](https://github.com/n-ce)**, creatore di
 **[fast-saavn](https://github.com/n-ce/saavn)** (l'API JioSaavn aperta che alimenta i metadati di Tunefy)
 e**[ytify](https://github.com/n-ce/ytify)** (un'enorme fonte di ispirazione).

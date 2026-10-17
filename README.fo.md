@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-nǔ-taji-lɛ">Nǔ e ɖ'emɛ lɛ é</a> ·
   <a href="#-toxo-mɛ-ninɔ">Gbè lɛ</a> ·
-  <a href="#-écran-sín-ɖiɖe-lɛ">Foto ɖiɖe lɛ</a> ·
   <a href="#-xɔgbigbázɔ">Xɔgbigbá</a> ·
   <a href="#-nǔjlajla--nǔjlajla">Sɔ́ɖóte</a> ·
   <a href="#-sɛnví-e-nɔ-tɔn-ɖò-gudo-lɛ-é-kpo">Mɛsɛntɔ́</a>
@@ -50,7 +49,7 @@ Tunefy nyí hanjiji sín asì e ɖó nǔ gègě é ɖé, bo nɔ sɔ́ ayi ɖó m
 **15+ sources ouvertes et sans clés** kpodo cascade fallback automatique kpo, enɛ wu ɔ, han e nɔ gɔn nǔ wà ɖò ɖokpo jí é
 provider nɔ xò ɖò ee bɔ d’ewu é jí. É nɔ na nǔ ɖagbeɖagbe e mɛ è ma nɔ jla nǔ ɖè ǎ é ɖé kpo nǔxixo ɖò gudo kpo,
 è yí ɖò ɛntɛnɛti jí ǎ, xógbe e è bló ɖó kpɔ́ **bo lɛ́ lilɛ** lɛ é, **AI DJ** ɖé, hladio ɛntɛnɛti jí tɔn, hanjiji lɛ,
-è má Blend playlists, Liquid Glass UI égbé tɔn ɖé, kpodo nǔnywɛ xwitixwiti sín nǔ e ɖò gudo lɛ é kpo — kpodo alǒ ma ɖó kpo
+è má Blend playlists, Liquid Glass UI égbé tɔn ɖé, kpodo nǔnywɛ xwitixwiti sín nǔ e ɖò gudo lɛ é kpo — kpo alǒ ma ɖó kpo
 akwɛzinzan ɖé.
 
 > [!NOTE]
@@ -70,7 +69,7 @@ akwɛzinzan ɖé.
 ### 🎧 Xógbe, Xógbe kpo Karaoke kpo
 - **Karaoke Xógbe-Xógbe** — Xógbe lɛ nɔ gɔ́ nú sinmɛ ɖò hwenu jɔ hwenu hwenu e hanjijitɔ́ ɔ ɖò han jì wɛ é (60+ FPS).
 - **Sweep Synced Line-by-Line** — Effet de sweep progressive avec l’éclairage de ligne active et de défilement lisse.
-- **Xógbe e è lilɛ dó gbè ɖevo mɛ lɛ é** — Xógbe e è lilɛ dó gbè ɖevo mɛ lɛ é wɛ è nɔ lilɛ dó macinu jí (DeepL) dó appli gbè towe mɛ ɖò jɔhɔn mɛ.
+- **Xógbe e è lilɛ dó gbè ɖevo mɛ lɛ é** — Xógbe e è lilɛ dó gbè ɖevo mɛ lɛ é nɔ lilɛ dó macinu jí (DeepL) dó appli gbè towe mɛ ɖò jɔhɔn mɛ.
 - **Lofi Mode** — Huzu han ɖebu ɖo Lofi sin vibe mɛ: 0.9× ɖiɖe ɖiɖe, ɖiɖe ɖiɖe, ɖiɖe ɖiɖe.
 - **Equalizer & Effets Natifs** — EQ e ɖò tutoblonunu ɔ mɛ é kpo xóɖiɖɔ e ɖò gudo é kpo, kpodo gbè e è nɔ xò ɖò kɔ́ntu jí é kpo.
 - **Gbè gègě mɛ xóɖiɖɔ kpo ɖagbewiwa kpo** — Kpɔ́n gbè e ɖò gbè mɛ lɛ é bo jla ɖagbe ɖagbe/Tɛnmɛ/Kplékplé.
@@ -105,7 +104,7 @@ Tunefy nɔ ɖeɖɛ xóɖiɖɔ gbɔn **cascade fallback automatique** ɖé gblam�
 - **Cloud Stream Relay** — Relay e nɔ hɛn éɖesunɔ é ɖé nɔ ɖeɖɛ bo nɔ **ɖó tɛnmɛ nú byte xóɖiɖɔ tɔn lɛ** sín IP ɖokpo ɔ e nǔxixotɔ́ ɔ nɔ zán é jí, bo nɔ nyì alɔ nú HTTP 403 e Googlevideo sín kancica e è sú ɖó IP jí lɛ é nɔ lɛ́vɔ na é. Kpɔ́n [Servers](#-sɛnví-e-nɔ-tɔn-ɖò-gudo-lɛ-é-kpo).
 - **Spotify Import** — Sɔ́ URL Spotify hanjiji tɔn e ɖò agbawungba é ɖebǔ (alǒ kpɔ́n Spotify sín kodɛ ɖé) bo na dó hɛn han lɛ wá.
 - **Gbɔn Gbɛ̀ ɔ Bĭ Mɛ Biba** — Biba ɖokpo ɖò han lɛ, video lɛ, albɔmu lɛ, hanjijitɔ́ lɛ, kpodo podcast lɛ kpo mɛ.
-- **Má nú è na xò** — Má YouTube/YT Han lɛ sín kancica tlɔlɔ ɖò Tunefy mɛ.
+- **Ma bo na xo** — Ma YouTube/YT Han lɛ sin kancica tlɔlɔ ɖo Tunefy mɛ.
 
 ### 📻 Hladio, Hanjiji kpodo Video kpo
 - **Radio Ɛntɛnɛti tɔn** — Xójlawema afatɔ́n mɔkpan (Radio Browser).
@@ -115,17 +114,17 @@ Tunefy nɔ ɖeɖɛ xóɖiɖɔ gbɔn **cascade fallback automatique** ɖé gblam�
 - **DJ Mixes** — DJ/mix ɖiɖe ɖ’ayi kpodo ɖiɖe ɖiɖe kpo.
 
 ### 🤝 Gbɛtɔ, Mɛɖeɖóvo & Togun
-- **Blend Xójlawema** — Blǒ xóɖiɖɔ e è má é ɖé kpodo kodɛ ɖé kpo (e.g. `KORA-4821`); mɛɖebǔ e ɖó kodu ɔ é sixu ɖótó bo na alɔ, ɖi Spotify Blend links.
+- **Blend Xójlawema** — Blǒ xójláwémá ɖé bɔ è má ɖó kpɔ́ kpodo kodɛ ɖé kpo (e.g. `KORA-4821`); mɛɖebǔ e ɖó kodɛ ɔ é sixu ɖótó bo na alɔ, ɖi Spotify Blend links ɖɔhun.
 - **Community Feed** — Ba, jla, bo mɔ nu e gbɛta ɔ zé ɖ’ayi lɛ é.
 - **Artist Following** — Mi xwe do nuxotɔ/kanlin lɛ bo na do hɛn ye.
 - **Queue Smart & Replay Infini** — Auto-quée kpodo walɔ ɖagbe ɖagbe kpo.
 
 ### 🔐 Mɛɖesunɔ sín nǔ lɛ kpo akwɛzinzan lɛ kpo
 - **È byɔ ɖɔ è ni ɖó akɔnta ɖé ǎ** — È nɔ hɛn nǔ e è yí wǎn na lɛ é, nǔ e è xò lɛ é kpo tan lɛ kpo ɖó fí e è ɖè é.
-- **Anonyme + Google Sign-In** — Mɛ e è ma tuùn ǎ é sín nyikɔ (identité de l’appareil anonyme alǒ Google gbɔn Supabase Auth jí) nú xóɖɔɖókpɔ́ ɖò akpɔ́kpɔ́ mɛ kpo xóɖɔɖókpɔ́ kpo.
+- **Anonyme + Google Sign-In** — Mɛɖebǔ e è ma tuùn ǎ é (azɔwanú e è ma tuùn ǎ é sín wuntun alǒ Google gbɔn Supabase Auth gblamɛ) nú akpɔ́kpɔ́ sín xóɖɔɖókpɔ́ kpo xóɖɔɖókpɔ́ kpo.
 - **Offline Téléchargements** — Sɔ́ han lɛ kpo video lɛ kpo bo na dó ɖótó ɖò ɛntɛnɛti jí ǎ.
 - **Deep Linking** — Sɛ́n URL tɔn e è bló ɖó mɛɖesunɔ jí é bǐ mlɛ́mlɛ́ bo na dó hun/xo han lɛ, hanjijitɔ́ lɛ, albɔomu lɛ, kpo hanwema lɛ kpo gbɔn navigateur alǒ linki e è má lɛ é gblamɛ.
-- **Ad-Free & Reliable** — Tóɖómɛ e ma nɔ ɖó dogbó ǎ é ɖé wɛ bɔ è nɔ zán rélais e ɖò nuvo lɛ é (Last.fm, MusicBrainz, iTunes) bo nɔ na jiɖe ɖɔ è na xò nǔ.
+- **Ad-Free & Reliable** — Tóɖiɖó ma ɖó dogbó bɔ è nɔ zán rélais e ɖò nuvo lɛ é (Last.fm, MusicBrainz, iTunes) bo nɔ na jiɖe ɖɔ è na xò nǔ.
 
 ---
 
@@ -144,56 +143,6 @@ Tunefy tɔjihun lɛ kpo **lilɛdógbeɖevomɛ bĭ** kpo ɖò gbè 14 mɛ (gɔ́ 
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
 Sɔ́ gbè ɔ ɖó **Nǔjlajla lɛ → Gbè** mɛ (alǒ hɛn **Système** bonu é na mɔ nǔ jɛ mɛɖesunɔ wu).
-
----
-
-## 📸 Écran sín ɖiɖe lɛ
-
-### 🏠 Xwé & Alixlɛ́mɛ
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Écran d'accueil" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Xwégbe kpodo ayihunmlimlixotɔ kpɛvi kpo" />
-  <img src="images/library.jpg" width="30%" alt="Wemasɛxwetɛn" />
-</p>
-
-### 🔍 Ba
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Nǔ e è ba lɛ é" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Nǔ e è na ba lɛ é" />
-</p>
-
-### 🎵 Ayihunmlimlixotɔ
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Ayihunmlimlixotɔ́" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Ayihunmlimlixotɔ́ xóxó" />
-  <img src="images/song_queue.jpg" width="30%" alt="Han Tɛnmɛ" />
-</p>
-
-### 🎤 Xógbe lɛ
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Xógbe lɛ kpo Nǔ e è nɔ hɛn lɛ é kpo" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Xógbe e è ma ɖó ǎ lɛ é" />
-</p>
-
-### 👥 Gbɛta & Mɛɖesunɔ
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Nuɖuɖu Togun ɔ Tɔn" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Écran de profil" />
-</p>
-
-### ⚙️ Nǔjlajla lɛ kpo Mɛɖesunɔ Sín Nǔ lɛ kpo
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Nǔjlɛ́dónùwú" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Mɛ e nɔ sɔ́ xota lɛ é" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Accent sín sinmɛ" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Sinmɛ e è bló ɖó mɛɖesunɔ jí é" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Gbè e è nɔ sɔ́ é" />
-</p>
-
-### N️ Dó .
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Ðò Écran jí" />
-</p>
 
 ---
 
@@ -227,13 +176,13 @@ nǔ e nɔ nyì alɔ nú 403 e è sú ɖó IP jí é ɖò Googlevideo sín kancic
 |---|---|
 | **Azɔwanu** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **To ɔ sin nukplɔnmɛ** | [Riverpod](https://riverpod.dev/) |
-| **Moteur Audio** | [Just Audio](https://pub.dev/packages/just_audio) kpodo [Audio Service](https://pub.dev/packages/audio_service) kpo |
+| **Moteur Audio** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
 | **YouTube Ɖiɖe** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (fourche par [anandnet](https://github.com/anandnet)) |
 | **DJ AI tɔn** | Google Gemini (`gemini_service`) |
 | **Xógbe** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + mɔ̌to karaoke tɔn + DeepL lilɛdógbeɖevomɛ |
 | **Nǔ e è nɔ hɛn ɖ’ayǐ ɖò xá ɔ mɛ é** | [Hive](https://docs.hivedb.dev/) |
-| **Akpɔ́kpɔ́ Sínsɛ́n / Nǔjlɛ́dónùwú** | Supabase (Postgres + RLS, mɛɖée zízé jó & Google sín nyikɔ) |
-| **Kplékplé** | [Dio](https://pub.dev/packages/dio) kpodo [Http](https://pub.dev/packages/http) kpo |
+| **Akpɔ́kpɔ́ Sínsɛ́n / Nǔjlɛ́dónùwú** | Supabase (Postgres + RLS, mɛɖebǔ & Google sín nyikɔ) |
+| **Kplékplé** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
 | **Relais de flux** | FastAPI + yt-dlp ɖò Render jí (`server/`) |
 | **UI sín nǔ lɛ** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
@@ -270,7 +219,7 @@ nǔ e nɔ nyì alɔ nú 403 e è sú ɖó IP jí é ɖò Googlevideo sín kancic
    flutter build apk --split-per-abi
    ```
 
-> URL e nɔ jla akpɔ́kpɔ́ mɛ é ɖò `lib/utils/api_constants.dart` mɛ
+> URL e nɔ jla nǔ dó akpɔ́kpɔ́ mɛ é ɖò `lib/utils/api_constants.dart` mɛ
 > (`relayBaseUrl`), enɛ wu ɔ, è byɔ xɔgbigbá sín asya ɖé ǎ. Bo na dó xlɛ́ rélais towe ɖesu ɔ:
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
@@ -278,8 +227,8 @@ nǔ e nɔ nyì alɔ nú 403 e è sú ɖó IP jí é ɖò Googlevideo sín kancic
 
 ## 🖥️ Sɛ̀nví e nɔ tɔ́n ɖò gudo lɛ é kpo
 
-### ☁️ Relais de flux de nuage — `server/` (è sɔ́ ɖó Render jí)
-É nɔ ɖeɖɛ URL YouTube xóɖiɖɔ tɔn ɖé **bo nɔ lɛ́ jla bytes lɛ** bɔ alokan ɔ kpo mɛ e nɔ ɖeɖɛ xó ɔ é kpo nɔ má IP ɖokpo .
+### ☁️ Akpɔ́kpɔ́ sín tɔsisa sín hlɔnhlɔn — `server/` (è sɔ́ ɖó Render jí)
+É nɔ ɖeɖɛ URL YouTube xóɖiɖɔ tɔn ɖé **bo nɔ lɛ́ jla bytes lɛ** bɔ alokan ɔ kpo xóɖíɖótɔ́ ɔ kpo nɔ má IP ɖokpo .
 (403gɔ́ ɔ ǎ). FastAPI + yt-dlp, Docker, tɛnmɛ vɔ̌nu.
 
 | Fífó | Nǔtinmɛ |
@@ -289,9 +238,9 @@ nǔ e nɔ nyì alɔ nú 403 e è sú ɖó IP jí é ɖò Googlevideo sín kancic
 | `GET /relay?videoId=X&key=K` | É nɔ sɔ́ byte xóɖiɖɔ tɔn lɛ ɖó tɛn tɔn mɛ (Range-aware → 206 nú biba) |
 
 `RELAY_KEY` env var e è má é ɖé wɛ cyɔn alɔ jí (é nɔ lɛ́vɔ na **401** é mɛvo). Mi jla: Render →
-**Root Directory = `server`**, Docker, **164⟧ = `/health`**. Kpɔ́n `server/README.md`.
+**Root Directory = `server`**, Docker, **Health Check = `/health`**. See `server/README.md`.
 
-### 🎵 Azɔwanu ɔ sín API — `backend/`
+### 🎵 App ɔ sín API — `backend/`
 Nǔ e è nɔ mɔ ɖò xójlawema lɛ mɛ é (YouTube Music gbɔn youtubei.js jí + xójlawema e ɖò nuvo lɛ é: Last.fm alɔkpa lɛ,
 MusicBrainz ɖetɔn & xwe wo).
 
@@ -301,18 +250,18 @@ MusicBrainz ɖetɔn & xwe wo).
 | `/api/trending` | Nǔ e ɖò jijɛ wɛ é |
 | `/api/charts` | YT Han ɖiɖe lɛ |
 | `/api/playlist/:id` | Nǔ e ɖò wěma ɔ mɛ lɛ é |
-| `/api/moods`, `/api/moods/:id` | Catégories & humeurs (Last.fm gǔfínfɔ́n) |
-| `/api/tags?tag=` | Han/albɔmu nukɔntɔn lɛ (Last.fm) |
+| `/api/moods`, `/api/moods/:id` | Catégories & humeurs (Last.fm gǔdo) |
+| `/api/tags?tag=` | Han/albɔmu ɖaxó ɖaxó lɛ (Last.fm) |
 | `/api/newreleases` | Nǔ yɔyɔ̌ e è ɖetɔ́n lɛ é (MusicBrainz) |
-| `/api/decades?year=` | Albɔmu lɛ gbɔn xwe wo mɛ (MusicBrainz) |
+| `/api/decades?year=` | Albɔmu lɛ ɖò xwè wǒ mɛ (MusicBrainz) |
 | `/api/categories` | Nǔjlɛ́dónùwú |
 
 **To ɔ mɛ:** `cd backend && npm install && npm start` (tɔjihunglintɛn 8000).
 **Sɔ́ (Vercel):** hɛn xójláwémá élɔ́ wá, **Root Directory = `backend`**. Kpɔ́n `backend/README.md`.
 
 ### 🗄️ Xójlawema — `supabase/`
-Postgres schema avec **Sécurité au niveau de ligne**: lignes de l’utilisateur sont scopés à `auth.uid()`, le catalogue est
-xà-kɛɖɛ nú mɛ e ma tuùn nyikɔ yetɔn ǎ lɛ é kpo azɔ̌ e è nɔ wà ɖò sinsɛnzɔ́ ɔ mɛ é kɛɖɛ kpo sixu wlan. Mi bló tomɛyiyi ɖò Supabase mɛ
+Postgres schema avec **Sécurité de niveau de ligne**: lignes de l’utilisateur sont scopés à `auth.uid()`, le catalogue est
+xà-kɛɖɛ nú mɛ e ma tuùn nyikɔ yetɔn ǎ lɛ é kpo azɔ̌ e è nɔ wà ɖò sinsɛnzɔ́ ɔ mɛ é kɛɖɛ kpo sixu wlan. Mi bló tomɛyiyi lɛ ɖò Supabase mɛ
 SQL Editeur (ɖò tito mɛ).
 
 ---
@@ -327,7 +276,7 @@ SQL Editeur (ɖò tito mɛ).
 4. **Sɔ́ Ala ɔ** (`git push origin feature/AmazingFeature`)
 5. **Hùn Byɔbyɔ Pull tɔn**
 
-**Alixlɛ́mɛ:** xwedó kodɛ sín alɔkpa e ko tíìn é, bló `flutter analyze` (é ɖó na mɛ́), bo tɛ́n nǔ yɔyɔ̌ lɛ kpɔ́n cobo sɛ́ dó.
+**Alixlɛ́mɛ:** xwedó kodɛ sín alɔkpa e ko tíìn é, bló `flutter analyze` (é ɖó na mɛ́), lobo tɛ́n nǔ yɔyɔ̌ lɛ kpɔ́n cobo sɛ́ dó.
 
 ---
 
@@ -336,7 +285,7 @@ SQL Editeur (ɖò tito mɛ).
 Tunefy na tíìn ǎ, enyi azɔ̌ ɖaxó ɖaxó e mɛ e nɔ bló nǔ lɛ é kpo azɔ̌ e è nɔ wà lɛ é kpo wà é ma tíìn ǎ ɔ.
 
 ### youtube_explode_dart
-É na cɛ nú**[Hexer10](https://github.com/Hexer10)**, mɛ e wlan wema nukɔntɔn ɔ é
+É na cɛ nú**[Hexer10](https://github.com/Hexer10)**, mɛ e wlan wema ɔ .
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — xú Tunefy tɔn .
 YouTube ɖiɖe — kpo**[anandnet](https://github.com/anandnet)** kpo nú fourche hwexónu tɔn e .
 nɔ hɛn Tunefy w’azɔ̌ kpo huzuhuzu YouTube yɔyɔ̌ lɛ kpo.
@@ -344,7 +293,7 @@ nɔ hɛn Tunefy w’azɔ̌ kpo huzuhuzu YouTube yɔyɔ̌ lɛ kpo.
 ### Animɛshi (n-ce) — tlolo-savn & ytify
 Mi do gbe nu**[Animesh (n-ce)](https://github.com/n-ce)**, mɛ e blo
 **[fast-saavn](https://github.com/n-ce/saavn)** (JioSaavn API e ɖò nuvo é wɛ nɔ na hlɔnhlɔn Tunefy sín xójlawema lɛ)
-kpo**[ytify](https://github.com/n-ce/ytify)** kpo (nǔ ɖaxó ɖé wɛ bo nɔ hɛn mɛ lidǒ).
+kpo**[ytify](https://github.com/n-ce/ytify)** kpo (nǔ e nɔ hɛn mɛ lidǒ é ɖaxó ɖé).
 
 ### Wemasɛxwetɛn e ɖò hunhun lɛ é
 | Paquet | Nǔwlantɔ́ / Mɛ e nɔ kpé nukún dó nǔ lɛ wu lɛ é |

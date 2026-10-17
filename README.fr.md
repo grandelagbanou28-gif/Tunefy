@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#-principales-fonctionnalités">Caractéristiques</a> ·
   <a href="#-localisation">Langues</a> ·
-  <a href="#-captures-décran">Captures d'écran</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#-configuration-et-installation">Configuration</a> ·
   <a href="#-serveurs-backend-et-streaming">Serveurs</a>
@@ -62,7 +61,7 @@ un compte.
 ## 🚀 Principales fonctionnalités
 
 ### 🎨 Liquid Glass UI/UX
-- **Thèmes Glassmorphic dynamiques** — Style premium en modes sombre et clair via `liquid_glass_easy`. Le mode Lumière utilise une teinte blanche semi-transparente qui s'adapte à la pochette de l'album.
+- **Thèmes Glassmorphic dynamiques** — Style premium en modes Sombre et Clair via `liquid_glass_easy`. Le mode Lumière utilise une teinte blanche semi-transparente qui s'adapte à la pochette de l'album.
 - **Shaders et flou personnalisés** — Panneaux et superpositions en verre dépoli hautes performances qui s'adaptent aux couleurs des illustrations.
 - **Éléments sensibles au contraste** — Les icônes de la barre d'état, les commandes, les curseurs et les menus s'inversent automatiquement pour plus de lisibilité.
 - **Optimisation grand écran et bureau** — Dispositions de lecteur réactives (jusqu'à 1 300 px), boîtes de dialogue centrées et barre de recherche supérieure dédiée pour ordinateur/tablette.
@@ -82,7 +81,7 @@ un compte.
 - **Smart Cache System** — Mise en cache asynchrone en arrière-plan de l'audio + illustrations multi-résolution pour une lecture instantanée et sans attente.
 
 ### 🌍 Découverte à travers plus de 15 sources
-Tunefy résout la lecture via une **cascade de repli automatique** entre ces fournisseurs (sans clé = aucune clé API nécessaire) :
+Tunefy résout la lecture via une **cascade de secours automatique** entre ces fournisseurs (sans clé = aucune clé API nécessaire) :
 
 | Source | Tapez | Remarques |
 |---|---|---|
@@ -147,56 +146,6 @@ Définissez la langue dans **Paramètres → Langue** (ou conservez **Système**
 
 ---
 
-## 📸 Captures d'écran
-
-### 🏠 Accueil et navigation
-<p align="center">
-  <img src="images/home.jpg" width="30%" alt="Écran d'accueil" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Maison avec mini-lecteur" />
-  <img src="images/library.jpg" width="30%" alt="Bibliothèque" />
-</p>
-
-### 🔍 Recherche
-<p align="center">
-  <img src="images/search_with _results.jpg" width="30%" alt="Résultats de la recherche" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Suggestions de recherche" />
-</p>
-
-### 🎵 Joueur
-<p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Lecteur immersif" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Joueur hérité" />
-  <img src="images/song_queue.jpg" width="30%" alt="File d'attente des chansons" />
-</p>
-
-### 🎤 Paroles
-<p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Paroles avec commandes" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Paroles sans contrôles" />
-</p>
-
-### 👥 Communauté et profil
-<p align="center">
-  <img src="images/community.jpg" width="30%" alt="Flux communautaire" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Écran de profil" />
-</p>
-
-### ⚙️ Paramètres et personnalisation
-<p align="center">
-  <img src="images/settings.jpg" width="30%" alt="Paramètres" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Sélecteur de thème" />
-  <img src="images/accent_color_selector.jpg" width="30%" alt="Couleur d'accentuation" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Couleur d'accent personnalisée" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Sélecteur de langue" />
-</p>
-
-### ℹ️ À propos
-<p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="À propos de l'écran" />
-</p>
-
----
-
 ## 🏗️Architecture
 
 ```
@@ -228,7 +177,7 @@ ce qui évite le 403 verrouillé par IP sur les liens vidéo Google.
 | **Cadre** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
 | **Gestion de l'État** | [Riverpod](https://riverpod.dev/) |
 | **Moteur audio** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTubeExtraction** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (fourchette par [anandnet](https://github.com/anandnet)) |
+| **YouTube Extraction** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (fourchette par [anandnet](https://github.com/anandnet)) |
 | **DJ IA** | Google Gemini (`gemini_service`) |
 | **Paroles** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + moteur de karaoké personnalisé + traduction DeepL |
 | **Stockage local** | [Hive](https://docs.hivedb.dev/) |
@@ -244,8 +193,8 @@ ce qui évite le 403 verrouillé par IP sur les liens vidéo Google.
 ### Prérequis
 - Flutter SDK (dernière version stable)
 - Dart SDK
-- Android Studio / Code VS
-- Java JDK 17
+- Android Studio / VS Code
+- JavaJDK 17
 
 ### Installation
 
@@ -279,7 +228,7 @@ ce qui évite le 403 verrouillé par IP sur les liens vidéo Google.
 ## 🖥️ Serveurs backend et streaming
 
 ### ☁️ Cloud Stream Relay — `server/` (déployé sur Render)
-Résout une URL audio YouTube** et relaie les octets** afin que le téléphone et le résolveur partagent une seule IP
+Résout une URL audio YouTube **et relaie les octets** afin que le téléphone et le résolveur partagent une seule adresse IP
 (n° 403). FastAPI + yt-dlp, Docker, niveau gratuit.
 
 | Point de terminaison | Descriptif |
@@ -288,8 +237,8 @@ Résout une URL audio YouTube** et relaie les octets** afin que le téléphone e
 | `GET /stream?videoId=X&key=K` | Résout via yt-dlp → renvoie une URL `…/relay` (200 uniquement si elle est résolue) |
 | `GET /relay?videoId=X&key=K` | Proxy les octets audio (Range-aware → 206 pour la recherche) |
 
-Protégé par une variable d'environnement `RELAY_KEY` partagée (renvoie **401** sans elle). Déployer : Render →
-**Root Directory = `server`**, Docker, **Health Check = `/health`**. Voir `server/README.md`.
+Protégé par une variable d'environnement `RELAY_KEY` partagée (renvoie **401** sans elle). Deploy: Render →
+**Root Directory = `server`**, Docker, **Health Check = `/health`**. See `server/README.md`.
 
 ### 🎵API de l'application — `backend/`
 Le backend données/recherche (YouTube Music via youtubei.js + open sources : Last.fm genres,
@@ -338,13 +287,13 @@ Tunefy n'existerait pas sans le travail incroyable de ces développeurs et proje
 ### youtube_explode_dart
 Merci à**[Hexer10](https://github.com/Hexer10)**, auteur original de
 [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — l'épine dorsale des Tunefy
-YouTube streaming — et**[anandnet](https://github.com/anandnet)** pour le fork à jour qui
-permet à Tunefy de fonctionner avec les dernières modifications YouTube.
+YouTube streaming — and**[anandnet](https://github.com/anandnet)** for the up-to-date fork that
+continue à Tunefy de fonctionner avec les dernières YouTube modifications.
 
 ### Animesh (n-ce) — saavn rapide & ytify
 Merci à**[Animesh (n-ce)](https://github.com/n-ce)**, créateur de
-**[fast-saavn](https://github.com/n-ce/saavn)** (l'API ouverte JioSaavn qui alimente les métadonnées de Tunefy)
-et**[ytify](https://github.com/n-ce/ytify)** (une énorme source d'inspiration).
+**[fast-saavn](https://github.com/n-ce/saavn)** (the open JioSaavn API powering Tunefy's metadata)
+and**[ytify](https://github.com/n-ce/ytify)** (a huge source of inspiration).
 
 ### Bibliothèques open source
 | Forfait | Auteur/mainteneurs |
