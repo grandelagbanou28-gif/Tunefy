@@ -1,0 +1,3 @@
+services:
+  - name: yt-dlp-server
+    source: Dockerfile

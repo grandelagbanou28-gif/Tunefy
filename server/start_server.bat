@@ -1,0 +1,3 @@
+@echo off
+echo Starting Muzo home stream server on port 8123...
+start "MuzoStreamServer" /min cmd /c "python C:\flutter\s_potify\Muzo-v4\server\home_stream_server.py"

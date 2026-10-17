@@ -6,6 +6,11 @@ import 'package:muzo/services/musicbrainz_service.dart';
 import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/services/spotify_unofficial_service.dart';
 import 'package:muzo/services/itunes_api_service.dart';
+import 'package:muzo/services/openverse_service.dart';
+import 'package:muzo/services/wikimedia_commons_service.dart';
+import 'package:muzo/services/invidious_service.dart';
+import 'package:muzo/services/beatport_service.dart';
+import 'package:muzo/services/dailymotion_service.dart';
 import 'package:muzo/services/muzo_api_service.dart';
 import 'package:muzo/services/storage_service.dart';
 
@@ -40,6 +45,14 @@ class MultiApiService {
       _safe(() => ItunesApiService().searchSongsFrUs(query, limit: 10),
           'iTunes'),
       _safe(() => DeezerApiService().searchTracks(query, limit: 10), 'Deezer'),
+      _safe(() => OpenverseService().searchTracks(query, limit: 8), 'Openverse'),
+      _safe(() => WikimediaCommonsService().searchTracks(query, limit: 8),
+          'Wikimedia'),
+      _safe(() => InvidiousService().searchTracks(query, limit: 8),
+          'Invidious'),
+      _safe(() => BeatportService().searchTracks(query, limit: 8), 'Beatport'),
+      _safe(() => DailymotionService().searchTracks(query, limit: 8),
+          'Dailymotion'),
     ];
 
     final results = await Future.wait(futures, eagerError: false);

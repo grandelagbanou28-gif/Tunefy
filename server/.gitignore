@@ -1,0 +1,7 @@
+# Binaries / caches — the Dockerfile re-downloads yt-dlp at build time.
+yt-dlp.exe
+yt-dlp
+__pycache__/
+*.pyc
+cookies.txt
+.env
