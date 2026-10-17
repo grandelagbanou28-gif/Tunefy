@@ -13,20 +13,26 @@ final authServiceProvider = ChangeNotifierProvider<AuthService>((ref) {
 class AuthService extends ChangeNotifier {
   final StorageService _storage;
   static const String _baseUrl = 'https://tunefy-api.onrender.com/api/auth';
-  // Google OAuth web client, configured in the Supabase Google provider. The
-  // idToken audience MUST be this client so Supabase accepts it
-  // (grant_type=id_token). The same client also authorizes this Android app
-  // (package + SHA-1) in Google Console.
+  // Android OAuth client (package com.tunefy.music + SHA-1). Used as the
+  // google_sign_in clientId on Android — the app ships no google-services.json.
+  static const String _googleAndroidClientId =
+      '88850270860-7b62gg45p99u6cra7glp5vqch4jtt8sh.apps.googleusercontent.com';
+
+  // Google OAuth web client, configured in the Supabase Google provider. Its ID
+  // is the idToken audience (grant_type=id_token) that Supabase validates; its
+  // secret lives only in the Supabase Google provider.
   static const String _googleWebClientId =
       '88850270860-0ce88nto9te6p359m016t7kb269i04ok.apps.googleusercontent.com';
 
   late final GoogleSignIn _googleSignIn = GoogleSignIn(
-    // This app ships NO google-services.json, so the client is passed
-    // explicitly on every platform. The SAME web client also authorizes this
-    // Android app (package + SHA-1) in Google Console. serverClientId makes the
-    // returned idToken carry this client as its audience — exactly what the
-    // Supabase Google provider validates (grant_type=id_token).
-    clientId: _googleWebClientId,
+    // No google-services.json ships, so both clients are passed explicitly:
+    //  - Android authenticates with its own Android client (clientId).
+    //  - serverClientId (the web client) makes the returned idToken carry the
+    //    WEB client as its audience — exactly what the Supabase Google provider
+    //    checks on grant_type=id_token.
+    clientId: defaultTargetPlatform == TargetPlatform.android
+        ? _googleAndroidClientId
+        : _googleWebClientId,
     serverClientId: _googleWebClientId,
     scopes: ['email', 'profile'],
   );
