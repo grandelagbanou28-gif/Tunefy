@@ -22,9 +22,13 @@ class ApiConstants {
   /// Cloud stream relay (server/main.py on Render). Resolves AND relays the
   /// audio bytes so the phone's requests share the relay's public IP — this
   /// avoids the HTTP 403 a bare googlevideo URL returns when the phone's IP
-  /// differs from the one that resolved it. Empty until the Render service is
-  /// deployed; set at build: --dart-define=RELAY_BASE_URL=https://....
-  static const String relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');
+  /// differs from the one that resolved it. Deployed at tunefy-relay.onrender.com
+  /// (yt-dlp resolves cleanly on Render's IP; Vercel's shared IPs are bot-blocked).
+  /// Override at build: --dart-define=RELAY_BASE_URL=https://....
+  static const String relayBaseUrl = String.fromEnvironment(
+    'RELAY_BASE_URL',
+    defaultValue: 'https://tunefy-relay.onrender.com',
+  );
 
   /// Shared secret (RELAY_KEY env on Render). Sent as `key` on /stream so the
   /// public relay URL cannot be used as a free proxy to drain the free tier.
