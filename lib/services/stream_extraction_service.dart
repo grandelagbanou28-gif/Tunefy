@@ -8,6 +8,7 @@ import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:muzo/models/muzo_item.dart';
+import 'package:muzo/utils/api_constants.dart';
 import 'package:muzo/services/deezer_api_service.dart';
 import 'package:muzo/services/jamendo_api_service.dart';
 import 'package:muzo/services/audius_api_service.dart';
@@ -434,17 +435,18 @@ class StreamExtractionService {
   }
 
   /// yt-dlp proxies, all answering `GET /api/stream?videoId=…` (and
-  /// `&kind=video` for the video track). The old onrender.com host is gone —
-  /// the project moved to Vercel — which is why playback had no source left.
-  static const List<String> cloudYtDlpBases = [
-    'https://tunefy-ytdlp.vercel.app',
-    'https://vercel-proxy-murex-tau.vercel.app',
-  ];
-
-  static const String cloudYtDlpBase = 'https://tunefy-ytdlp.vercel.app';
-
-  static const String cloudBackupYtDlpBase =
-      'https://vercel-proxy-murex-tau.vercel.app';
+  /// `&kind=video` for the video track).
+  ///
+  /// Débranchés le 2026-10-17, mesurés depuis le réseau de l'utilisateur :
+  /// `tunefy-ytdlp.vercel.app` répond 502 `Sign in to confirm you're not a
+  /// bot` en 17,9 s et `vercel-proxy-murex-tau` 404 `no stream found` en
+  /// 17,2 s. La cause n'est pas l'hébergeur : YouTube refuse les IP de
+  /// datacenter sans cookies, donc Render, Railway ou Cloudflare échoueraient
+  /// de la même façon. Liste vide = plus aucun sondage de 12 s ni course
+  /// perdue d'avance. Pour brancher un relais qui marche (un PC de la maison),
+  /// Settings → `ytdlpServerUrl`, ou la table `app_config` côté Supabase, sans
+  /// recompiler.
+  static const List<String> cloudYtDlpBases = <String>[];
 
   /// Owns the cloud candidate list, the last known good base and the circuit
   /// breaker, so a moved server is handled at runtime instead of by a rebuild.
@@ -572,7 +574,14 @@ class StreamExtractionService {
     return url != null && url.isNotEmpty;
   }
 
-  static Future<String?> _localCachedStreamUrl(String videoId) async {
+  /// [verifyBytes] est pour la route de LECTURE uniquement : l'URL va être
+  /// confiée à ExoPlayer, donc on sentinelle aussi les hôtes « longue vie »
+  /// (relais loopback, CDNs) dont une copie périmée rend une page d'erreur 200
+  /// au lieu d'un morceau — le « None of the available extractors » du log
+  /// appareil. Le préchauffage (`isWarm`) laisse `false` : sonder dix URL par
+  /// rayon consumait le budget réseau sans jamais jouer le son.
+  static Future<String?> _localCachedStreamUrl(String videoId,
+      {bool verifyBytes = false}) async {
     try {
       final box = await _streamBox();
       final raw = box.get(videoId) as String?;
@@ -616,6 +625,18 @@ class StreamExtractionService {
         if (!await probeStreamUrl(url)) {
           debugPrint(
               'StreamExtraction: [LocalCache] dead googlevideo for $videoId — purging');
+          await box.delete(videoId);
+          return null;
+        }
+      } else if (verifyBytes && url.startsWith('http')) {
+        // Le statut HTTP ne dit rien du contenu : un relais qui répond 200 avec
+        // son message d'erreur empoisonnait la file (rejoué à chaque tap tant
+        // que l'entrée avait moins de 30 min). Un doute (pas de réponse à
+        // temps) laisse la copie en place : mieux vaut tenter un son lent
+        // que relancer une chasse de 60 s.
+        if (await sniffAudio(url) == false) {
+          debugPrint(
+              'StreamExtraction: [LocalCache] $videoId ne rend plus d\'audio — purge');
           await box.delete(videoId);
           return null;
         }
@@ -873,6 +894,54 @@ static Future<String?> ensurePlayableUrl(
     return null;
   }
 
+  /// Cloud relay on Render (server/main.py). It resolves AND relays the audio
+  /// bytes, so the phone's requests leave from the relay's public IP — this is
+  /// what avoids the HTTP 403 a bare googlevideo URL returns when the phone's
+  /// IP differs from the one that resolved it. Runs right after the PC-local
+  /// relay (which only exists when the PC is on + gnirehtet). Skipped entirely
+  /// until [ApiConstants.relayBaseUrl] is set, so a build without the relay
+  /// pays nothing.
+  static Future<String?> _tryCloudRelay(String videoId) async {
+    final base = ApiConstants.relayBaseUrl;
+    if (base.isEmpty) return null;
+    final client = http.Client();
+    try {
+      final uri = Uri.parse('$base/stream').replace(queryParameters: {
+        'videoId': videoId,
+        'kind': 'audio',
+        if (ApiConstants.relayKey.isNotEmpty) 'key': ApiConstants.relayKey,
+      });
+      final resp = await client
+          .get(uri)
+          // /stream resolves via yt-dlp (cold cache 5–20s); stay just under
+          // the caller's 30s race budget.
+          .timeout(const Duration(seconds: 28));
+      if (resp.statusCode == 200) {
+        final body = (jsonDecode(resp.body) as Map).cast<String, dynamic>();
+        final url = body['url'] as String?;
+        if (url != null && url.isNotEmpty) {
+          debugPrint('StreamExtraction: [CloudRelay] resolved via Render relay');
+          return url;
+        }
+      } else if (resp.statusCode == 401) {
+        debugPrint('StreamExtraction: [CloudRelay] RELAY_KEY mismatch (401)');
+      } else {
+        debugPrint('StreamExtraction: [CloudRelay] HTTP ${resp.statusCode}');
+        if (resp.statusCode == 502 && _relaySaysGone(resp.body)) {
+          reportVideoGone(videoId, 'cloudrelay');
+        }
+      }
+    } on TimeoutException {
+      // Render free tier cold-starts ~30s after idle; that is slow, not dead.
+      debugPrint('StreamExtraction: [CloudRelay] no answer in 28s');
+    } catch (e) {
+      debugPrint('StreamExtraction: [CloudRelay] $e');
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
   /// The relay runs yt-dlp with its own client, so its "unavailable" is a
   /// verdict about the upload (removed, private, or — the common case here — a
   /// label whose country whitelist excludes this one). `gone` is the explicit
@@ -896,6 +965,8 @@ static Future<String?> ensurePlayableUrl(
     //    costs nothing while absent and fixes YouTube-blocked playback when up.
     final local = await _tryLocalServer(videoId);
     if (local != null) return local;
+    final cloudRelay = await _tryCloudRelay(videoId);
+    if (cloudRelay != null) return cloudRelay;
     final loopback = await _tryFreedify(videoId);
     if (loopback != null) return loopback;
 
@@ -1230,18 +1301,113 @@ static Future<String?> ensurePlayableUrl(
     return c == w || c.contains(w) || w.contains(c);
   }
 
+  /// Le HEAD n'est pas une preuve : le CDN d'extraits Deezer et le validator
+  /// Audius répondent 405 ou se taisent sur cette requête alors que le mp3
+  /// coule parfaitement en GET. Mesuré le 2026-10-17 sur l'appareil —
+  /// « [Deezer] https://cdnt-preview.dzcdn.net/… .mp3 does not serve media »
+  /// sur une vraie URL d'extrait — et ce secours est précisément ce qui
+  /// garantit un son quand YouTube refuse l'upload. Un refus de HEAD est donc
+  /// revérifié sur les octets, pas accepté.
   static Future<String?> _validatedFallback(String url, String label) async {
     if (url.isEmpty) return null;
     final client = http.Client();
     try {
-      if (!await _servesMedia(client, Uri.parse(url))) {
-        debugPrint('StreamExtraction: [$label] $url does not serve media');
-        return null;
-      }
-      return url;
+      if (await _servesMedia(client, Uri.parse(url))) return url;
     } finally {
       client.close();
     }
+    if (await sniffAudio(url) == true) {
+      debugPrint('StreamExtraction: [$label] HEAD refusé, GET audio confirmé');
+      return url;
+    }
+    debugPrint('StreamExtraction: [$label] $url does not serve media');
+    return null;
+  }
+
+  /// L'entête client qu'ExoPlayer envoie à la lecture : un sniff qui utilise un
+  /// autre entête peut être refusé par un CDN qui joue très bien la même URL.
+  static const String playerUserAgent =
+      'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Mobile Safari/537.36';
+
+  /// Trois réponses, pas deux : `true` = l'entête est un conteneur audio,
+  /// `false` = le serveur refuse (statut non-2xx) ou rend autre chose (page
+  /// HTML), `null` = il n'a pas répondu à temps. Le doute ne purge JAMAIS une
+  /// URL — un CDN lent se joue très bien — seul un refus avéré écarte le
+  /// secours ou la copie en cache.
+  static Future<bool?> sniffAudio(String url) async {
+    if (url.isEmpty) return false;
+    final client = http.Client();
+    final head = <int>[];
+    try {
+      final request = http.Request('GET', Uri.parse(url))
+        ..headers['Range'] = 'bytes=0-31'
+        ..headers['User-Agent'] = playerUserAgent;
+      final response =
+          await client.send(request).timeout(const Duration(seconds: 5));
+      if (response.statusCode < 200 || response.statusCode >= 300) return false;
+      await _readLead(response.stream, head)
+          .timeout(const Duration(seconds: 5), onTimeout: () {});
+    } on TimeoutException {
+      return null;
+    } catch (e) {
+      debugPrint('StreamExtraction: [Sniff] $url — $e');
+      return null;
+    } finally {
+      client.close();
+    }
+    if (head.length < 12) return null;
+    return looksLikeAudioBytes(Uint8List.fromList(head));
+  }
+
+  /// Lit au plus [want] octets puis se détache : `break` dans l'`await for`
+  /// annule l'abonnement, donc le corps du morceau n'est jamais téléchargé
+  /// pour une simple vérification d'entête.
+  static Future<void> _readLead(
+      Stream<List<int>> stream, List<int> sink,
+      {int want = 32}) async {
+    try {
+      await for (final chunk in stream) {
+        sink.addAll(chunk);
+        if (sink.length >= want) break;
+      }
+    } catch (_) {
+      // client.close() peut interrompre le flux pendant l'abandon du sniff :
+      // rien d'exploitable à remonter.
+    }
+  }
+
+  /// Sniff d'entête de conteneur audio — une page d'erreur HTTP renvoyée 200
+  /// par un proxy mourant ne doit jamais atteindre ExoPlayer (il échoue en
+  /// « None of the available extractors could read the stream »), et à
+  /// l'inverse un vrai flux ne doit pas être jeté.
+  static bool looksLikeAudioBytes(Uint8List bytes) {
+    if (bytes.length < 12) return false;
+    final b = bytes;
+    // MP4/M4A/MOV: box size followed by 'ftyp'
+    if (b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70) {
+      return true;
+    }
+    // MP3: ID3 tag or MPEG audio frame sync
+    if (b[0] == 0x49 && b[1] == 0x44 && b[2] == 0x33) return true;
+    if (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) return true;
+    // WebM/Matroska EBML header
+    if (b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3) {
+      return true;
+    }
+    // Ogg/Opus
+    if (b[0] == 0x4F && b[1] == 0x67 && b[2] == 0x67 && b[3] == 0x53) {
+      return true;
+    }
+    // FLAC, WAV
+    if (b[0] == 0x66 && b[1] == 0x4C && b[2] == 0x61 && b[3] == 0x43) {
+      return true;
+    }
+    if (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46) {
+      return true;
+    }
+    // AAC (ADTS)
+    if (b.length > 3 && b[0] == 0xFF && (b[1] & 0xF6) == 0xF0) return true;
+    return false;
   }
 
   /// Jamendo fallback — cherche par titre+artiste dans le catalogue CC.
@@ -1603,7 +1769,8 @@ static Future<String?> ensurePlayableUrl(
     Set<String> avoidSources = const {},
   }) async {
     if (title == null || title.isEmpty) return null;
-    final cached = await _localCachedStreamUrl(videoId);
+    final cached =
+        await _localCachedStreamUrl(videoId, verifyBytes: true);
     if (cached != null) {
       debugPrint('StreamExtraction: [LocalCache] served seed $videoId');
       return cached;
@@ -1693,7 +1860,8 @@ static Future<String?> ensurePlayableUrl(
     }
 
     // 0. Local disk cache — instant, zero network
-    final localCached = await _localCachedStreamUrl(videoId);
+    final localCached =
+        await _localCachedStreamUrl(videoId, verifyBytes: true);
     if (localCached != null) {
       debugPrint('StreamExtraction: [LocalCache] served in ${overallStopwatch.elapsedMilliseconds}ms');
       return localCached;

@@ -157,11 +157,23 @@ async def stream(
     kind: str = Query("audio"),
     key: str = Query(""),
 ):
-    """Return a RELAY url for this server (never the raw googlevideo link)."""
+    """Resolve the video, then return a RELAY url for this server.
+
+    yt-dlp runs HERE (and warms the cache) so HTTP 200 means "this video
+    actually resolves" — a dead/geo-blocked video returns an error instead of
+    an optimistic URL that would stall the player. The player then streams from
+    /relay, which reuses the cached link (fast).
+    """
     if not _key_ok(request, key):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not VIDEO_ID_RE.match(videoId):
         return JSONResponse({"error": "invalid videoId"}, status_code=400)
+    try:
+        await _resolve_url(videoId)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "yt-dlp timed out"}, status_code=504)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)[:300]}, status_code=502)
     base = _self_base(request)
     # kind is accepted for app compatibility; audio is what plays music.
     relay = f"{base}/relay?videoId={videoId}"
