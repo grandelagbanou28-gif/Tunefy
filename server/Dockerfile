@@ -16,4 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 EXPOSE 8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Shell form so $PORT is expanded: Render (and Railway/Fly) inject the port to
+# bind; local runs fall back to 8080. Exec form would bake in a fixed port and
+# fail the platform health check.
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
