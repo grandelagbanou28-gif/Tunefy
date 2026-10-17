@@ -29,7 +29,19 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <b>Français</b>
+  <b>Français</b> ·
+  <a href="README.fo.md">Fongbé</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.de.md">Deutsch</a> ·
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.it.md">Italiano</a> ·
+  <a href="README.ru.md">Русский</a> ·
+  <a href="README.ar.md">العربية</a> ·
+  <a href="README.hi.md">हिन्दी</a> ·
+  <a href="README.id.md">Bahasa Indonesia</a> ·
+  <a href="README.vi.md">Tiếng Việt</a> ·
+  <a href="README.tr.md">Türkçe</a> ·
+  <a href="README.zh.md">中文（简体）</a>
 </p>
 
 ---
