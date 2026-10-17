@@ -157,7 +157,10 @@ class StreamExtractionService {
         // works when YouTube bot-checks every direct source, and asking it costs
         // under a second when no relay is running. It used to be consulted only
         // at playback time, so a playable shelf was rated unplayable here.
-        _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 25))),
+        // The relay path budgets ~45s: the Render instance itself may still be
+        // booting (~27s) on top of yt-dlp's 5–20s resolve. Under-budgeting this
+        // is what silently killed every play made while the PC was off.
+        _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 45))),
         if (title != null && title.isNotEmpty)
           _getJamendoFallbackUrl(title, artist ?? '')
               .timeout(const Duration(seconds: 14)),
@@ -221,9 +224,14 @@ class StreamExtractionService {
             durationSeconds: durationSeconds,
           ).timeout(const Duration(seconds: 15))),
         // A seed id is not a YouTube video, so the relay can only burn its full
-        // budget on it; those items are matched by title alone.
+        // budget on it; those items are matched by title alone. This is shelf
+        // enrichment, resolved in batches of three while the home screen waits:
+        // a shorter budget than playback's (45s) keeps a fully dead cascade
+        // from freezing the home for minutes, and the tap itself re-resolves
+        // with the full budget anyway.
         if (!isMetadataSeedId(videoId))
-          _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 25))),
+          _quiet(
+              _getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 32))),
       ]);
     } catch (_) {}
     return null;
@@ -240,6 +248,7 @@ class StreamExtractionService {
     List<MuzoItem> items, {
     int maxN = 12,
   }) async {
+    warmCloudRelay(); // boots the relay while the user is still browsing
     final out = <MuzoItem>[];
     final futures = <Future<void>>[];
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -894,6 +903,42 @@ static Future<String?> ensurePlayableUrl(
     return null;
   }
 
+  /// Pings the Render relay without waiting for it. The free instance sleeps
+  /// after 15 idle minutes and needs ~27s to boot (measured on the live
+  /// service), while a play only budgets ~45s for the whole yt-dlp path — so a
+  /// play issued right after idle used to lose the race against the boot and
+  /// report "no stream" even though the relay was healthy. Firing this when a
+  /// shelf resolves (i.e. the moment the app opens) boots the instance while
+  /// the user is still browsing, so the tap that follows lands on a warm
+  /// relay. Throttled to one ping per 10 minutes.
+  static DateTime? _lastRelayWarmAt;
+
+  static void warmCloudRelay() {
+    final base = ApiConstants.relayBaseUrl;
+    if (base.isEmpty) return;
+    final now = DateTime.now();
+    final last = _lastRelayWarmAt;
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+      return;
+    }
+    _lastRelayWarmAt = now;
+    _pingRelayHealth(base);
+  }
+
+  static Future<void> _pingRelayHealth(String base) async {
+    final client = http.Client();
+    try {
+      await client
+          .get(Uri.parse('$base/health'))
+          .timeout(const Duration(seconds: 60));
+    } catch (_) {
+      // Speculative either way: a cold instance answers late, a dead one never
+      // answers, and the play itself re-runs the whole cascade regardless.
+    } finally {
+      client.close();
+    }
+  }
+
   /// Cloud relay on Render (server/main.py). It resolves AND relays the audio
   /// bytes, so the phone's requests leave from the relay's public IP — this is
   /// what avoids the HTTP 403 a bare googlevideo URL returns when the phone's
@@ -913,9 +958,10 @@ static Future<String?> ensurePlayableUrl(
       });
       final resp = await client
           .get(uri)
-          // /stream resolves via yt-dlp (cold cache 5–20s); stay just under
-          // the caller's 30s race budget.
-          .timeout(const Duration(seconds: 28));
+          // /stream resolves via yt-dlp (5–20s) and the instance itself may
+          // still be booting (~27s cold). 40s leaves room for both while
+          // staying under the caller's 45s race budget.
+          .timeout(const Duration(seconds: 40));
       if (resp.statusCode == 200) {
         final body = (jsonDecode(resp.body) as Map).cast<String, dynamic>();
         final url = body['url'] as String?;
@@ -1954,8 +2000,12 @@ static Future<String?> ensurePlayableUrl(
       // only as the dead-googlevideo retry: when YouTube bot-checks every direct
       // source it returns no URL at all, so the retry never fired and the relay
       // went unused. Cheap when absent (<1s refused), the fix when present.
+      // 45s, not 30: on a phone with the PC off this is the cloud relay, which
+      // may still be booting (~27s on Render's free tier) on top of yt-dlp's
+      // 5–20s resolve. The old 30s budget cut it off every single time, which
+      // is what made playback fail while the PC was off.
       if (!avoidSources.contains('ytdlp'))
-        ('ytdlp', _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 30)))),
+        ('ytdlp', _quiet(_getYtDlpStreamUrl(videoId).timeout(const Duration(seconds: 45)))),
       if (!avoidSources.contains('invidious') && !_isDown('invidious'))
         (
           'invidious',
