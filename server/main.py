@@ -22,6 +22,7 @@ Deploy free on Render / Railway / Fly.io (Dockerfile + railway.json provided).
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import re
 import time
@@ -36,6 +37,19 @@ app = FastAPI(title="Tunefy Relay", version="1.0.0")
 
 YT_DLP_BIN = os.getenv("YT_DLP_BIN", "yt-dlp")
 COOKIES_PATH = os.getenv("COOKIES_PATH", "")
+
+# Shared secret protecting /stream and /relay. Without it, anyone who finds
+# this server's URL can relay arbitrary YouTube audio through it and drain the
+# free-tier bandwidth. Set the RELAY_KEY env var on Render (any long random
+# string). While unset the relay stays OPEN (dev convenience) and warns loudly.
+RELAY_KEY = os.getenv("RELAY_KEY", "").strip()
+
+if not RELAY_KEY:
+    print(
+        "WARNING: RELAY_KEY not set — the relay is OPEN to anyone who finds "
+        "this URL. Set the RELAY_KEY env var on Render.",
+        flush=True,
+    )
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -119,6 +133,18 @@ def _self_base(request: Request) -> str:
     return f"{proto}://{host}"
 
 
+def _key_ok(request: Request, key: str) -> bool:
+    """True if the request carries the shared RELAY_KEY (or none is set).
+
+    Accepts the key as a `key` query param or an `X-Relay-Key` header, so the
+    app can pass it either way. Timing-safe comparison.
+    """
+    if not RELAY_KEY:
+        return True  # not configured -> open (dev only)
+    provided = key or request.headers.get("x-relay-key", "")
+    return hmac.compare_digest(provided.encode(), RELAY_KEY.encode())
+
+
 @app.get("/health")
 async def health():
     return PlainTextResponse("ok")
@@ -129,18 +155,31 @@ async def stream(
     request: Request,
     videoId: str = Query(...),
     kind: str = Query("audio"),
+    key: str = Query(""),
 ):
     """Return a RELAY url for this server (never the raw googlevideo link)."""
+    if not _key_ok(request, key):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not VIDEO_ID_RE.match(videoId):
         return JSONResponse({"error": "invalid videoId"}, status_code=400)
     base = _self_base(request)
     # kind is accepted for app compatibility; audio is what plays music.
-    return JSONResponse({"url": f"{base}/relay?videoId={videoId}"})
+    relay = f"{base}/relay?videoId={videoId}"
+    if RELAY_KEY:
+        # Carry the key so the app only needs to send it on /stream once.
+        relay += f"&key={RELAY_KEY}"
+    return JSONResponse({"url": relay})
 
 
 @app.get("/relay")
-async def relay(videoId: str = Query(...), request: Request = None):
+async def relay(
+    videoId: str = Query(...),
+    request: Request = None,
+    key: str = Query(""),
+):
     """Proxy the audio bytes through this server, forwarding Range for seek."""
+    if not _key_ok(request, key):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not VIDEO_ID_RE.match(videoId):
         return JSONResponse({"error": "invalid videoId"}, status_code=400)
 
