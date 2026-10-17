@@ -1,30 +1,30 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Tunefy-Logo" width="150" height="150" />
+  <img src="assets/logo.png" alt="Tunefy Logo" width="150" height="150" />
 </p>
 
 <h1 align="center">Tunefy</h1>
 
 <p align="center">
-  <strong>Ein leistungsfähiger, auf Datenschutz ausgerichteter Musikclient, gebaut mit Flutter.</strong><br/>
-  Ohne Werbung · Offline · AI DJ · Synchrone & übersetzte Lyrics · Liquid Glass UI · 15 Quellen · Kein Konto erforderlich
+<strong>Ein leistungsstarker, datenschutzorientierter Musik-Client, der mit Flutter.</strong><br/> erstellt wurde
+  Werbefrei · Offline · KI-DJ · Synchronisierte und übersetzte Liedtexte · Liquid Glass Benutzeroberfläche · 15 Quellen · Kein Konto erforderlich
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter" />
   <img src="https://img.shields.io/badge/Dart-3.x-0175C2?logo=dart&logoColor=white" alt="Dart" />
   <img src="https://img.shields.io/badge/Version-3.9.0-brightgreen" alt="Version" />
-  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web%20%7C%20Windows-lightgrey" alt="Plattform" />
-  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Sprachen" />
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="Lizenz" />
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web%20%7C%20Windows-lightgrey" alt="Platform" />
+  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Languages" />
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
 <p align="center">
-  <a href="#-key-features">Funktionen</a> ·
-  <a href="#-localisation">Sprachen</a> ·
+  <a href="#-hauptmerkmale">Funktionen</a> ·
+  <a href="#-lokalisierung">Sprachen</a> ·
   <a href="#-screenshots">Screenshots</a> ·
-  <a href="#-architecture">Architektur</a> ·
-  <a href="#-setup--installation">Einrichtung</a> ·
-  <a href="#-backend--streaming-servers">Server</a>
+  <a href="#-architektur">Architektur</a> ·
+  <a href="#-einrichtung-und-installation">Einrichtung</a> ·
+  <a href="#-backend--und-streaming-server">Server</a>
 </p>
 
 <p align="center">
@@ -46,92 +46,92 @@
 
 ---
 
-Tunefy ist ein funktionsreicher, auf Datenschutz ausgerichteter Musikclient, gebaut mit Flutter. Er streamt aus
-**15+ offenen und schlüsselfreien Quellen** mit automatischer Fallback-Kaskade, sodass ein Titel, der bei einem
-Anbieter fehlschlägt, beim nächsten abgespielt wird. Er bietet ein Premium-Erlebnis ohne Werbung mit Wiedergabe im
-Hintergrund, Offline-Downloads, synchronisierten **und übersetzten** Lyrics, einem **AI DJ**, Internetradio,
-Konzerten, gemeinsamen Blend-Wiedergabelisten, einer modernen Liquid Glass UI und intelligentem
-Hintergrund-Caching – mit oder ohne Konto.
+Tunefy ist ein funktionsreicher, datenschutzorientierter Musik-Client, der mit Flutter erstellt wurde. Es strömt aus
+**15+ offene und schlüssellose Quellen** mit einer automatischen Fallback-Kaskade, also ein Track, der bei einer ausfällt
+Anbieter spielt auf den nächsten. Es bietet ein werbefreies Premium-Erlebnis mit Hintergrundwiedergabe,
+Offline-Downloads, synchronisierte **und übersetzte** Liedtexte, ein **KI-DJ**, Internetradio, Konzerte,
+Gemeinsame Blend-Wiedergabelisten, eine moderne Liquid Glass-Benutzeroberfläche und intelligentes Hintergrund-Caching – mit oder ohne
+ein Konto.
 
 > [!NOTE]
-> Tunefy wird direkt aus diesem Repository verteilt (APK-Releases). Es ist **nicht** im
-> Google Play Store verfügbar.
+> Tunefy wird direkt aus diesem Repository vertrieben (APK-Versionen). Es ist **nicht** verfügbar
+> auf der Google Play Store.
 
 ---
 
-## 🚀 Hauptfunktionen
+## 🚀 Hauptmerkmale
 
 ### 🎨 Liquid Glass UI/UX
-- **Dynamische Glassmorphic-Themes** — Premium-Darstellung in Dark- und Light-Modus über `liquid_glass_easy`. Der Light-Modus verwendet einen halbtransparenten weißen Farbton, der sich dem Albumcover anpasst.
-- **Eigene Shader & Blur** — Hochleistungs-Mattglas-Panels und -Overlays, die sich den Farben des Artworks anpassen.
-- **Kontrastbewusste Elemente** — Symbole der Statusleiste, Bedienelemente, Schieberegler und Menüs invertieren automatisch für bessere Lesbarkeit.
-- **Optimierung für große Displays & Desktop** — Responsive Player-Layouts (bis zu 1300px), zentrierte Dialoge und eine eigene Suchleiste oben für Desktop/Tablet.
+- **Dynamische glasmorphische Themen** – Premium-Styling in den Modi Dunkel und Hell über `liquid_glass_easy`. Der Lichtmodus verwendet einen halbtransparenten Weißton, der sich dem Albumcover anpasst.
+- **Benutzerdefinierte Shader und Unschärfe** – Hochleistungs-Milchglasscheiben und Overlays, die sich an die Farben von Kunstwerken anpassen.
+- **Kontrastbewusste Elemente** – Statusleistensymbole, Steuerelemente, Schieberegler und Menüs werden zur besseren Lesbarkeit automatisch invertiert.
+- **Großbildschirm- und Desktop-Optimierung** – Responsive Player-Layouts (bis zu 1300 Pixel), zentrierte Dialoge und eine spezielle obere Suchleiste für Desktop/Tablet.
 
-### 🎧 Immersives Audio, Lyrics & Karaoke
-- **Karaoke Wort für Wort** — Die Wörter färben sich in Echtzeit, während der Künstler singt (60+ FPS).
-- **Zeilenweiser synchronisierter Sweep** — Fortschreitender Sweep-Effekt mit Hervorhebung der aktiven Zeile und sanftem Scrollen.
-- **Übersetzte Lyrics** — Die Lyrics werden maschinell (DeepL) in die Sprache der App übersetzt.
-- **Lofi-Modus** — Macht jeden Titel zum Lofi-Vibe: um 0,9× verlangsamt, Tonhöhenkorrektur, nativer Hall.
-- **Equalizer & native Effekte** — Systemweiter EQ mit Wiedergabe im Hintergrund und Audio bei ausgeschaltetem Bildschirm.
-- **Mehrsprachiges Audio & Qualitätskontrolle** — Erkennt verfügbare Audiosprachen und streamt in High/Medium/Low-Qualität.
+### 🎧 Fesselndes Audio, Texte und Karaoke
+- **Wort-für-Wort-Karaoke** – Wörter füllen sich in Echtzeit mit Farbe, während der Künstler singt (60+ FPS).
+- **Zeilenweiser synchronisierter Sweep** – Progressiver Sweep-Effekt mit aktiver Zeilenhervorhebung und sanftem Scrollen.
+- **Übersetzte Liedtexte** – Liedtexte werden im Handumdrehen maschinell in die Sprache Ihrer App übersetzt (DeepL).
+- **Lofi-Modus** – Verwandeln Sie jeden Track in eine Lofi-Atmosphäre: 0,9-fache Verlangsamung, Tonhöhenkorrektur, nativer Hall.
+- **Equalizer und native Effekte** – EQ auf Systemebene mit Hintergrundwiedergabe und Screen-Off-Audio.
+- **Mehrsprachige Audio- und Qualitätskontrolle** – Erkennen Sie verfügbare Audiosprachen und streamen Sie in hoher/mittlerer/niedriger Qualität.
 
-### 🤖 AI DJ & Personalisierung
-- **AI DJ-Assistent (Gemini)** — Ein konversationeller DJ, der Ihren Geschmack versteht, intelligente Wiedergabelisten erstellt und Wünsche entgegennimmt.
-- **Geschmackssignale** — Die Bewertung des Geschmacks pro Titel lernt, was Sie lieben, und steuert Empfehlungen.
-- **Wrapped & Hörstatistiken** — Ihr Jahresrückblick: Top-Künstler, Stimmungen und Hör-Kapseln.
-- **Intelligentes Cache-System** — Asynchrones Caching von Audio + Artwork in mehreren Auflösungen im Hintergrund für sofortige Wiedergabe ohne Wartezeit.
+### 🤖 KI-DJ & Personalisierung
+- **AI DJ Assistant (Gemini)** – Ein gesprächiger DJ, der Ihren Geschmack erkennt, intelligente Playlists erstellt und Anfragen entgegennimmt.
+- **Geschmackssignale** – Die Geschmacksbewertung pro Titel erfährt, was Sie lieben, und führt zu Empfehlungen.
+- **Wrapped & Hörstatistiken** – Ihr Jahresrückblick: Top-Künstler, Stimmungen und Hörkapseln.
+- **Smart Cache System** – Asynchrones Hintergrund-Caching von Audio und Grafiken mit mehreren Auflösungen für sofortige Wiedergabe ohne Wartezeit.
 
-### 🌍 Entdeckung aus 15+ Quellen
-Tunefy löst die Wiedergabe über eine **automatische Fallback-Kaskade** über diese Anbieter auf (keyless = kein API-Schlüssel erforderlich):
+### 🌍 Entdeckung aus über 15 Quellen
+Tunefy löst die Wiedergabe durch eine **automatische Fallback-Kaskade** über diese Anbieter auf (schlüssellos = kein API-Schlüssel erforderlich):
 
-| Quelle | Type | Hinweise |
+| Quelle | Geben Sie | ein Notizen |
 |---|---|---|
 | **YouTube / YT Music** | Video / Audio | Primär, über youtube_explode + interne API |
-| **Jamendo** | Keyless | Creative-Commons-Katalog |
-| **Deezer** | Keyless | Katalog + Metadaten |
-| **Audius** | Keyless | Dezentrale Künstler |
-| **JioSaavn** | Open API | Schnelle Metadaten & Suche |
-| **Invidious** | Keyless | YouTube-Spiegel (4 Instanzen) |
-| **Piped** | Open API | YouTube-Spiegel |
-| **OpenVerse** | Keyless | CC-Bilder/Audio *(neu)* |
-| **Wikimedia Commons** | Keyless | Offene Medien *(neu)* |
-| **Beatport** | Keyless | Elektronisch/Dance *(neu)* |
-| **Dailymotion** | Keyless | Video-Fallback *(neu)* |
-| **ccMixter** | Keyless | Remix-Kultur *(neu)* |
-| **Internet Archive** | Keyless | Historisches Audio *(neu)* |
-| **Radio Browser** | Keyless | Internetradiosender |
-| **iTunes / MusicBrainz / Last.fm** | Open | Metadaten, Charts, Genres |
+| **Jamendo** | Schlüssellos | Creative-Commons-Katalog |
+| **Deezer** | Schlüssellos | Katalog + Metadaten |
+| **Audius** | Schlüssellos | Dezentrale Künstler |
+| **JioSaavn** | API öffnen | Schnelle Metadaten und Suche |
+| **Invidious** | Schlüssellos | YouTube Spiegel (4 Instanzen) |
+| **Piped** | API öffnen | YouTube Spiegel |
+| **OpenVerse** | Schlüssellos | CC-Bilder/Audio *(neu)* |
+| **Wikimedia Commons** | Schlüssellos | Offene Medien *(neu)* |
+| **Beatport** | Schlüssellos | Elektronisch/Tanz *(neu)* |
+| **Dailymotion** | Schlüssellos | Video-Fallback *(neu)* |
+| **ccMixter** | Schlüssellos | Remix-Kultur *(neu)* |
+| **Internet Archive** | Schlüssellos | Historisches Audio *(neu)* |
+| **Radio Browser** | Schlüssellos | Internetradiosender |
+| **iTunes / MusicBrainz / Last.fm** | Öffnen | Metadaten, Diagramme, Genres |
 
-- **Cloud Stream Relay** — Ein selbst gehosteter Relay löst die URL auf und **leitet die Audiobytes** über dieselbe IP weiter, die der Player verwendet, und vermeidet so den HTTP 403, den IP-gebundene Googlevideo-Links sonst zurückgeben. Siehe [Server](#-backend--streaming-servers).
-- **Spotify-Import** — Fügen Sie eine beliebige öffentliche Spotify-Playlist-URL ein (oder scannen Sie einen Spotify-Code), um Titel zu importieren.
-- **Globale Suche** — Eine Suche über Songs, Videos, Alben, Künstler und Podcasts.
-- **Teilen zum Abspielen** — Teilen Sie YouTube/YT-Music-Links direkt in Tunefy.
+- **Cloud Stream Relay** – Ein selbst gehostetes Relay löst die Audiobytes von derselben IP-Adresse auf, die der Player verwendet, und leitet sie weiter. Dabei wird HTTP 403 vermieden, das sonst von IP-gesperrten Googlevideo-Links zurückgegeben wird. Siehe [Servers](#-backend--und-streaming-server).
+- **Spotify-Import** – Fügen Sie eine beliebige öffentliche Spotify-Playlist-URL ein (oder scannen Sie einen Spotify-Code), um Titel zu importieren.
+- **Globale Suche** – Eine Suche über Songs, Videos, Alben, Künstler und Podcasts hinweg.
+- **Share to Play** – Teilen Sie YouTube/YT Music-Links direkt in Tunefy.
 
-### 📻 Radio, Konzerte & Video
-- **Internetradio** — Tausende Live-Sender (Radio Browser).
-- **Konzerte** — Entdecken Sie Live-Events in Ihrer Nähe mit detailreichen Seiten.
-- **Clips-Feed** — Vertikaler Kurzvideo-Feed mit Community- und Trend-Clips.
-- **Videoplayer** — Vollständige Videowiedergabe mit Canvas-Videohintergründen.
-- **DJ-Mixes** — Eigene DJ-/Mix-Entdeckung und -Wiedergabe.
+### 📻 Radio, Konzerte und Video
+- **Internetradio** – Tausende Live-Sender (Radio Browser).
+- **Konzerte** – Entdecken Sie Live-Events in Ihrer Nähe mit umfangreichen Detailseiten.
+- **Clips-Feed** – Vertikaler Kurzvideo-Feed mit Community- und Trendclips.
+- **Videoplayer** – Vollständige Videowiedergabe mit Canvas-Videohintergründen.
+- **DJ-Mixes** – Spezielle DJ-/Mix-Erkennung und -Wiedergabe.
 
-### 🤝 Social, Blends & Community
-- **Blend-Wiedergabelisten** — Erstellen Sie eine gemeinsame Wiedergabeliste mit einem kurzen Beitrittscode (z. B. `KORA-4821`); jeder mit dem Code kann zuhören und beitragen, wie bei Spotify-Blend-Links.
-- **Community-Feed** — Suchen, streamen und entdecken Sie Titel, die von der Community hochgeladen wurden.
-- **Künstler-Folgen** — Folgen Sie Künstlern/Kanälen, um sie im Auge zu behalten.
-- **Intelligente Warteschlange & unbegrenzte Wiedergabe** — Automatische Einreihung mit intelligenter Leer-Logik.
+### 🤝 Sozial, Mischungen und Gemeinschaft
+- **Blend Playlists** – Erstellen Sie eine geteilte Playlist mit einem kurzen Beitrittscode (z. B. `KORA-4821`); Jeder mit dem Code kann zuhören und beitragen, z. B. Spotify Blend-Links.
+- **Community-Feed** – Suchen, streamen und entdecken Sie von der Community hochgeladene Titel.
+- **Künstler folgen** – Folgen Sie Künstlern/Kanälen, um den Überblick zu behalten.
+- **Intelligente Warteschlange und unbegrenzte Wiedergabe** – Automatische Warteschlange mit intelligentem Löschverhalten.
 
-### 🔐 Datenschutz & Konten
-- **Kein Konto erforderlich** — Favoriten, Wiedergabelisten und Verlauf werden standardmäßig lokal gespeichert.
-- **Anonym + Google-Anmeldung** — Optionale Anmeldung (anonyme Geräte-Identität oder Google über Supabase Auth) für Cloud-Sync und Profil.
-- **Offline-Downloads** — Laden Sie Songs und Videos für das Hören offline herunter.
-- **Deep Linking** — Vollständiges eigenes URL-Schema, um Songs, Künstler, Alben und Wiedergabelisten über Browser oder geteilte Links zu öffnen bzw. abzuspielen.
-- **Ohne Werbung & zuverlässig** — Unterbrechungsfreies Hören, abgesichert durch offene Relays (Last.fm, MusicBrainz, iTunes), um die Wiedergabe zu garantieren.
+### 🔐 Datenschutz und Konten
+- **Kein Konto erforderlich** – Favoriten, Wiedergabelisten und Verlauf werden standardmäßig lokal gespeichert.
+- **Anonym + Google-Anmeldung** – Optionale Anmeldung (anonyme Geräteidentität oder Google über Supabase Auth) für Cloud-Synchronisierung und Profil.
+- **Offline-Downloads** – Laden Sie Songs und Videos zum Offline-Hören herunter.
+- **Deep Linking** – Vollständig benutzerdefiniertes URL-Schema zum Öffnen/Wiedergeben von Songs, Künstlern, Alben und Playlists über den Browser oder freigegebene Links.
+- **Werbefrei und zuverlässig** – Ununterbrochenes Hören, unterstützt durch offene Relais (Last.fm, MusicBrainz, iTunes), um die Wiedergabe zu gewährleisten.
 
 ---
 
 ## 🌐 Lokalisierung
 
-Tunefy kommt mit **vollständigen Übersetzungen** in 14 Sprachen (plus automatischer Systemsprache):
+Tunefy wird mit **vollständigen Übersetzungen** in 14 Sprachen (plus automatischer Systemsprache) geliefert:
 
 | Sprache | Code | Sprache | Code |
 | :--- | :---: | :--- | :---: |
@@ -143,36 +143,36 @@ Tunefy kommt mit **vollständigen Übersetzungen** in 14 Sprachen (plus automati
 | 🇵🇹 Português | `pt` | 🇹🇷 Türkçe | `tr` |
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
-Legen Sie die Sprache unter **Einstellungen → Sprache** fest (oder behalten Sie **System** für die automatische Erkennung).
+Stellen Sie die Sprache unter **Einstellungen → Sprache** ein (oder behalten Sie **System** für die automatische Erkennung bei).
 
 ---
 
 ## 📸 Screenshots
 
-### 🏠 Startseite & Navigation
+### 🏠 Startseite und Navigation
 <p align="center">
   <img src="images/home.jpg" width="30%" alt="Startbildschirm" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Startseite mit Mini-Player" />
+  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Zuhause mit Mini-Player" />
   <img src="images/library.jpg" width="30%" alt="Bibliothek" />
 </p>
 
-### 🔍 Suche
+### 🔍Suchen
 <p align="center">
   <img src="images/search_with _results.jpg" width="30%" alt="Suchergebnisse" />
   <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Suchvorschläge" />
 </p>
 
-### 🎵 Player
+### 🎵 Spieler
 <p align="center">
   <img src="images/Immersive_player.jpg" width="30%" alt="Immersiver Player" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Legacy-Player" />
+  <img src="images/leagcy_player.jpg" width="30%" alt="Legacy-Spieler" />
   <img src="images/song_queue.jpg" width="30%" alt="Song-Warteschlange" />
 </p>
 
-### 🎤 Lyrics
+### 🎤 Songtext
 <p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lyrics mit Bedienelementen" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lyrics ohne Bedienelemente" />
+  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Liedtext mit Steuerung" />
+  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Songtexte ohne Bedienelemente" />
 </p>
 
 ### 👥 Community & Profil
@@ -181,18 +181,18 @@ Legen Sie die Sprache unter **Einstellungen → Sprache** fest (oder behalten Si
   <img src="images/profile_screen.jpg" width="30%" alt="Profilbildschirm" />
 </p>
 
-### ⚙️ Einstellungen & Anpassung
+### ⚙️ Einstellungen und Anpassung
 <p align="center">
   <img src="images/settings.jpg" width="30%" alt="Einstellungen" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Theme-Auswahl" />
+  <img src="images/app_theme_selector.jpg" width="30%" alt="Themenauswahl" />
   <img src="images/accent_color_selector.jpg" width="30%" alt="Akzentfarbe" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Eigene Akzentfarbe" />
+  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Benutzerdefinierte Akzentfarbe" />
   <img src="images/app_language_selector.jpg" width="30%" alt="Sprachauswahl" />
 </p>
 
-### ℹ️ Über
+### ℹ️ Ungefähr
 <p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Über-Bildschirm" />
+  <img src="images/about_screen.jpg" width="30%" alt="Über den Bildschirm" />
 </p>
 
 ---
@@ -213,43 +213,43 @@ tunefy-music/
 └── images/, assets/         # Screenshots & brand assets
 ```
 
-**Zuverlässigkeit der Wiedergabe.** Die App hängt nie an einem einzigen Anbieter. Sie prüft Quellen in einer
-Prioritätskaskade (lokaler Relay → Cloud-Relay → schlüsselfreie Spiegel → Metadaten/Titel-Suche), mit einem
-Schutzschalter, das eine fehlschlagende Quelle überspringt. Der **Cloud-Relay** löst einen Stream auf und
-**leitet die Bytes** über seine eigene Verbindung weiter, sodass Auflösung und Wiedergabe eine gemeinsame IP teilen –
-genau das vermeidet den IP-gebundenen 403 bei Googlevideo-Links.
+**Wiedergabezuverlässigkeit.** Die App ist nie von einem einzelnen Anbieter abhängig. Es untersucht Quellen in a
+Prioritätskaskade (lokales Relay → Cloud-Relay → schlüssellose Spiegel → Metadaten-/Titelsuche), mit a
+Leistungsschalter, der eine ausgefallene Quelle überspringt. Das **Cloud-Relay** löst einen Stream auf und dann
+**leitet die Bytes** über eine eigene Verbindung weiter, sodass Auflösung und Wiedergabe eine IP teilen – das ist
+Was vermeidet die IP-Sperre 403 bei Googlevideo-Links.
 
 ---
 
-## 🛠️ Technologie-Stack
+## 🛠️ Tech-Stack
 
-| Ebene | Technologie |
+| Schicht | Technologie |
 |---|---|
-| **Framework** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
-| **State Management** | [Riverpod](https://riverpod.dev/) |
+| **Rahmen** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
+| **Staatsverwaltung** | [Riverpod](https://riverpod.dev/) |
 | **Audio-Engine** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube-Extraktion** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (Fork von [anandnet](https://github.com/anandnet)) |
-| **AI DJ** | Google Gemini (`gemini_service`) |
-| **Lyrics** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + eigene Karaoke-Engine + DeepL-Übersetzung |
+| **YouTube Extraktion** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (Gabelung durch [anandnet](https://github.com/anandnet)) |
+| **KI-DJ** | Google Gemini (`gemini_service`) |
+| **Texte** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + benutzerdefinierte Karaoke-Engine + DeepL Übersetzung |
 | **Lokaler Speicher** | [Hive](https://docs.hivedb.dev/) |
-| **Cloud-Sync / Auth** | Supabase (Postgres + RLS, anonyme & Google-Anmeldung) |
-| **Netzwerkkommunikation** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
-| **Stream-Relay** | FastAPI + yt-dlp auf Render (`server/`) |
+| **Cloud-Synchronisierung/Authentifizierung** | Supabase (Postgres + RLS, anonym und Google-Anmeldung) |
+| **Netzwerk** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
+| **Stream Relay** | FastAPI + yt-dlp auf Render (`server/`) |
 | **UI-Komponenten** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
 ---
 
-## ⚙️ Einrichtung & Installation
+## ⚙️ Einrichtung und Installation
 
 ### Voraussetzungen
-- Flutter SDK (neueste Stable-Version)
+- Flutter SDK (Neueste stabile Version)
 - Dart SDK
-- Android Studio / VS Code
+- Android Studio / VS-Code
 - Java JDK 17
 
 ### Installation
 
-1. **Repository klonen:**
+1. **Klonen Sie das Repository:**
    ```bash
    git clone https://github.com/grandelagbanou28-gif/tunefy-music.git
    cd tunefy-music
@@ -260,94 +260,94 @@ genau das vermeidet den IP-gebundenen 403 bei Googlevideo-Links.
    flutter pub get
    ```
 
-3. **App ausführen:**
+3. **Führen Sie die App aus:**
    ```bash
    flutter run
    ```
 
-4. **Release-APK bauen** (nach ABI geteilt für kleinere Größe):
+4. **Build-Release-APK** (aufgeteilt nach ABI für kleinere Größe):
    ```bash
    flutter build apk --split-per-abi
    ```
 
-> Die URL des Cloud-Relays ist in `lib/utils/api_constants.dart`
-> eingebaut (`relayBaseUrl`), daher ist kein Build-Flag erforderlich. Auf einen eigenen Relay zeigen:
+> Die Cloud-Relay-URL ist in `lib/utils/api_constants.dart` integriert.
+> (`relayBaseUrl`), daher ist kein Build-Flag erforderlich. Um auf Ihr eigenes Relais zu zeigen:
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
 ---
 
-## 🖥️ Backend & Streaming-Server
+## 🖥️ Backend- und Streaming-Server
 
-### ☁️ Cloud Stream Relay — `server/` (deployed on Render)
-Löst eine YouTube-Audio-URL auf **und leitet die Bytes weiter**, sodass Telefon und Auflöser eine gemeinsame IP
-teilen (kein 403). FastAPI + yt-dlp, Docker, kostenlose Stufe.
+### ☁️ Cloud Stream Relay – `server/` (bereitgestellt am Render)
+Löst eine YouTube-Audio-URL auf **und leitet die Bytes weiter**, sodass das Telefon und der Resolver eine IP teilen
+(Nr. 403). FastAPI + yt-dlp, Docker, kostenlose Stufe.
 
-| Endpoint | Beschreibung |
+| Endpunkt | Beschreibung |
 | --- | --- |
-| `GET /health` | Liveness-Prüfung (`ok`) |
-| `GET /stream?videoId=X&key=K` | Wird über yt-dlp aufgelöst → gibt eine `…/relay`-URL zurück (nur 200, wenn die Auflösung gelingt) |
-| `GET /relay?videoId=X&key=K` | Leitet die Audiobytes weiter (Range-orientiert → 206 für Seeking) |
+| `GET /health` | Lebendigkeitssonde (`ok`) |
+| `GET /stream?videoId=X&key=K` | Wird über yt-dlp aufgelöst → gibt eine `…/relay`-URL zurück (200 nur, wenn sie aufgelöst wird) |
+| `GET /relay?videoId=X&key=K` | Stellt die Audiobytes als Proxy bereit (bereichsbewusst → 206 für die Suche) |
 
-Geschützt durch eine gemeinsame `RELAY_KEY`-Umgebungsvariable (gibt ohne sie **401** zurück). Deploy: Render →
+Geschützt durch eine gemeinsam genutzte Umgebungsvariable `RELAY_KEY` (gibt **401** ohne zurück). Bereitstellen: Render →
 **Root Directory = `server`**, Docker, **Health Check = `/health`**. Siehe `server/README.md`.
 
-### 🎵 App API — `backend/`
-Das Daten-/Such-Backend (YouTube Music über youtubei.js + offene Quellen: Last.fm-Genres,
-MusicBrainz-Veröffentlichungen & Jahrzehnte).
+### 🎵 App-API – `backend/`
+Das Daten-/Such-Backend (YouTube Music über youtubei.js + offene Quellen: Last.fm Genres,
+MusicBrainz Veröffentlichungen und Jahrzehnte).
 
-| Endpoint | Beschreibung |
+| Endpunkt | Beschreibung |
 | --- | --- |
 | `/api/search` | Musik-/Videosuche |
-| `/api/trending` | Trends |
-| `/api/charts` | YT-Music-Charts |
-| `/api/playlist/:id` | Playlist-Details |
-| `/api/moods`, `/api/moods/:id` | Kategorien & Stimmungen (Last.fm-Fallback) |
-| `/api/tags?tag=` | Top-Titel/Alben nach Genre (Last.fm) |
-| `/api/newreleases` | Neue Veröffentlichungen (MusicBrainz) |
+| `/api/trending` | Im Trend |
+| `/api/charts` | YT Music-Charts |
+| `/api/playlist/:id` | Details zur Wiedergabeliste |
+| `/api/moods`, `/api/moods/:id` | Kategorien & Stimmungen (Last.fm Fallback) |
+| `/api/tags?tag=` | Genre-Top-Titel/-Alben (Last.fm) |
+| `/api/newreleases` | Neuerscheinungen (MusicBrainz) |
 | `/api/decades?year=` | Alben nach Jahrzehnt (MusicBrainz) |
 | `/api/categories` | Kategorieliste |
 
 **Lokal:** `cd backend && npm install && npm start` (Port 8000).
-**Deploy (Vercel):** Dieses Repo importieren, **Root Directory = `backend`**. Siehe `backend/README.md`.
+**Bereitstellen (Vercel):** Importieren Sie dieses Repo, **Root Directory = `backend`**. Siehe `backend/README.md`.
 
 ### 🗄️ Datenbank — `supabase/`
-Postgres-Schema mit **Row-Level Security**: Benutzerzeilen sind an `auth.uid()` gebunden, der Katalog ist für
-anonyme Nutzer schreibgeschützt und nur für die Service-Rolle beschreibbar. Führen Sie die Migrationen im
-Supabase SQL Editor (in der richtigen Reihenfolge) aus.
+Postgres-Schema mit **Sicherheit auf Zeilenebene**: Benutzerzeilen sind auf `auth.uid()` beschränkt, der Katalog gilt
+schreibgeschützt für anonyme Benutzer und nur für die Dienstrolle schreibbar. Führen Sie Migrationen im Supabase aus
+SQL-Editor (in der Reihenfolge).
 
 ---
 
-## 🤝 Mitwirken
+## 🤝 Mitmachen
 
-Beiträge sind willkommen! Ob Fehlerbericht, Feature-Vorschlag oder Code – Ihre Hilfe wird geschätzt.
+Beiträge sind willkommen! Egal, ob Sie einen Fehler melden, eine Funktion vorschlagen oder Code schreiben, wir freuen uns über Ihre Hilfe.
 
-1. **Projekt forken**
-2. **Feature-Branch erstellen** (`git checkout -b feature/AmazingFeature`)
-3. **Änderungen committen** (`git commit -m 'Add some AmazingFeature'`)
-4. **Zum Branch pushen** (`git push origin feature/AmazingFeature`)
-5. **Pull Request eröffnen**
+1. **Fork das Projekt**
+2. **Erstellen Sie Ihren Feature Branch** (`git checkout -b feature/AmazingFeature`)
+3. **Übernehmen Sie Ihre Änderungen** (`git commit -m 'Add some AmazingFeature'`)
+4. **Push to the Branch** (`git push origin feature/AmazingFeature`)
+5. **Öffnen Sie eine Pull-Anfrage**
 
-**Richtlinien:** Befolgen Sie den bestehenden Code-Stil, führen Sie `flutter analyze` aus (muss sauber sein) und testen Sie neue Funktionen vor dem Einreichen.
+**Richtlinien:** Befolgen Sie den vorhandenen Codestil, führen Sie `flutter analyze` aus (muss sauber sein) und testen Sie neue Funktionen vor dem Absenden.
 
 ---
 
 ## 🙏 Danksagungen
 
-Tunefy würde nicht existieren ohne die großartige Arbeit dieser Entwickler und Projekte.
+Tunefy würde ohne die unglaubliche Arbeit dieser Entwickler und Projekte nicht existieren.
 
 ### youtube_explode_dart
-Danke an **[Hexer10](https://github.com/Hexer10)**, ursprünglichen Autor von
-[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) – dem Rückgrat des
-YouTube-Streamings von Tunefy – und an **[anandnet](https://github.com/anandnet)** für den aktuell
-gehaltenen Fork, der Tunefy mit den neuesten YouTube-Änderungen am Laufen hält.
+Vielen Dank an**[Hexer10](https://github.com/Hexer10)**, ursprünglicher Autor von
+[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) – das Rückgrat von Tunefy
+YouTube Streaming – und**[anandnet](https://github.com/anandnet)** für den aktuellen Fork
+Tunefy arbeitet weiterhin mit den neuesten YouTube-Änderungen.
 
-### Animesh (n-ce) — fast-saavn & ytify
-Ein Dank an **[Animesh (n-ce)](https://github.com/n-ce)**, Schöpfer von
-**[fast-saavn](https://github.com/n-ce/saavn)** (der offenen JioSaavn-API, die die Metadaten von Tunefy speist)
-und **[ytify](https://github.com/n-ce/ytify)** (einer großen Inspirationsquelle).
+### Animesh (n-ce) – fast-saavn & ytify
+Grüße an**[Animesh (n-ce)](https://github.com/n-ce)**, den Schöpfer von
+**[fast-saavn](https://github.com/n-ce/saavn)** (die offene JioSaavn-API, die die Metadaten von Tunefy unterstützt)
+und**[ytify](https://github.com/n-ce/ytify)** (eine riesige Inspirationsquelle).
 
 ### Open-Source-Bibliotheken
-| Paket | Autor / Maintainer |
+| Paket | Autor / Betreuer |
 |---|---|
 | [just_audio](https://pub.dev/packages/just_audio) | [Ryan Heise](https://github.com/ryanheise) |
 | [audio_service](https://pub.dev/packages/audio_service) | [Ryan Heise](https://github.com/ryanheise) |
@@ -365,4 +365,4 @@ und **[ytify](https://github.com/n-ce/ytify)** (einer großen Inspirationsquelle
 
 ## 📄 Lizenz
 
-Verbreitet unter der **MIT License**. Siehe [`LICENSE`](LICENSE) für weitere Informationen.
+Verteilt unter der **MIT-Lizenz**. Weitere Informationen finden Sie unter [`LICENSE`](LICENSE).

@@ -5,26 +5,26 @@
 <h1 align="center">Tunefy</h1>
 
 <p align="center">
-  <strong>Một trình nghe nhạc mạnh mẽ, đề cao quyền riêng tư, được xây dựng bằng Flutter.</strong><br/>
-  Không quảng cáo · Chạy ngoại tuyến · DJ AI · Lời bài hát đồng bộ & dịch · Giao diện Liquid Glass · 15 nguồn · Không cần tài khoản
+<strong>Ứng dụng âm nhạc mạnh mẽ, tập trung vào quyền riêng tư được xây dựng với Flutter.</strong><br/>
+  Không có quảng cáo · Ngoại tuyến · AI DJ · Lời bài hát được đồng bộ hóa và dịch · Liquid Glass UI · 15 nguồn · Không cần tài khoản
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter" />
   <img src="https://img.shields.io/badge/Dart-3.x-0175C2?logo=dart&logoColor=white" alt="Dart" />
-  <img src="https://img.shields.io/badge/Version-3.9.0-brightgreen" alt="Phiên bản" />
-  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web%20%7C%20Windows-lightgrey" alt="Nền tảng" />
-  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Ngôn ngữ" />
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="Giấy phép" />
+  <img src="https://img.shields.io/badge/Version-3.9.0-brightgreen" alt="Version" />
+  <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web%20%7C%20Windows-lightgrey" alt="Platform" />
+  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Languages" />
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
 <p align="center">
-  <a href="#-key-features">Tính năng</a> ·
-  <a href="#-localisation">Ngôn ngữ</a> ·
-  <a href="#-screenshots">Hình ảnh</a> ·
-  <a href="#-architecture">Kiến trúc</a> ·
-  <a href="#-setup--installation">Thiết lập</a> ·
-  <a href="#-backend--streaming-servers">Máy chủ</a>
+  <a href="#-các-tính-năng-chính">Tính năng</a> ·
+  <a href="#-bản-địa-hóa">Ngôn ngữ</a> ·
+  <a href="#-ảnh-chụp-màn-hình">Ảnh chụp màn hình</a> ·
+  <a href="#-kiến-trúc">Kiến trúc</a> ·
+  <a href="#-thiết-lập--cài-đặt">Thiết lập</a> ·
+  <a href="#-máy-chủ-phụ-trợ-và-phát-trực-tuyến">Máy chủ</a>
 </p>
 
 <p align="center">
@@ -46,91 +46,92 @@
 
 ---
 
-Tunefy là một ứng dụng nghe nhạc giàu tính năng, đề cao quyền riêng tư, được xây dựng bằng Flutter. Nó phát từ
-**hơn 15 nguồn mở và không cần khóa** với một phân cấp dự phòng tự động, nên một bài không phát được ở nhà cung cấp này
-sẽ phát ở nhà cung cấp tiếp theo. Nó mang lại trải nghiệm cao cấp không quảng cáo với phát nền,
-tải xuống ngoại tuyến, lời bài hát đồng bộ **và đã dịch**, một **DJ AI**, radio internet, concert,
-danh sách phát Blend chia sẻ, giao diện Liquid Glass hiện đại và hệ thống đệm nền thông minh — có hoặc không cần tài khoản.
+Tunefy là ứng dụng nghe nhạc tập trung vào quyền riêng tư, giàu tính năng được xây dựng bằng Flutter. Nó chảy từ
+**15+ nguồn mở và không cần khóa** với tầng dự phòng tự động, do đó bản nhạc không thành công trên một nguồn
+nhà cung cấp sẽ phát tiếp theo. Nó cung cấp trải nghiệm cao cấp không có quảng cáo khi phát lại trong nền,
+tải xuống ngoại tuyến, lời bài hát được đồng bộ hóa **và dịch**, **AI DJ**, đài phát thanh trên internet, buổi hòa nhạc,
+danh sách phát Blend được chia sẻ, giao diện người dùng Liquid Glass hiện đại và bộ nhớ đệm nền thông minh - có hoặc không
+một tài khoản.
 
 > [!NOTE]
-> Tunefy được phân phối trực tiếp từ kho lưu trữ này (các bản phát hành APK). Nó **không** có sẵn
+> Tunefy được phân phối trực tiếp từ kho lưu trữ này (bản phát hành APK). Nó **không** có sẵn
 > trên Google Play Store.
 
 ---
 
-## 🚀 Tính năng chính
+## 🚀 Các tính năng chính
 
-### 🎨 Giao diện & UX Liquid Glass
-- **Chủ đề Glassmorphic động** — Giao diện cao cấp trong Chế độ Tối và Sáng qua `liquid_glass_easy`. Chế độ Sáng dùng sắc trắng bán trong suốt thích ứng với bìa album.
-- **Shader & Hiệu ứng mờ tùy chỉnh** — Các bảng kính mờ hiệu năng cao và lớp phủ thích ứng với màu của tranh bìa.
-- **Thành phần nhận biết độ tương phản** — Biểu tượng thanh trạng thái, điều khiển, thanh trượt và menu tự đảo màu để dễ đọc.
-- **Tối ưu cho màn hình lớn & máy tính để bàn** — Bố cục trình phát đáp ứng (tới 1300px), hộp thoại căn giữa và thanh tìm kiếm riêng ở trên cùng cho máy tính/máy tính bảng.
+### 🎨 Liquid Glass Giao diện người dùng/UX
+- **Chủ đề thủy tinh động** — Kiểu dáng cao cấp ở chế độ Tối và Sáng thông qua `liquid_glass_easy`. Chế độ ánh sáng sử dụng tông màu trắng bán trong suốt phù hợp với ảnh bìa album.
+- **Bộ tạo bóng & làm mờ tùy chỉnh** — Các tấm kính mờ và lớp phủ hiệu suất cao thích ứng với màu sắc của tác phẩm nghệ thuật.
+- **Các yếu tố nhận biết độ tương phản** — Các biểu tượng, điều khiển, thanh trượt và menu trên thanh trạng thái tự động đảo ngược để dễ đọc.
+- **Tối ưu hóa màn hình lớn và máy tính để bàn** — Bố cục trình phát đáp ứng (lên đến 1300px), các hộp thoại ở giữa và thanh tìm kiếm trên cùng dành riêng cho máy tính để bàn/máy tính bảng.
 
-### 🎧 Âm thanh nhập vai, Lời bài hát & Karaoke
-- **Karaoke từng chữ** — Các từ được tô màu theo thời gian thực khi ca sĩ hát (trên 60 FPS).
-- **Quét đồng bộ từng dòng** — Hiệu ứng quét tuần tiến, làm nổi bật dòng đang phát và cuộn mượt mà.
-- **Lời bài hát đã dịch** — Lời bài hát được dịch máy (DeepL) sang ngôn ngữ của ứng dụng ngay khi phát.
-- **Chế độ Lofi** — Biến mọi bài hát thành phong cách Lofi: chậm 0.9×, hiệu chỉnh cao độ, vang tự nhiên.
-- **Bộ cân bằng & Hiệu ứng gốc** — Equalizer cấp hệ thống cùng phát nền và âm thanh khi tắt màn hình.
-- **Đa ngôn ngữ âm thanh & Kiểm soát chất lượng** — Phát hiện các ngôn ngữ âm thanh có sẵn và phát ở chất lượng Cao/Trung bình/Thấp.
+### 🎧 Âm thanh, lời bài hát & Karaoke đắm chìm
+- **Karaoke từng chữ** — Từ ngữ đầy màu sắc theo thời gian thực khi nghệ sĩ hát (60+ FPS).
+- **Quét đồng bộ hóa từng dòng** — Hiệu ứng quét lũy tiến với tính năng làm nổi bật dòng hoạt động và cuộn mượt mà.
+- **Lời bài hát đã được dịch** — Lời bài hát được dịch bằng máy (DeepL) sang ngôn ngữ ứng dụng của bạn một cách nhanh chóng.
+- **Chế độ Lofi** — Biến bất kỳ bản nhạc nào thành rung cảm Lofi: giảm tốc độ 0,9×, hiệu chỉnh cao độ, hồi âm gốc.
+- **Bộ chỉnh âm & Hiệu ứng gốc** — EQ cấp hệ thống với tính năng phát lại trong nền và âm thanh tắt màn hình.
+- **Kiểm soát chất lượng & âm thanh đa ngôn ngữ** — Phát hiện các ngôn ngữ âm thanh có sẵn và truyền phát chất lượng Cao/Trung bình/Thấp.
 
 ### 🤖 AI DJ & Cá nhân hóa
-- **Trợ lý DJ AI (Gemini)** — Một DJ hội thoại hiểu gu của bạn, xây dựng danh sách phát thông minh và nhận yêu cầu.
-- **Tín hiệu gu nghe** — Chấm điểm gu theo từng bài học hỏi những gì bạn yêu thích và thúc đẩy gợi ý.
-- **Wrapped & Thống kê lượt nghe** — Điểm lại một năm của bạn: nghệ sĩ hàng đầu, tâm trạng và các gói tổng kết.
-- **Hệ thống đệm thông minh** — Đệm âm thanh + hình bìa nhiều độ phân giải nền bất đồng bộ để phát tức thì, không chờ đợi.
+- **Trợ lý DJ AI (Gemini)** — DJ trò chuyện có khả năng đọc được sở thích của bạn, xây dựng danh sách phát thông minh và nhận yêu cầu.
+- **Tín hiệu vị giác** — Tính điểm hương vị mỗi bản nhạc sẽ tìm hiểu những gì bạn yêu thích và đưa ra đề xuất.
+- **Wrapped & Số liệu thống kê về lượt nghe** — Đánh giá trong năm của bạn: nghệ sĩ hàng đầu, tâm trạng và phần nghe.
+- **Hệ thống bộ đệm thông minh** — Bộ nhớ đệm nền không đồng bộ của âm thanh + tác phẩm nghệ thuật đa độ phân giải để phát lại ngay lập tức, không phải chờ đợi.
 
-### 🌍 Khám phá qua 15+ nguồn
-Tunefy giải quyết việc phát nhạc thông qua một **phân cấp dự phòng tự động** qua các nhà cung cấp sau (không cần khóa = không cần khóa API):
+### 🌍 Khám phá trên hơn 15 nguồn
+Tunefy giải quyết quá trình phát lại thông qua **tầng dự phòng tự động** trên các nhà cung cấp này (không cần chìa khóa = không cần khóa API):
 
 | Nguồn | Loại | Ghi chú |
 |---|---|---|
-| **YouTube / YT Music** | Video / Âm thanh | Chính, qua youtube_explode + API nội bộ |
-| **Jamendo** | Không cần khóa | Thư mục Creative Commons |
-| **Deezer** | Không cần khóa | Thư mục + siêu dữ liệu |
-| **Audius** | Không cần khóa | Nghệ sĩ phi tập trung |
-| **JioSaavn** | API mở | Siêu dữ liệu & tìm kiếm nhanh |
-| **Invidious** | Không cần khóa | Bản sao YouTube (4 instance) |
-| **Piped** | API mở | Bản sao YouTube |
-| **OpenVerse** | Không cần khóa | Ảnh/âm thanh CC *(mới)* |
-| **Wikimedia Commons** | Không cần khóa | Phương tiện mở *(mới)* |
-| **Beatport** | Không cần khóa | Nhạc điện tử/dance *(mới)* |
-| **Dailymotion** | Không cần khóa | Dự phòng video *(mới)* |
-| **ccMixter** | Không cần khóa | Văn hóa remix *(mới)* |
-| **Internet Archive** | Không cần khóa | Âm thanh lịch sử *(mới)* |
-| **Radio Browser** | Không cần khóa | Đài phát thanh internet |
-| **iTunes / MusicBrainz / Last.fm** | Mở | Siêu dữ liệu, bảng xếp hạng, thể loại |
+| **YouTube / YT Music** | Video / Âm thanh | Chính, thông qua youtube_explode + API nội bộ |
+| **Jamendo** | Không cần chìa khóa | Danh mục Creative-Commons |
+| **Deezer** | Không cần chìa khóa | Danh mục + siêu dữ liệu |
+| **Audius** | Không cần chìa khóa | Nghệ sĩ phi tập trung |
+| **JioSaavn** | API mở | Siêu dữ liệu và tìm kiếm nhanh |
+| **Invidious** | Không cần chìa khóa | YouTube gương (4 trường hợp) |
+| **Piped** | API mở | YouTube gương |
+| **OpenVerse** | Không cần chìa khóa | Hình ảnh/âm thanh CC *(mới)* |
+| **Wikimedia Commons** | Không cần chìa khóa | Mở phương tiện *(mới)* |
+| **Beatport** | Không cần chìa khóa | Điện tử/nhảy *(mới)* |
+| **Dailymotion** | Không cần chìa khóa | Dự phòng video *(mới)* |
+| **ccMixter** | Không cần chìa khóa | Văn hóa phối lại *(mới)* |
+| **Internet Archive** | Không cần chìa khóa | Âm thanh lịch sử *(mới)* |
+| **Radio Browser** | Không cần chìa khóa | Đài phát thanh Internet |
+| **iTunes / MusicBrainz / Last.fm** | Mở | Siêu dữ liệu, biểu đồ, thể loại |
 
-- **Relay luồng đám mây** — Một relay tự lưu trữ giải quyết và **ủy quyền chuyển tiếp các byte âm thanh** từ cùng IP mà trình phát sử dụng, tránh lỗi HTTP 403 mà các liên kết Googlevideo khóa IP thường trả về. Xem [Máy chủ](#-backend--streaming-servers).
-- **Nhập từ Spotify** — Dán bất kỳ URL danh sách phát Spotify công khai nào (hoặc quét mã Spotify) để nhập bài hát.
-- **Tìm kiếm toàn cục** — Một tìm kiếm duy nhất cho bài hát, video, album, nghệ sĩ và podcast.
-- **Chia sẻ để phát** — Chia sẻ liên kết YouTube/YT Music thẳng vào Tunefy.
+- **Chuyển tiếp luồng đám mây** — Một chuyển tiếp tự lưu trữ phân giải và **ủy quyền các byte âm thanh** từ cùng một IP mà trình phát sử dụng, tránh HTTP 403 mà các liên kết Googlevideo bị khóa IP sẽ trả về. Xem [Servers](#-máy-chủ-phụ-trợ-và-phát-trực-tuyến).
+- **Spotify Nhập** — Dán bất kỳ URL danh sách phát Spotify công khai nào (hoặc quét mã Spotify) để nhập bản nhạc.
+- **Tìm kiếm toàn cầu** — Một tìm kiếm trên các bài hát, video, album, nghệ sĩ và podcast.
+- **Chia sẻ để chơi** — Chia sẻ YouTube/YT Music liên kết thẳng tới Tunefy.
 
-### 📻 Radio, Buổi hòa nhạc & Video
-- **Radio internet** — Hàng nghìn đài phát trực tiếp (Radio Browser).
-- **Buổi hòa nhạc** — Khám phá các sự kiện trực tiếp gần bạn với trang chi tiết phong phú.
-- **Bảng tin Clip** — Dòng video ngắn dọc gồm các clip của cộng đồng và xu hướng.
-- **Trình phát Video** — Phát video đầy đủ với nền video canvas.
-- **DJ Mix** — Khám phá và phát riêng cho DJ/mix.
+### 📻 Đài phát thanh, buổi hòa nhạc và video
+- **Internet Radio** — Hàng nghìn đài trực tiếp (Radio Browser).
+- **Buổi hòa nhạc** — Khám phá các sự kiện trực tiếp gần bạn với các trang chi tiết phong phú.
+- **Clips Feed** — Nguồn cấp dữ liệu video ngắn theo chiều dọc của cộng đồng và các clip thịnh hành.
+- **Trình phát video** — Phát lại video đầy đủ với nền video canvas.
+- **DJ Mixes** — Khám phá và phát lại DJ/mix chuyên dụng.
 
-### 🤝 Xã hội, Blend & Cộng đồng
-- **Danh sách phát Blend** — Tạo danh sách phát chung với mã tham gia ngắn (ví dụ `KORA-4821`); bất kỳ ai có mã đều có thể nghe và đóng góp, giống các liên kết Spotify Blend.
-- **Bảng tin cộng đồng** — Tìm kiếm, phát và khám phá các bài hát do cộng đồng tải lên.
-- **Theo dõi nghệ sĩ** — Theo dõi nghệ sĩ/kênh để cập nhật thông tin về họ.
-- **Hàng đợi thông minh & Phát không giới hạn** — Tự động xếp hàng với cơ chế dọn hàng đợi thông minh.
+### 🤝 Xã hội, Pha trộn & Cộng đồng
+- **Blend Danh sách phát** — Tạo danh sách phát được chia sẻ với mã tham gia ngắn (ví dụ: `KORA-4821`); bất kỳ ai có mã đều có thể nghe và đóng góp, chẳng hạn như các liên kết Spotify Blend.
+- **Nguồn cấp dữ liệu cộng đồng** — Tìm kiếm, phát trực tuyến và khám phá các bản nhạc do cộng đồng tải lên.
+- **Theo dõi nghệ sĩ** — Theo dõi các nghệ sĩ/kênh để theo dõi họ.
+- **Hàng đợi thông minh & Phát lại vô hạn** — Tự động xếp hàng với hành vi rõ ràng thông minh.
 
 ### 🔐 Quyền riêng tư & Tài khoản
-- **Không cần tài khoản** — Yêu thích, danh sách phát và lịch sử được lưu cục bộ theo mặc định.
-- **Đăng nhập Ẩn danh + Google** — Tùy chọn đăng nhập (danh tính thiết bị ẩn danh hoặc Google qua Supabase Auth) để đồng bộ đám mây và hồ sơ.
-- **Tải xuống ngoại tuyến** — Tải bài hát và video để nghe khi không có mạng.
-- **Deep Linking** — Lớp scheme URL tùy chỉnh đầy đủ để mở/phát bài hát, nghệ sĩ, album và danh sách phát qua trình duyệt hoặc qua các liên kết chia sẻ.
-- **Không quảng cáo & Ổn định** — Nghe không gián đoạn, được hỗ trợ bởi các relay mở (Last.fm, MusicBrainz, iTunes) để đảm bảo việc phát lại.
+- **Không cần tài khoản** — Các mục yêu thích, danh sách phát và lịch sử được lưu trữ cục bộ theo mặc định.
+- **Ẩn danh + Đăng nhập bằng Google** — Đăng nhập tùy chọn (danh tính thiết bị ẩn danh hoặc Google qua Supabase Auth) để đồng bộ hóa hồ sơ và đám mây.
+- **Tải xuống ngoại tuyến** — Tải xuống bài hát và video để nghe ngoại tuyến.
+- **Liên kết sâu** — Lược đồ URL tùy chỉnh đầy đủ để mở/phát bài hát, nghệ sĩ, album và danh sách phát qua trình duyệt hoặc liên kết được chia sẻ.
+- **Không có quảng cáo và đáng tin cậy** — Nghe không bị gián đoạn được hỗ trợ bởi các rơle mở (Last.fm, MusicBrainz, iTunes) để đảm bảo phát lại.
 
 ---
 
 ## 🌐 Bản địa hóa
 
-Tunefy đi kèm **bản dịch đầy đủ** cho 14 ngôn ngữ (cộng thêm ngôn ngữ hệ thống tự động):
+Tunefy cung cấp **bản dịch đầy đủ** bằng 14 ngôn ngữ (cộng với ngôn ngữ hệ thống tự động):
 
 | Ngôn ngữ | Mã | Ngôn ngữ | Mã |
 | :--- | :---: | :--- | :---: |
@@ -142,56 +143,56 @@ Tunefy đi kèm **bản dịch đầy đủ** cho 14 ngôn ngữ (cộng thêm n
 | 🇵🇹 Português | `pt` | 🇹🇷 Türkçe | `tr` |
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
-Đặt ngôn ngữ trong **Cài đặt → Ngôn ngữ** (hoặc giữ **Hệ thống** để tự động nhận diện).
+Đặt ngôn ngữ trong **Cài đặt → Ngôn ngữ** (hoặc giữ **Hệ thống** để tự động phát hiện).
 
 ---
 
-## 📸 Hình ảnh màn hình
+## 📸 Ảnh chụp màn hình
 
 ### 🏠 Trang chủ & Điều hướng
 <p align="center">
-  <img src="images/home.jpg" width="30%" alt="Màn hình Trang chủ" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Trang chủ với Trình phát nhỏ" />
+  <img src="images/home.jpg" width="30%" alt="Màn hình chính" />
+  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Trang chủ với máy nghe nhạc mini" />
   <img src="images/library.jpg" width="30%" alt="Thư viện" />
 </p>
 
 ### 🔍 Tìm kiếm
 <p align="center">
   <img src="images/search_with _results.jpg" width="30%" alt="Kết quả tìm kiếm" />
-  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Gợi ý tìm kiếm" />
+  <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Đề xuất tìm kiếm" />
 </p>
 
-### 🎵 Trình phát
+### 🎵 Người chơi
 <p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Trình phát nhập vai" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Trình phát cũ" />
+  <img src="images/Immersive_player.jpg" width="30%" alt="Người chơi nhập vai" />
+  <img src="images/leagcy_player.jpg" width="30%" alt="Người chơi kế thừa" />
   <img src="images/song_queue.jpg" width="30%" alt="Hàng đợi bài hát" />
 </p>
 
 ### 🎤 Lời bài hát
 <p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lời bài hát với điều khiển" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lời bài hát không điều khiển" />
+  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Lời bài hát có điều khiển" />
+  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Lời bài hát không có điều khiển" />
 </p>
 
 ### 👥 Cộng đồng & Hồ sơ
 <p align="center">
-  <img src="images/community.jpg" width="30%" alt="Bảng tin Cộng đồng" />
-  <img src="images/profile_screen.jpg" width="30%" alt="Màn hình Hồ sơ" />
+  <img src="images/community.jpg" width="30%" alt="Nguồn cấp dữ liệu cộng đồng" />
+  <img src="images/profile_screen.jpg" width="30%" alt="Màn hình hồ sơ" />
 </p>
 
 ### ⚙️ Cài đặt & Tùy chỉnh
 <p align="center">
   <img src="images/settings.jpg" width="30%" alt="Cài đặt" />
-  <img src="images/app_theme_selector.jpg" width="30%" alt="Bộ chọn Chủ đề" />
+  <img src="images/app_theme_selector.jpg" width="30%" alt="Bộ chọn chủ đề" />
   <img src="images/accent_color_selector.jpg" width="30%" alt="Màu nhấn" />
-  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Màu nhấn Tùy chỉnh" />
-  <img src="images/app_language_selector.jpg" width="30%" alt="Bộ chọn Ngôn ngữ" />
+  <img src="images/custom_accent_color_selector.jpg" width="30%" alt="Màu nhấn tùy chỉnh" />
+  <img src="images/app_language_selector.jpg" width="30%" alt="Bộ chọn ngôn ngữ" />
 </p>
 
 ### ℹ️ Giới thiệu
 <p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Màn hình Giới thiệu" />
+  <img src="images/about_screen.jpg" width="30%" alt="Giới thiệu về màn hình" />
 </p>
 
 ---
@@ -212,39 +213,43 @@ tunefy-music/
 └── images/, assets/         # Screenshots & brand assets
 ```
 
-**Độ ổn định khi phát lại.** Ứng dụng không bao giờ phụ thuộc vào một nhà cung cấp duy nhất. Nó dò các nguồn theo một phân cấp ưu tiên (relay cục bộ → relay đám mây → các bản sao không cần khóa → tìm kiếm theo siêu dữ liệu/tiêu đề), với một cầu chì tự động bỏ qua nguồn đang gặp sự cố. **Relay đám mây** giải quyết luồng phát rồi **chuyển tiếp các byte** qua kết nối riêng của nó, để việc giải quyết và phát lại dùng chung một IP — chính điều này tránh được lỗi 403 khóa IP trên các liên kết Googlevideo.
+**Độ tin cậy khi phát lại.** Ứng dụng không bao giờ phụ thuộc vào một nhà cung cấp duy nhất. Nó thăm dò các nguồn trong một
+tầng ưu tiên (chuyển tiếp cục bộ → chuyển tiếp đám mây → gương không cần chìa khóa → tìm kiếm siêu dữ liệu/tiêu đề), với một
+bộ ngắt mạch bỏ qua một nguồn bị hỏng. **chuyển tiếp đám mây** giải quyết một luồng và sau đó
+**chuyển tiếp các byte** thông qua kết nối của chính nó để độ phân giải và phát lại chia sẻ một IP - đây là
+điều gì có thể tránh được lỗi 403 bị khóa IP trên các liên kết Googlevideo.
 
 ---
 
-## 🛠️ Bộ công nghệ
+## 🛠️ Ngăn xếp công nghệ
 
-| Tầng | Công nghệ |
+| Lớp | Công nghệ |
 |---|---|
 | **Khung** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
-| **Quản lý trạng thái** | [Riverpod](https://riverpod.dev/) |
-| **Engine âm thanh** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **Trích xuất YouTube** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (fork của [anandnet](https://github.com/anandnet)) |
+| **Quản lý nhà nước** | [Riverpod](https://riverpod.dev/) |
+| **Công cụ âm thanh** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
+| **YouTube Khai thác** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (ngã ba bởi [anandnet](https://github.com/anandnet)) |
 | **AI DJ** | Google Gemini (`gemini_service`) |
-| **Lời bài hát** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + engine karaoke tùy chỉnh + dịch DeepL |
-| **Lưu trữ cục bộ** | [Hive](https://docs.hivedb.dev/) |
-| **Đồng bộ đám mây / Xác thực** | Supabase (Postgres + RLS, đăng nhập ẩn danh & Google) |
-| **Mạng** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
-| **Relay luồng** | FastAPI + yt-dlp trên Render (`server/`) |
-| **Thành phần giao diện** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
+| **Lời bài hát** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + công cụ karaoke tùy chỉnh + DeepL dịch |
+| **Bộ nhớ cục bộ** | [Hive](https://docs.hivedb.dev/) |
+| **Đồng bộ hóa đám mây / Xác thực** | Supabase (Postgres + RLS, ẩn danh & đăng nhập bằng Google) |
+| **Kết nối mạng** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
+| **Chuyển tiếp luồng** | FastAPI + yt-dlp trên Render (`server/`) |
+| **Thành phần giao diện người dùng** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
 ---
 
 ## ⚙️ Thiết lập & Cài đặt
 
-### Yêu cầu tiên quyết
-- Flutter SDK (Bản ổn định mới nhất)
+### Điều kiện tiên quyết
+- Flutter SDK (Ổn định mới nhất)
 - Dart SDK
-- Android Studio / VS Code
+- Android Studio / Mã VS
 - Java JDK 17
 
 ### Cài đặt
 
-1. **Nhập mã nguồn về:**
+1. **Sao chép kho lưu trữ:**
    ```bash
    git clone https://github.com/grandelagbanou28-gif/tunefy-music.git
    cd tunefy-music
@@ -260,86 +265,89 @@ tunefy-music/
    flutter run
    ```
 
-4. **Bản dựng APK phát hành** (tách theo ABI để dung lượng nhỏ hơn):
+4. **Bản phát hành APK** (được chia theo ABI để có kích thước nhỏ hơn):
    ```bash
    flutter build apk --split-per-abi
    ```
 
-> URL của relay đám mây được nhúng sẵn trong `lib/utils/api_constants.dart`
-> (`relayBaseUrl`), nên không cần cờ build nào. Để trỏ tới relay của riêng bạn:
+> URL chuyển tiếp đám mây được đưa vào `lib/utils/api_constants.dart`
+> (`relayBaseUrl`), vì vậy không cần cờ xây dựng. Để chỉ vào rơle của riêng bạn:
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
 ---
 
-## 🖥️ Backend & Máy chủ phát trực tuyến
+## 🖥️ Máy chủ phụ trợ và phát trực tuyến
 
-### ☁️ Relay luồng đám mây — `server/` (triển khai trên Render)
-Giải quyết một URL âm thanh YouTube **và chuyển tiếp các byte** để điện thoại và bộ giải quyết dùng chung một IP (không có lỗi 403). FastAPI + yt-dlp, Docker, gói miễn phí.
+### ☁️ Cloud Stream Relay — `server/` (được triển khai vào Render)
+Phân giải URL âm thanh YouTube **và chuyển tiếp các byte** để điện thoại và trình phân giải chia sẻ một IP
+(số 403). FastAPI + yt-dlp, Docker, bậc miễn phí.
 
-| Endpoint | Mô tả |
+| Điểm cuối | Mô tả |
 | --- | --- |
-| `GET /health` | Kiểm tra còn sống (`ok`) |
-| `GET /stream?videoId=X&key=K` | Giải quyết qua yt-dlp → trả về một URL `…/relay` (200 chỉ khi giải quyết thành công) |
-| `GET /relay?videoId=X&key=K` | Ủy quyền chuyển tiếp các byte âm thanh (hỗ trợ Range → 206 khi tua) |
+| `GET /health` | Thăm dò sự sống (`ok`) |
+| `GET /stream?videoId=X&key=K` | Giải quyết qua yt-dlp → trả về URL `…/relay` (chỉ 200 nếu nó giải quyết được) |
+| `GET /relay?videoId=X&key=K` | Proxy các byte âm thanh (Nhận biết phạm vi → 206 để tìm kiếm) |
 
-Được bảo vệ bằng biến môi trường dùng chung `RELAY_KEY` (trả về **401** nếu thiếu). Triển khai: Render →
+Được bảo vệ bởi `RELAY_KEY` env var được chia sẻ (trả về **401** nếu không có nó). Triển khai: Render →
 **Root Directory = `server`**, Docker, **Health Check = `/health`**. Xem `server/README.md`.
 
 ### 🎵 API ứng dụng — `backend/`
-Backend dữ liệu/tìm kiếm (YouTube Music qua youtubei.js + các nguồn mở: thể loại Last.fm,
-bản phát hành & thập kỷ MusicBrainz).
+Phần phụ trợ dữ liệu/tìm kiếm (YouTube Music qua youtubei.js + nguồn mở: Last.fm thể loại,
+MusicBrainz phát hành & thập kỷ).
 
-| Endpoint | Mô tả |
+| Điểm cuối | Mô tả |
 | --- | --- |
-| `/api/search` | Tìm kiếm nhạc / video |
+| `/api/search` | Tìm kiếm nhạc/video |
 | `/api/trending` | Xu hướng |
 | `/api/charts` | Bảng xếp hạng YT Music |
 | `/api/playlist/:id` | Chi tiết danh sách phát |
-| `/api/moods`, `/api/moods/:id` | Thể loại & tâm trạng (dự phòng Last.fm) |
-| `/api/tags?tag=` | Bài hát/album hàng đầu theo thể loại (Last.fm) |
+| `/api/moods`, `/api/moods/:id` | Danh mục & tâm trạng (Last.fm dự phòng) |
+| `/api/tags?tag=` | Các bài hát/album hàng đầu thuộc thể loại (Last.fm) |
 | `/api/newreleases` | Bản phát hành mới (MusicBrainz) |
 | `/api/decades?year=` | Album theo thập kỷ (MusicBrainz) |
-| `/api/categories` | Danh sách thể loại |
+| `/api/categories` | Danh sách danh mục |
 
-**Cục bộ:** `cd backend && npm install && npm start` (cổng 8000).
-**Triển khai (Vercel):** nhập kho lưu trữ này về, **Root Directory = `backend`**. Xem `backend/README.md`.
+**Địa phương:** `cd backend && npm install && npm start` (cổng 8000).
+**Triển khai (Vercel):** nhập kho lưu trữ này, **Root Directory = `backend`**. Xem `backend/README.md`.
 
 ### 🗄️ Cơ sở dữ liệu — `supabase/`
-Lược đồ Postgres với **Bảo mật theo cấp hàng (Row-Level Security)**: các hàng người dùng được giới hạn theo `auth.uid()`, thư mục chỉ đọc với người dùng ẩn danh và chỉ ghi được bởi service role. Chạy các migration trong Supabase SQL Editor (theo đúng thứ tự).
+Lược đồ Postgres với **Bảo mật cấp hàng**: các hàng của người dùng nằm trong phạm vi `auth.uid()`, danh mục là
+chỉ đọc đối với người dùng ẩn danh và chỉ có thể ghi theo vai trò dịch vụ. Chạy di chuyển trong Supabase
+SQL Editor (theo thứ tự).
 
 ---
 
 ## 🤝 Đóng góp
 
-Chúng tôi hoan nghênh đóng góp! Dù là báo lỗi, đề xuất tính năng hay viết mã, sự giúp đỡ của bạn đều được trân trọng.
+Đóng góp được chào đón! Cho dù đó là báo cáo lỗi, đề xuất tính năng hay viết mã, sự trợ giúp của bạn đều được đánh giá cao.
 
-1. **Fork Dự án**
-2. **Tạo nhánh Tính năng của bạn** (`git checkout -b feature/AmazingFeature`)
-3. **Commit các thay đổi của bạn** (`git commit -m 'Add some AmazingFeature'`)
-4. **Push lên nhánh** (`git push origin feature/AmazingFeature`)
-5. **Mở một Pull Request**
+1. **Rẽ nhánh dự án**
+2. **Tạo nhánh tính năng của bạn** (`git checkout -b feature/AmazingFeature`)
+3. **Cam kết thay đổi của bạn** (`git commit -m 'Add some AmazingFeature'`)
+4. **Đẩy tới chi nhánh** (`git push origin feature/AmazingFeature`)
+5. **Mở yêu cầu kéo**
 
-**Nguyên tắc:** tuân theo phong cách mã hiện có, chạy `flutter analyze` (phải sạch) và kiểm thử các tính năng mới trước khi gửi.
+**Nguyên tắc:** tuân theo kiểu mã hiện có, chạy `flutter analyze` (phải sạch) và kiểm tra các tính năng mới trước khi gửi.
 
 ---
 
 ## 🙏 Lời cảm ơn
 
-Tunefy sẽ không tồn tại nếu không có những đóng góp tuyệt vời của các nhà phát triển và dự án này.
+Tunefy sẽ không tồn tại nếu không có sự nỗ lực đáng kinh ngạc của các nhà phát triển và dự án này.
 
 ### youtube_explode_dart
-Cảm ơn **[Hexer10](https://github.com/Hexer10)**, tác giả gốc của
-[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — xương sống cho luồng YouTube của Tunefy —
-và **[anandnet](https://github.com/anandnet)** với phiên bản fork được cập nhật, giúp Tunefy hoạt động
-với những thay đổi mới nhất của YouTube.
+Cảm ơn**[Hexer10](https://github.com/Hexer10)**, tác giả gốc của
+[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — xương sống của Tunefy
+YouTube phát trực tuyến — và**[anandnet](https://github.com/anandnet)** dành cho đợt phân nhánh cập nhật
+giữ cho Tunefy hoạt động với những thay đổi mới nhất của YouTube.
 
 ### Animesh (n-ce) — fast-saavn & ytify
-Xin gửi lời cảm ơn tới **[Animesh (n-ce)](https://github.com/n-ce)**, tác giả của
-**[fast-saavn](https://github.com/n-ce/saavn)** (API JioSaavn mở cung cấp siêu dữ liệu cho Tunefy)
-và **[ytify](https://github.com/n-ce/ytify)** (một nguồn cảm hứng lớn).
+Xin gửi lời cảm ơn tới**[Animesh (n-ce)](https://github.com/n-ce)**, người tạo ra
+**[fast-saavn](https://github.com/n-ce/saavn)** (siêu dữ liệu của API JioSaavn mở Tunefy)
+và**[ytify](https://github.com/n-ce/ytify)** (một nguồn cảm hứng to lớn).
 
 ### Thư viện nguồn mở
-| Gói | Tác giả / Người duy trì |
+| Trọn gói | Tác giả / Người bảo trì |
 |---|---|
 | [just_audio](https://pub.dev/packages/just_audio) | [Ryan Heise](https://github.com/ryanheise) |
 | [audio_service](https://pub.dev/packages/audio_service) | [Ryan Heise](https://github.com/ryanheise) |

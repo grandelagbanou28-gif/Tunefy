@@ -5,26 +5,26 @@
 <h1 align="center">Tunefy</h1>
 
 <p align="center">
-  <strong>Flutter ile geliştirilmiş, gizliliğe odaklanan güçlü bir müzik istemcisi.</strong><br/>
-  Reklamsız · Çevrimdışı · Yapay Zekâ DJ · Senkron & çeviri sözler · Liquid Glass arayüzü · 15 kaynak · Hesap gerekmez
+<strong>Flutter.</strong><br/> ile oluşturulmuş güçlü, gizlilik odaklı bir müzik istemcisi
+  Reklamsız · Çevrimdışı · AI DJ · Senkronize edilmiş ve çevrilmiş Şarkı Sözleri · Liquid Glass Kullanıcı Arayüzü · 15 kaynak · Hesap gerektirmez
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter" />
   <img src="https://img.shields.io/badge/Dart-3.x-0175C2?logo=dart&logoColor=white" alt="Dart" />
-  <img src="https://img.shields.io/badge/Version-3.9.0-brightgreen" alt="Sürüm" />
+  <img src="https://img.shields.io/badge/Version-3.9.0-brightgreen" alt="Version" />
   <img src="https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web%20%7C%20Windows-lightgrey" alt="Platform" />
-  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Diller" />
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="Lisans" />
+  <img src="https://img.shields.io/badge/Languages-14-orange" alt="Languages" />
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
 <p align="center">
-  <a href="#-key-features">Özellikler</a> ·
-  <a href="#-localisation">Diller</a> ·
-  <a href="#-screenshots">Görüntüler</a> ·
-  <a href="#-architecture">Mimari</a> ·
-  <a href="#-setup--installation">Kurulum</a> ·
-  <a href="#-backend--streaming-servers">Sunucular</a>
+  <a href="#-temel-özellikler">Özellikler</a> ·
+  <a href="#-yerelleştirme">Diller</a> ·
+  <a href="#-ekran-görüntüleri">Ekran görüntüleri</a> ·
+  <a href="#-mimarlık">Mimarlık</a> ·
+  <a href="#-kurulum-ve-kurulum">Kurulum</a> ·
+  <a href="#-arka-uç-ve-yayın-sunucuları">Sunucular</a>
 </p>
 
 <p align="center">
@@ -46,91 +46,92 @@
 
 ---
 
-Tunefy, Flutter ile geliştirilmiş, zengin özellikli ve gizliliğe odaklanan bir müzik istemcisidir.
-**15+ açık ve anahtarsız kaynaktan**, otomatik bir yedekleme kaskadı ile yayın yapar; bir sağlayıcıda
-başarısız olan parça bir sonrakinde çalınır. Arka planda oynatma, çevrimdışı indirmeler, senkronize
-**ve çevrilmiş** sözler, bir **Yapay Zekâ DJ**, internet radyosu, konserler, paylaşılan Blend listeleri,
-modern bir Liquid Glass arayüzü ve akıllı arka plan önbellekleme ile premium, reklamsız bir deneyim sunar —
-hesaplı ya da hesapsız.
+Tunefy, Flutter ile oluşturulmuş, zengin özelliklere sahip, gizlilik odaklı bir müzik istemcisidir. Şuradan yayınlanıyor:
+**15'ten fazla açık ve anahtarsız kaynak** ile otomatik geri dönüş kademesi, yani tek seferde başarısız olan bir parça
+sağlayıcı bir sonraki oyunda oynar. Arka planda oynatmayla birinci sınıf, reklamsız bir deneyim sunar,
+çevrimdışı indirmeler, senkronize **ve çevrilmiş** şarkı sözleri, **AI DJ**, internet radyosu, konserler,
+paylaşılan Blend çalma listeleri, modern bir Liquid Glass kullanıcı arayüzü ve akıllı arka planda önbelleğe alma — olsun ya da olmasın
+bir hesap.
 
 > [!NOTE]
-> Tunefy doğrudan bu depodan dağıtılır (APK sürümleri). Google Play Store'da
-> **mevcut değildir**.
+> Tunefy doğrudan bu depodan dağıtılır (APK sürümleri). **mevcut değil**
+> Google Play Store üzerinde.
 
 ---
 
 ## 🚀 Temel Özellikler
 
-### 🎨 Liquid Glass Arayüz/UX
-- **Dinamik Glassmorphic Temalar** — `liquid_glass_easy` aracılığıyla Koyu ve Açık modlarda premium görünüm. Açık Mod, albüm kapaklarına uyum sağlayan yarı saydam beyaz bir ton kullanır.
-- **Özel Shader'lar & Bulanıklık** — Sanat eserinin renklerine uyum sağlayan, yüksek performanslı buzlu cam panelleri ve katmanları.
-- **Kontrast Duyarlı Öğeler** — Durum çubuğu simgeleri, kontroller, kaydırıcılar ve menüler okunabilirlik için otomatik olarak ters çevrilir.
-- **Büyük Ekran & Masaüstü Optimizasyonu** — Duyarlı oynatıcı düzenleri (1300px'e kadar), ortalanmış diyaloglar ve masaüstü/tablet için özel bir üst arama çubuğu.
+### 🎨 Liquid Glass UI/UX
+- **Dinamik Cammorfik Temalar** — `liquid_glass_easy` aracılığıyla Karanlık ve Açık modlarda birinci sınıf stil. Işık Modu, albüm kapağına uyum sağlayan yarı şeffaf bir beyaz renk tonu kullanır.
+- **Özel Gölgelendiriciler ve Bulanıklaştırma** — Sanat eseri renklerine uyum sağlayan yüksek performanslı buzlu cam paneller ve kaplamalar.
+- **Kontrast Farkına Sahip Öğeler** — Durum çubuğu simgeleri, kontrolleri, kaydırıcıları ve menüleri okunabilirlik için otomatik olarak tersine çevrilir.
+- **Büyük Ekran ve Masaüstü Optimizasyonu** — Duyarlı oynatıcı düzenleri (1300 piksele kadar), ortalanmış iletişim kutuları ve masaüstü/tablet için özel bir üst arama çubuğu.
 
-### 🎧 Sürükleyici Ses, Sözler & Karaoke
-- **Kelime Kelime Karaoke** — Şarkıcı söylerken kelimeler gerçek zamanlı olarak renklenir (60+ FPS).
-- **Satır Satır Senkron Geçiş** — Etkin satır vurgusu ve akıcı kaydırma ile ilerlemeli geçiş efekti.
-- **Çevrilmiş Sözler** — Sözler, uygulamanızın diline anında makinece çevrilir (DeepL).
-- **Lofi Modu** — Herhangi bir parçayı Lofi havasına dönüştürün: 0.9× yavaşlatma, perde düzeltme, yerel yankı.
-- **Ekolayzer & Yerel Efektler** — Arka planda oynatma ve ekran kapalıyken ses ile sistem düzeyinde EQ.
-- **Çok Dilli Ses & Kalite Kontrolü** — Mevcut ses dillerini algılayın ve Yüksek/Orta/Düşük kalitede yayınlayın.
+### 🎧 Sürükleyici Ses, Şarkı Sözleri ve Karaoke
+- **Kelime Kelime Karaoke** — Sanatçı şarkı söylerken kelimeler gerçek zamanlı olarak renkle dolar (60+ FPS).
+- **Satır Satır Senkronize Tarama** — Aktif satır vurgulama ve yumuşak kaydırma ile aşamalı tarama efekti.
+- **Çevrilmiş Şarkı Sözleri** — Şarkı sözleri anında uygulama dilinize makine çevirisiyle (DeepL) çevrilir.
+- **Lofi Modu** — Herhangi bir parçayı Lofi havasına dönüştürün: 0,9 kat yavaşlatılmış, perde düzeltme, doğal yankı.
+- **Ekolayzer ve Yerel Efektler** — Arka planda oynatma ve ekran kapalı ses ile sistem düzeyinde EQ.
+- **Çok Dilli Ses ve Kalite Kontrolü** — Mevcut ses dillerini tespit edin ve Yüksek/Orta/Düşük kalitede yayın yapın.
 
-### 🤖 Yapay Zekâ DJ & Kişiselleştirme
-- **Yapay Zekâ DJ Asistanı (Gemini)** — Zevkinizi okuyan, akıllı listeler oluşturan ve istekleri alan sohbet tabanlı bir DJ.
-- **Zevk Sinyalleri** — Parça başına zevk puanlaması, sevdiğiniz şeyleri öğrenir ve önerileri yönlendirir.
-- **Wrapped & Dinleme İstatistikleri** — Yılın özeti: en iyi sanatçılar, ruh halleri ve dinleme kapsülleri.
-- **Akıllı Önbellek Sistemi** — Anında, beklemeden oynatma için ses + çok çözünürlüklü kapak görsellerinin arka planda asenkron önbelleklenmesi.
+### 🤖 Yapay Zeka DJ ve Kişiselleştirme
+- **AI DJ Assistant (Gemini)** — Zevkinizi okuyan, akıllı çalma listeleri oluşturan ve istekleri alan, konuşkan bir DJ.
+- **Tat Sinyalleri** — Parça başına lezzet puanlaması, neleri sevdiğinizi öğrenir ve önerilere yön verir.
+- **Wrapped ve Dinleme İstatistikleri** — İnceleme yılınız: en iyi sanatçılar, ruh halleri ve dinleme kapsülleri.
+- **Akıllı Önbellek Sistemi** — Anında, sıfır beklemeli oynatma için sesin eşzamansız arka planda önbelleğe alınması + çok çözünürlüklü resimler.
 
-### 🌍 15+ Kaynakta Keşif
-Tunefy, oynatmayı şu sağlayıcılar arasında **otomatik bir yedekleme kaskadı** ile çözer (anahtarsız = API anahtarı gerekmez):
+### 🌍 15'ten Fazla Kaynakta Keşif
+Tunefy, bu sağlayıcılar arasında **otomatik bir geri dönüş kademesi** yoluyla oynatmayı çözer (anahtarsız = API anahtarı gerekmez):
 
 | Kaynak | Tür | Notlar |
 |---|---|---|
-| **YouTube / YT Music** | Video / Ses | Birincil, youtube_explode + dahili API ile |
-| **Jamendo** | Anahtarsız | Creative Commons kataloğu |
-| **Deezer** | Anahtarsız | Katalog + üst veri |
-| **Audius** | Anahtarsız | Merkeziyetsiz sanatçılar |
-| **JioSaavn** | Açık API | Hızlı üst veri & arama |
-| **Invidious** | Anahtarsız | YouTube yansıması (4 örnek) |
-| **Piped** | Açık API | YouTube yansıması |
-| **OpenVerse** | Anahtarsız | CC görseller/ses *(yeni)* |
-| **Wikimedia Commons** | Anahtarsız | Açık medya *(yeni)* |
+| **YouTube / YT Müzik** | Video / Ses | Birincil, youtube_explode + dahili API aracılığıyla |
+| **Jamendo** | Anahtarsız | Creative-Commons kataloğu |
+| **Deezer** | Anahtarsız | Katalog + meta veriler |
+| **Audius** | Anahtarsız | Merkezi olmayan sanatçılar |
+| **JioSaavn** | API'yi aç | Hızlı meta veriler ve arama |
+| **Invidious** | Anahtarsız | YouTube ayna (4 örnek) |
+| **Piped** | API'yi aç | YouTube ayna |
+| **OpenVerse** | Anahtarsız | CC görüntüler/ses *(yeni)* |
+| **Wikimedia Commons** | Anahtarsız | Medyayı aç *(yeni)* |
 | **Beatport** | Anahtarsız | Elektronik/dans *(yeni)* |
-| **Dailymotion** | Anahtarsız | Video yedeği *(yeni)* |
+| **Dailymotion** | Anahtarsız | Geri dönüş videosu *(yeni)* |
 | **ccMixter** | Anahtarsız | Remix kültürü *(yeni)* |
 | **Internet Archive** | Anahtarsız | Tarihsel ses *(yeni)* |
 | **Radio Browser** | Anahtarsız | İnternet radyo istasyonları |
-| **iTunes / MusicBrainz / Last.fm** | Açık | Üst veri, listeler, türler |
+| **iTunes / MusicBrainz / Last.fm** | Aç | Meta veriler, grafikler, türler |
 
-- **Bulut Akış Aktarıcısı** — Kendi barındırdığınız bir aktarıcı, oynatıcının kullandığı aynı IP'den ses baytlarını çözer ve **aracılık eder**; aksi halde IP kilitli Googlevideo bağlantılarının döndürdüğü HTTP 403 hatalarını önler. Bkz. [Sunucular](#-backend--streaming-servers).
-- **Spotify İçe Aktarma** — Herhangi bir herkese açık Spotify liste adresini (veya bir Spotify kodunu) yapıştırarak parçaları içe aktarın.
-- **Genel Arama** — Şarkılar, videolar, albümler, sanatçılar ve podcast'ler üzerinde tek arama.
-- **Paylaş ve Çal** — YouTube/YT Music bağlantılarını doğrudan Tunefy'ye paylaşın.
+- **Bulut Akış Aktarımı** — Kendi kendine barındırılan bir geçiş, oynatıcının kullandığı aynı IP'den **ses baytlarını çözer ve proxy'ye alır**; aksi halde IP kilitli Googlevideo bağlantılarının döndürdüğü HTTP 403'ten kaçınır. Bakınız [Servers](#-arka-uç-ve-yayın-sunucuları).
+- **Spotify İçe Aktar** — Parçaları içe aktarmak için herhangi bir genel Spotify çalma listesi URL'sini yapıştırın (veya bir Spotify kodunu tarayın).
+- **Global Arama** — Şarkılar, videolar, albümler, sanatçılar ve podcast'ler arasında tek arama.
+- **Oynatmak için Paylaş** — YouTube/YT Müzik bağlantılarını doğrudan Tunefy'de paylaşın.
 
-### 📻 Radyo, Konserler & Video
+### 📻 Radyo, Konserler ve Video
 - **İnternet Radyosu** — Binlerce canlı istasyon (Radio Browser).
-- **Konserler** — Yakınınızdaki canlı etkinlikleri zengin ayrıntı sayfalarıyla keşfedin.
-- **Klip Akışı** — Topluluk ve trend kliplerden oluşan dikey kısa video akışı.
-- **Video Oynatıcı** — Tuval video arka planlarıyla tam video oynatma.
-- **DJ Mix** — Özel DJ/mix keşfi ve oynatımı.
+- **Konserler** — Zengin ayrıntı sayfalarıyla yakınınızdaki canlı etkinlikleri keşfedin.
+- **Klip Akışı** — Topluluğun ve trend olan kliplerin dikey kısa video beslemesi.
+- **Video Oynatıcı** — Kanvas video arka planlarıyla tam video oynatma.
+- **DJ Miksleri** — Özel DJ/miks keşfi ve oynatma.
 
-### 🤝 Sosyal, Blend'ler & Topluluk
-- **Blend Listeleri** — Kısa bir katılma koduyla (örn. `KORA-4821`) ortak bir liste oluşturun; kodu olan herkes, Spotify Blend bağlantılarında olduğu gibi dinleyebilir ve katkıda bulunabilir.
-- **Topluluk Akışı** — Topluluğun yüklediği parçaları arayın, yayınlayın ve keşfedin.
-- **Sanatçı Takibi** — Sanatçıları/kanalları takip ederek onlardan haberdar olun.
-- **Akıllı Kuyruk & Sonsuz Oynatma** — Akıllı temizleme davranışıyla otomatik kuyruk.
+### 🤝 Sosyal, Karışımlar ve Topluluk
+- **Blend Çalma listeleri** — Kısa bir birleştirme koduyla paylaşılan bir çalma listesi oluşturun (ör. `KORA-4821`); Spotify Blend bağlantıları gibi, kodu bilen herkes dinleyebilir ve katkıda bulunabilir.
+- **Topluluk Akışı** — Topluluk tarafından yüklenen parçaları arayın, yayınlayın ve keşfedin.
+- **Sanatçı Takip Ediyor** — Takip etmek için sanatçıları/kanalları takip edin.
+- **Akıllı Sıra ve Sonsuz Oynatma** — Akıllı net davranışla otomatik sıraya alma.
 
-### 🔐 Gizlilik & Hesaplar
-- **Hesap Gerekmez** — Favoriler, listeler ve geçmiş varsayılan olarak yerel olarak saklanır.
-- **Anonim + Google ile Giriş** — Bulut senkronizasyonu ve profil için isteğe bağlı giriş (anonim cihaz kimliği veya Supabase Auth üzerinden Google).
+### 🔐 Gizlilik ve Hesaplar
+- **Hesap Gerekmez** — Favoriler, çalma listeleri ve geçmiş varsayılan olarak yerel olarak depolanır.
+- **Anonim + Google Oturum Açma** — Bulut senkronizasyonu ve profil için isteğe bağlı oturum açma (anonim cihaz kimliği veya Supabase Kimlik Doğrulama aracılığıyla Google).
 - **Çevrimdışı İndirmeler** — Çevrimdışı dinlemek için şarkıları ve videoları indirin.
-- **Deep Linking** — Tarayıcı veya paylaşılan bağlantılar aracılığıyla şarkıları, sanatçıları, albümleri ve listeleri açmak/oynatmak için tam özel URL şeması.
-- **Reklamsız & Güvenilir** — Kesintisiz dinleme; oynatmayı garanti etmek için açık aktarıcılar (Last.fm, MusicBrainz, iTunes) tarafından desteklenir.
+- **Derin Bağlantı** — Şarkıları, sanatçıları, albümleri ve çalma listelerini tarayıcı veya paylaşılan bağlantılar aracılığıyla açmak/oynatmak için tam özel URL şeması.
+- **Reklamsız ve Güvenilir** — Oynatmayı garanti etmek için açık rölelerle (Last.fm, MusicBrainz, iTunes) desteklenen kesintisiz dinleme.
 
 ---
 
 ## 🌐 Yerelleştirme
-Tunefy, 14 dilde **tam çevirilerle** gelir (otomatik sistem dili hariç):
+
+Tunefy 14 dilde **tam çeviri** ile birlikte gelir (artı otomatik sistem dili):
 
 | Dil | Kod | Dil | Kod |
 | :--- | :---: | :--- | :---: |
@@ -142,45 +143,45 @@ Tunefy, 14 dilde **tam çevirilerle** gelir (otomatik sistem dili hariç):
 | 🇵🇹 Português | `pt` | 🇹🇷 Türkçe | `tr` |
 | 🇮🇹 Italiano | `it` | 🇨🇳 中文（简体）| `zh` |
 
-Dili **Ayarlar → Dil** bölümünden ayarlayın (otomatik algılama için **Sistem**'de bırakın).
+Dili **Ayarlar → Dil** bölümünde ayarlayın (veya otomatik algılama için **Sistem**'i koruyun).
 
 ---
 
-## 📸 Görüntüler
+## 📸 Ekran görüntüleri
 
-### 🏠 Ana Sayfa & Gezinme
+### 🏠 Ev ve Navigasyon
 <p align="center">
-  <img src="images/home.jpg" width="30%" alt="Ana Sayfa Ekranı" />
-  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Mini Oynatıcılı Ana Sayfa" />
+  <img src="images/home.jpg" width="30%" alt="Ana Ekran" />
+  <img src="images/home_with_miniplayer.jpg" width="30%" alt="Mini Oynatıcılı Ev" />
   <img src="images/library.jpg" width="30%" alt="Kütüphane" />
 </p>
 
-### 🔍 Arama
+### 🔍 Ara
 <p align="center">
   <img src="images/search_with _results.jpg" width="30%" alt="Arama Sonuçları" />
   <img src="images/search_with _search_suggestions.jpg" width="30%" alt="Arama Önerileri" />
 </p>
 
-### 🎵 Oynatıcı
+### 🎵 Oyuncu
 <p align="center">
-  <img src="images/Immersive_player.jpg" width="30%" alt="Sürükleyici Oynatıcı" />
-  <img src="images/leagcy_player.jpg" width="30%" alt="Eski Oynatıcı" />
-  <img src="images/song_queue.jpg" width="30%" alt="Şarkı Kuyruğu" />
+  <img src="images/Immersive_player.jpg" width="30%" alt="Sürükleyici Oyuncu" />
+  <img src="images/leagcy_player.jpg" width="30%" alt="Eski Oyuncu" />
+  <img src="images/song_queue.jpg" width="30%" alt="Şarkı Sırası" />
 </p>
 
-### 🎤 Sözler
+### 🎤 Şarkı Sözleri
 <p align="center">
-  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Kontrollü Sözler" />
-  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Kontrollersiz Sözler" />
+  <img src="images/lyrics_with_controls.jpg" width="30%" alt="Kontrollü Şarkı Sözleri" />
+  <img src="images/lyrics_without_controls.jpg" width="30%" alt="Kontrolsüz Şarkı Sözleri" />
 </p>
 
-### 👥 Topluluk & Profil
+### 👥 Topluluk ve Profil
 <p align="center">
   <img src="images/community.jpg" width="30%" alt="Topluluk Akışı" />
   <img src="images/profile_screen.jpg" width="30%" alt="Profil Ekranı" />
 </p>
 
-### ⚙️ Ayarlar & Özelleştirme
+### ⚙️ Ayarlar ve Özelleştirme
 <p align="center">
   <img src="images/settings.jpg" width="30%" alt="Ayarlar" />
   <img src="images/app_theme_selector.jpg" width="30%" alt="Tema Seçici" />
@@ -191,12 +192,12 @@ Dili **Ayarlar → Dil** bölümünden ayarlayın (otomatik algılama için **Si
 
 ### ℹ️ Hakkında
 <p align="center">
-  <img src="images/about_screen.jpg" width="30%" alt="Hakkında Ekranı" />
+  <img src="images/about_screen.jpg" width="30%" alt="Ekran Hakkında" />
 </p>
 
 ---
 
-## 🏗️ Mimari
+## 🏗️ Mimarlık
 
 ```
 tunefy-music/
@@ -212,7 +213,11 @@ tunefy-music/
 └── images/, assets/         # Screenshots & brand assets
 ```
 
-**Oynatma güvenilirliği.** Uygulama hiçbir zaman tek bir sağlayıcıya bağlı değildir. Kaynakları öncelik kaskadında tarar (yerel aktarıcı → bulut aktarıcı → anahtarsız yansımlar → üst veri/başlık araması) ve başarısız olan kaynağı atlayan bir devre açma mekanizması kullanır. **Bulut aktarıcı**, bir akışı çözer ve ardından **baytları kendi bağlantısı üzerinden aktarır**; böylece çözümleme ve oynatma aynı IP'yi paylaşır — Googlevideo bağlantılarındaki IP kilitli 403'ü önleyen şey budur.
+**Oynatma güvenilirliği.** Uygulama hiçbir zaman tek bir sağlayıcıya bağlı değildir. Kaynakları bir şekilde araştırır
+öncelik kademesi (yerel röle → bulut rölesi → anahtarsız aynalar → meta veri/başlık arama),
+Arızalı bir kaynağı atlayan devre kesici. **Bulut geçişi** bir akışı çözer ve ardından
+**baytları kendi bağlantısı üzerinden aktarır**, böylece çözünürlük ve oynatma aynı IP'yi paylaşır; bu
+Googlevideo bağlantılarında IP kilitli 403'ü önleyen şey.
 
 ---
 
@@ -221,28 +226,28 @@ tunefy-music/
 | Katman | Teknoloji |
 |---|---|
 | **Çerçeve** | [Flutter](https://flutter.dev/) + [Dart](https://dart.dev/) |
-| **Durum Yönetimi** | [Riverpod](https://riverpod.dev/) |
+| **Devlet Yönetimi** | [Riverpod](https://riverpod.dev/) |
 | **Ses Motoru** | [Just Audio](https://pub.dev/packages/just_audio) & [Audio Service](https://pub.dev/packages/audio_service) |
-| **YouTube Çıkarma** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (fork: [anandnet](https://github.com/anandnet)) |
-| **Yapay Zekâ DJ** | Google Gemini (`gemini_service`) |
-| **Sözler** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + özel karaoke motoru + DeepL çevirisi |
+| **YouTube Çıkarma** | [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) (çatal [anandnet](https://github.com/anandnet)) |
+| **Yapay Zeka DJ** | Google Gemini (`gemini_service`) |
+| **Şarkı sözleri** | [flutter_lyric](https://pub.dev/packages/flutter_lyric) + özel karaoke motoru + DeepL çeviri |
 | **Yerel Depolama** | [Hive](https://docs.hivedb.dev/) |
-| **Bulut Senkronizasyonu / Kimlik Doğrulama** | Supabase (Postgres + RLS, anonim & Google girişi) |
-| **Ağ** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
-| **Akış Aktarıcısı** | FastAPI + yt-dlp, Render üzerinde (`server/`) |
-| **Arayüz Bileşenleri** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
+| **Bulut Senkronizasyonu / Kimlik Doğrulaması** | Supabase (Postgres + RLS, anonim ve Google'da oturum açma) |
+| **Ağ oluşturma** | [Dio](https://pub.dev/packages/dio) & [Http](https://pub.dev/packages/http) |
+| **Akış Aktarımı** | FastAPI + yt-dlp Render (`server/`) üzerinde |
+| **Kullanıcı Arayüzü Bileşenleri** | `liquid_glass_easy`, [FluentUI System Icons](https://pub.dev/packages/fluentui_system_icons), [Google Fonts](https://pub.dev/packages/google_fonts), [Cached Network Image](https://pub.dev/packages/cached_network_image) |
 
 ---
 
-## ⚙️ Kurulum & Yükleme
+## ⚙️ Kurulum ve Kurulum
 
-### Ön Gereksinimler
-- Flutter SDK (En Son Kararlı Sürüm)
-- Dart SDK
-- Android Studio / VS Code
+### Önkoşullar
+- Flutter SDK (En Son Stabil)
+- Dart SDK'sı
+- Android Studio / VS Kodu
 - Java JDK 17
 
-### Yükleme
+### Kurulum
 
 1. **Depoyu klonlayın:**
    ```bash
@@ -260,84 +265,88 @@ tunefy-music/
    flutter run
    ```
 
-4. **Sürüm APK'sını derleyin** (daha küçük boyut için ABI'ye göre bölünmüş):
+4. **Derleme sürümü APK** (daha küçük boyut için ABI'ye bölünmüş):
    ```bash
    flutter build apk --split-per-abi
    ```
 
-> Bulut aktarıcı URL'si `lib/utils/api_constants.dart`
-> (`relayBaseUrl`) dosyasına gömülüdür, dolayısıyla herhangi bir build bayrağı gerekmez. Kendi aktarıcınızı göstermek için:
+> Bulut geçiş URL'si `lib/utils/api_constants.dart` olarak oluşturulur
+> (`relayBaseUrl`), dolayısıyla derleme bayrağına gerek yoktur. Kendi rölenizi işaret etmek için:
 > `flutter run --dart-define=RELAY_BASE_URL=https://your-relay.onrender.com`.
 
 ---
 
-## 🖥️ Backend & Yayın Sunucuları
+## 🖥️ Arka Uç ve Yayın Sunucuları
 
-### ☁️ Bulut Akış Aktarıcısı — `server/` (Render'da dağıtıldı)
-Bir YouTube ses URL'sini çözer **ve baytları aktarır**; böylece telefon ve çözümleyici aynı IP'yi paylaşır (403 yok). FastAPI + yt-dlp, Docker, ücretsiz katman.
+### ☁️ Bulut Akışı Aktarması — `server/` (Render'da konuşlandırıldı)
+YouTube ses URL'sini çözer **ve baytları aktarır** böylece telefon ve çözümleyici aynı IP'yi paylaşır
+(no 403). FastAPI + yt-dlp, Docker, ücretsiz katman.
 
-| Endpoint | Açıklama |
+| Uç nokta | Açıklama |
 | --- | --- |
-| `GET /health` | Canlılık yoklaması (`ok`) |
-| `GET /stream?videoId=X&key=K` | yt-dlp ile çözer → bir `…/relay` URL'si döndürür (yalnızca çözülürse 200) |
-| `GET /relay?videoId=X&key=K` | Ses baytlarını proxy'ler (Range farkında → gezinme için 206) |
+| `GET /health` | Canlılık araştırması (`ok`) |
+| `GET /stream?videoId=X&key=K` | yt-dlp aracılığıyla çözümlenir → `…/relay` URL'sini döndürür (yalnızca çözümlenirse 200) |
+| `GET /relay?videoId=X&key=K` | Ses baytlarının proxy'lerini oluşturur (Aralığa duyarlı → arama için 206) |
 
-Ortak bir `RELAY_KEY` ortam değişkeni ile korunur (yoksa **401** döndürür). Dağıtım: Render →
-**Root Directory = `server`**, Docker, **Health Check = `/health`**. Bkz. `server/README.md`.
+Paylaşılan bir `RELAY_KEY` env var tarafından korunmaktadır (bu olmadan **401** değerini döndürür). Dağıt: Render →
+**Root Directory = `server`**, Docker, **Health Check = `/health`**. Bakınız `server/README.md`.
 
 ### 🎵 Uygulama API'si — `backend/`
-Veri/arama backend'i (youtubei.js üzerinden YouTube Music + açık kaynaklar: Last.fm türleri,
-MusicBrainz sürümleri ve on yılları).
+Veri/arama arka ucu (youtubei.js aracılığıyla YouTube Music + açık kaynaklar: Last.fm türler,
+MusicBrainz sürümler ve on yıllar).
 
-| Endpoint | Açıklama |
+| Uç nokta | Açıklama |
 | --- | --- |
-| `/api/search` | Müzik / video araması |
-| `/api/trending` | Trendler |
-| `/api/charts` | YT Music listeleri |
-| `/api/playlist/:id` | Liste ayrıntısı |
-| `/api/moods`, `/api/moods/:id` | Kategoriler ve ruh halleri (Last.fm yedeği) |
-| `/api/tags?tag=` | Tür bazında en iyi şarkılar/albümler (Last.fm) |
-| `/api/newreleases` | Yeni sürümler (MusicBrainz) |
-| `/api/decades?year=` | On yıllara göre albümler (MusicBrainz) |
+| `/api/search` | Müzik / video arama |
+| `/api/trending` | Trend |
+| `/api/charts` | YT Müzik listeleri |
+| `/api/playlist/:id` | Çalma listesi ayrıntısı |
+| `/api/moods`, `/api/moods/:id` | Kategoriler ve ruh halleri (Last.fm geri dönüş) |
+| `/api/tags?tag=` | Tür en popüler parçalar/albümler (Last.fm) |
+| `/api/newreleases` | Yeni çıkanlar (MusicBrainz) |
+| `/api/decades?year=` | Onyıllara göre albümler (MusicBrainz) |
 | `/api/categories` | Kategori listesi |
 
-**Yerel:** `cd backend && npm install && npm start` (port 8000).
-**Dağıtım (Vercel):** bu depoyu içe aktarın, **Root Directory = `backend`**. Bkz. `backend/README.md`.
+**Yerel:** `cd backend && npm install && npm start` (bağlantı noktası 8000).
+**Dağıt (Vercel):** bu repoyu içe aktarın, **Root Directory = `backend`**. Bakınız `backend/README.md`.
 
 ### 🗄️ Veritabanı — `supabase/`
-**Satır Düzeyinde Güvenlik (Row-Level Security)** ile Postgres şeması: kullanıcı satırları `auth.uid()` ile sınırlıdır; katalog anonim kullanıcılar için salt okunur ve yalnızca service role tarafından yazılabilir. Migrasyonları Supabase SQL Editor'de (sırayla) çalıştırın.
+**Satır Düzeyinde Güvenlik** içeren Postgres şeması: kullanıcı satırları `auth.uid()` kapsamına alınmıştır, katalog
+Anonim kullanıcılar için salt okunurdur ve yalnızca hizmet rolü tarafından yazılabilir. Taşıma işlemlerini Supabase'de çalıştırın
+SQL Düzenleyici (sırayla).
 
 ---
 
-## 🤝 Katkıda Bulunma
+## 🤝 Katkıda Bulunmak
 
-Katkılar hoŞ geldiniz! Bir hata bildirmek, bir özellik önermek ya da kod yazmak fark etmez, yardımınız takdir edilir.
+Katkılarınızı bekliyoruz! İster bir hata bildirmek, ister bir özellik önermek, ister kod yazmak olsun, yardımınız takdire şayandır.
 
-1. **Projeyi Fork'layın**
-2. **Özellik Branşınızı Oluşturun** (`git checkout -b feature/AmazingFeature`)
-3. **Değişikliklerinizi Commit Edin** (`git commit -m 'Add some AmazingFeature'`)
-4. **Branşa Push Edin** (`git push origin feature/AmazingFeature`)
-5. **Bir Pull Request Açın**
+1. **Projeyi çatallayın**
+2. **Özellik Şubenizi oluşturun** (`git checkout -b feature/AmazingFeature`)
+3. **Değişikliklerinizi Gerçekleştirin** (`git commit -m 'Add some AmazingFeature'`)
+4. **Şube'ye İtin** (`git push origin feature/AmazingFeature`)
+5. **Bir Çekme İsteği Açın**
 
-**Kurallar:** mevcut kod stiline uyun, `flutter analyze` çalıştırın (temiz olmalı) ve göndermeden önce yeni özellikleri test edin.
+**Yönergeler:** mevcut kod stilini takip edin, `flutter analyze` komutunu çalıştırın (temiz olmalıdır) ve göndermeden önce yeni özellikleri test edin.
 
 ---
 
 ## 🙏 Teşekkürler
 
-Tunefy, bu geliştiricilerin ve projelerin inanılmaz çalışmaları olmadan var olmazdı.
+Tunefy bu geliştiricilerin ve projelerin inanılmaz çalışmaları olmasaydı var olamazdı.
 
 ### youtube_explode_dart
-Tunefy'nin YouTube yayın omurgası olan [youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart)'ın
-orijinal yazarı **[Hexer10](https://github.com/Hexer10)**'a ve Tunefy'nin en son YouTube değişiklikleriyle
-çalışmaya devam etmesini sağlayan güncel fork için **[anandnet](https://github.com/anandnet)**'e teşekkürler.
+Orijinal yazarı**[Hexer10](https://github.com/Hexer10)** sayesinde
+[youtube_explode_dart](https://github.com/Hexer10/youtube_explode_dart) — Tunefy'nin omurgası
+YouTube akış — ve**[anandnet](https://github.com/anandnet)** güncel çatal için
+Tunefy en son YouTube değişikliklerle çalışmaya devam eder.
 
 ### Animesh (n-ce) — fast-saavn & ytify
-Tunefy'nin üst verilerini besleyen açık JioSaavn API'si **[fast-saavn](https://github.com/n-ce/saavn)**'ın
-(ve büyük bir ilham kaynağı olan **[ytify](https://github.com/n-ce/ytify)**'ın) yaratıcısı
-**[Animesh (n-ce)](https://github.com/n-ce)**'e selamlar.
+Yaratıcısı**[Animesh (n-ce)](https://github.com/n-ce)**'e sesleniyorum
+**[fast-saavn](https://github.com/n-ce/saavn)** (Tunefy'nin meta verilerini destekleyen açık JioSaavn API'si)
+ve**[ytify](https://github.com/n-ce/ytify)** (büyük bir ilham kaynağı).
 
-### Açık Kaynak Kütüphaneler
+### Açık Kaynak Kitaplıkları
 | Paket | Yazar / Bakımcılar |
 |---|---|
 | [just_audio](https://pub.dev/packages/just_audio) | [Ryan Heise](https://github.com/ryanheise) |
@@ -356,4 +365,4 @@ Tunefy'nin üst verilerini besleyen açık JioSaavn API'si **[fast-saavn](https:
 
 ## 📄 Lisans
 
-**MIT Lisansı** altında dağıtılmıştır. Daha fazla bilgi için [`LICENSE`](LICENSE) dosyasına bakın.
+**MIT Lisansı** altında dağıtılmaktadır. Daha fazla bilgi için [`LICENSE`](LICENSE)'ye bakın.
