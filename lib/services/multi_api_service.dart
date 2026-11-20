@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:muzo/models/muzo_item.dart';
 import 'package:muzo/services/musicbrainz_service.dart';
 import 'package:muzo/services/deezer_api_service.dart';
-import 'package:muzo/services/spotify_unofficial_service.dart';
 import 'package:muzo/services/itunes_api_service.dart';
 import 'package:muzo/services/openverse_service.dart';
 import 'package:muzo/services/wikimedia_commons_service.dart';
@@ -28,11 +27,9 @@ class MultiApiService {
   MultiApiService(this._storage);
 
   MusicBrainzService? _musicBrainz;
-  SpotifyUnofficialService? _spotify;
   MuzoApiService? _api;
 
   MusicBrainzService get musicBrainz => _musicBrainz ??= MusicBrainzService();
-  SpotifyUnofficialService get spotify => _spotify ??= SpotifyUnofficialService();
   MuzoApiService get api => _api ??= MuzoApiService(_storage);
 
   /// Discover song titles across working APIs in parallel.
@@ -41,7 +38,6 @@ class MultiApiService {
   Future<List<MuzoItem>> discover(String query) async {
     final futures = <Future<List<MuzoItem>>>[
       _safe(() => musicBrainz.searchTracks(query), 'MusicBrainz'),
-      _safe(() => spotify.search(query), 'Spotify'),
       _safe(() => ItunesApiService().searchSongsFrUs(query, limit: 10),
           'iTunes'),
       _safe(() => DeezerApiService().searchTracks(query, limit: 10), 'Deezer'),
