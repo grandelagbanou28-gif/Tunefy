@@ -951,37 +951,42 @@ static Future<String?> ensurePlayableUrl(
     if (base.isEmpty) return null;
     final client = http.Client();
     try {
-      final uri = Uri.parse('$base/stream').replace(queryParameters: {
-        'videoId': videoId,
-        'kind': 'audio',
-        if (ApiConstants.relayKey.isNotEmpty) 'key': ApiConstants.relayKey,
-      });
-      final resp = await client
-          .get(uri)
-          // /stream resolves via yt-dlp (5–20s) and the instance itself may
-          // still be booting (~27s cold). 40s leaves room for both while
-          // staying under the caller's 45s race budget.
-          .timeout(const Duration(seconds: 40));
-      if (resp.statusCode == 200) {
-        final body = (jsonDecode(resp.body) as Map).cast<String, dynamic>();
-        final url = body['url'] as String?;
-        if (url != null && url.isNotEmpty) {
-          debugPrint('StreamExtraction: [CloudRelay] resolved via Render relay');
-          return url;
+      // Retry once on timeout: Render free tier cold-starts ~30s after idle,
+      // and a single pass can lose the race even after warmCloudRelay(). The
+      // second pass reuses the now-warm instance and usually succeeds.
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final uri = Uri.parse('$base/stream').replace(queryParameters: {
+          'videoId': videoId,
+          'kind': 'audio',
+          if (ApiConstants.relayKey.isNotEmpty) 'key': ApiConstants.relayKey,
+        });
+        try {
+          final resp = await client
+              .get(uri)
+              .timeout(const Duration(seconds: 60));
+          if (resp.statusCode == 200) {
+            final body = (jsonDecode(resp.body) as Map).cast<String, dynamic>();
+            final url = body['url'] as String?;
+            if (url != null && url.isNotEmpty) {
+              debugPrint('StreamExtraction: [CloudRelay] resolved via Render relay');
+              return url;
+            }
+          } else if (resp.statusCode == 401) {
+            debugPrint('StreamExtraction: [CloudRelay] RELAY_KEY mismatch (401)');
+            return null;
+          } else {
+            debugPrint('StreamExtraction: [CloudRelay] HTTP ${resp.statusCode}');
+            if (resp.statusCode == 502 && _relaySaysGone(resp.body)) {
+              reportVideoGone(videoId, 'cloudrelay');
+            }
+          }
+        } on TimeoutException {
+          debugPrint('StreamExtraction: [CloudRelay] timeout (attempt ${attempt + 1})');
+        } catch (e) {
+          debugPrint('StreamExtraction: [CloudRelay] $e');
         }
-      } else if (resp.statusCode == 401) {
-        debugPrint('StreamExtraction: [CloudRelay] RELAY_KEY mismatch (401)');
-      } else {
-        debugPrint('StreamExtraction: [CloudRelay] HTTP ${resp.statusCode}');
-        if (resp.statusCode == 502 && _relaySaysGone(resp.body)) {
-          reportVideoGone(videoId, 'cloudrelay');
-        }
+        if (attempt == 0) await Future.delayed(const Duration(seconds: 2));
       }
-    } on TimeoutException {
-      // Render free tier cold-starts ~30s after idle; that is slow, not dead.
-      debugPrint('StreamExtraction: [CloudRelay] no answer in 28s');
-    } catch (e) {
-      debugPrint('StreamExtraction: [CloudRelay] $e');
     } finally {
       client.close();
     }
