@@ -1,0 +1,20 @@
+name: Keep Tunefy relay awake
+
+# Render's free tier sleeps after ~15 idle minutes. cron-job.org already pings
+# /health every 14 min; this workflow is a free, redundant second heartbeat so
+# a missed external ping never puts the relay to sleep.
+on:
+  schedule:
+    # Every 14 minutes: minutes 0, 14, 28, 42, 56
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping relay /health
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 https://tunefy-relay.onrender.com/health)
+          echo "relay /health -> $code"
+          test "$code" = "200"
